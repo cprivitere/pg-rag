@@ -122,6 +122,98 @@ The bucket carries exactly one `documents.json`. Publishing rules:
 - `data/golden/*.json` — golden eval cases; unrelated to molab, but the
   SYSTEM_PROMPT in the notebook mirrors the local pipeline's prompt
   conventions (context-grounded, no fabrication).
+- `scripts/molab_vllm_launch.sh` (pg-rag-builder) — one-shot sidecar
+  launcher (venv install + FP8 download + serve, see below).
+
+## vLLM sidecar (inference speed)
+
+The notebook's `model_load`/`chat` cells auto-detect a vLLM server at
+`http://127.0.0.1:8000/v1` and route generation through it; when the
+server is absent they fall back to the original in-process bf16
+transformers path. Measured on RTX PRO 6000 Blackwell (sb-28a5a64d9252f1eb,
+2026-09-26):
+
+| path | decode tok/s | RAG prompt (1,836 tok) + 289-token answer |
+|---|---|---|
+| bf16 eager transformers (old) | 15.4–17.3 | ~20 s |
+| vLLM FP8 sidecar | 39.5 | 7.6 s (2.5×) |
+| vLLM FP8 + MTP-3 (single-user 0.40 util) | **60.5–72.5** | **3.5–4.2 s** (5–6× vs bf16) |
+
+Launch (from pg-rag-builder, run inside the sandbox via the molab skill):
+
+```bash
+bash scripts/molab_vllm_launch.sh   # venv + checkpoint + serve, ~6 min
+```
+
+The serve line carries MTP speculative decoding (the checkpoint ships the
+draft head, `mtp.safetensors`; `SpeculativeConfig` resolves it from the
+same checkpoint dir, draft runs bf16):
+
+```
+--speculative-config '{"method":"mtp","num_speculative_tokens":3}'
+```
+
+Single-user right-sizing (2026-09-26, replaces the original 0.85/64-seq
+inheritance): `--max-num-seqs 8 --gpu-memory-utilization 0.40`. At 0.85
+the KV pool alone was ~48 GiB (leftover budget, not need) and MTP-3
+OOMed during CUDA-graph capture; at 0.40 MTP-3 boots and the whole GPU
+pool is ~38 GiB. Measured with MTP-3 at 0.40 (256-token greedy): **60.5
+and 72.5 tok/s** (vs 39.5 baseline, 1.5–1.8×), mean acceptance length
+2.56–2.58, avg draft acceptance ~52% (≥0.60 required, note: vllm logs
+per-position rates; the warning about >1-step reuse is expected).
+KV pool at 0.40: 6.28 GiB / 38k tokens / 4.65× concurrency at 8192 —
+plenty for one chat user. Startup after a config change recompiles
+backbone + `eagle_head` and recaptures graphs (~4 min); don't treat it
+as a hang.
+
+MTP-1 at 0.85 util (the intermediate config this session) measured
+61.8–61.9 tok/s with 1.81 acceptance — same decode speed as MTP-3;
+the win is per-step latency, not throughput. If 0.40 is too tight
+(sidecar competing with the in-process bf16 fallback), drop back to
+MTP-1 at 0.60.
+
+molab-specific pitfalls baked into the script (all hit live):
+
+1. **PYTHONPATH strip** — the boot env sets
+   `PYTHONPATH=/usr/local/_marimo/sitedir:/tmp/uv-venv/...`, which makes
+   the sidecar import the *notebook venv's* transformers
+   (`huggingface-hub==2.0.0` incompatible). `unset PYTHONPATH` before
+   anything.
+2. **No system CUDA toolkit** — `nvcc` ships in the pip wheel at
+   `/tmp/vllm-venv/lib/python3.13/site-packages/nvidia/cu13`; point
+   `CUDA_HOME`/`PATH` there or flashinfer JIT dies with
+   `Could not find nvcc`.
+3. **CCCL header mismatch** — flashinfer 0.6.18's vendored CCCL predates
+   the wheel's nvcc 13.4 and trips the strict toolkit-compat check; the
+   script sets `NVCC_PREPEND_FLAGS="-DCCCL_DISABLE_CTK_COMPATIBILITY_CHECK=1"`
+   (verified harmless for the sampling kernels that get built).
+4. **`libcudart.so` unversioned symlink** — the wheel ships only
+   `libcudart.so.13`; some JIT builds link `-lcudart`, so the script
+   creates the symlink in `cu13/lib`.
+5. **Mamba cache vs `max_num_seqs`** — this hybrid model allocates one
+   Mamba cache block per decode slot; `--max-num-seqs 64` avoids the
+   `exceeds available Mamba cache blocks (1000)` startup crash and is
+   plenty for a single-user chat.
+
+Serving `Qwen/Qwen3.8-27B-FP8` (30.9 GB, official, verified ungated).
+First boot after sandbox recreation takes ~3–4 min (weights 4 s, compile
+~70 s, CUDA-graph capture ~90 s); subsequent boots reuse
+`/home/marimo/.cache/vllm` and are ~40 s. `--max-model-len 8192` matches
+the notebook's 4,096-char retrieval budget with headroom; raise it only
+with a real need (KV pool is sized from it at 0.85 util).
+
+The notebook keeps the bf16 fallback: if the sidecar is down (fresh
+sandbox before the script runs, or a crash), chat still works at the old
+speed — `model_load` prints which path it took.
+
+**Streaming**: the `chat` cell's `generate()` is a sync generator for
+`mo.ui.chat` — the server path (`_chat_completion_stream`) yields each
+SSE content delta as it arrives (measured TTFT ~0.06–0.10 s, ~19 chunks
+per 32-token answer), so text renders progressively instead of after the
+full blocking decode. The local bf16 fallback still yields one chunk
+unchanged. Cleanup detail: the server path never produces the
+`answer:`/`response:` prefix, so no post-strip there; `_local_generate`
+keeps its regex strip.
 
 ## Accessing the notebook from an agent
 

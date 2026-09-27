@@ -249,7 +249,13 @@ def rag_index(HfFileSystem, collections, json, math, re):
 
 @app.cell
 def model_load():
-    # --- Model load: Qwen3.8-27B bf16 on the RTX PRO 6000 (96 GiB) ---
+    # --- Engine: prefer the local vLLM sidecar (:8000); fall back to transformers ---
+    # vLLM (FP8, CUDA graphs, paged attention, prefix cache) decodes ~3-6x faster
+    # than eager transformers on the same GPU. The sidecar is OPTIONAL: when it is
+    # not running, this cell loads the bf16 model in-process exactly as before.
+    import json as _json
+    import urllib.request as _urlreq
+
     import torch as _torch
     from transformers import (
         AutoModelForCausalLM as _AutoModel,
@@ -257,33 +263,58 @@ def model_load():
     )
 
     _MODEL_NAME = "Qwen/Qwen3.8-27B"
+    _LLM_URL = "http://127.0.0.1:8000/v1"
 
-    _free0, _tot = _torch.cuda.mem_get_info()
-    print(f"[Model Load] free before: {_free0 / 2**30:.1f} GiB")
+    def _probe_server(url, timeout=2.0):
+        try:
+            with _urlreq.urlopen(url + "/models", timeout=timeout) as _resp:
+                if _resp.status == 200:
+                    _data = _json.loads(_resp.read().decode())
+                    return _data["data"][0]["id"]
+        except Exception:
+            return None
+        return None
 
-    model = _AutoModel.from_pretrained(
-        _MODEL_NAME,
-        dtype=_torch.bfloat16,
-        attn_implementation="sdpa",
-        device_map="cuda:0",
-        use_kernels=True,
-    )
-    model.eval()
+    server_model = _probe_server(_LLM_URL)
+    model = None
+    tokenizer = None
 
-    tokenizer = _AutoTok.from_pretrained(_MODEL_NAME)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if server_model:
+        print(f"[Engine] vLLM sidecar UP at {_LLM_URL} (model: {server_model})")
+        tokenizer = _AutoTok.from_pretrained(_MODEL_NAME)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+    else:
+        print(
+            f"[Engine] no vLLM sidecar at {_LLM_URL} - loading bf16 fallback in-process"
+        )
+        _free0, _tot = _torch.cuda.mem_get_info()
+        print(f"[Model Load] free before: {_free0 / 2**30:.1f} GiB")
+        model = _AutoModel.from_pretrained(
+            _MODEL_NAME,
+            dtype=_torch.bfloat16,
+            attn_implementation="sdpa",
+            device_map="cuda:0",
+            use_kernels=True,
+        )
+        model.eval()
+        tokenizer = _AutoTok.from_pretrained(_MODEL_NAME)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        _free1, _ = _torch.cuda.mem_get_info()
+        print(
+            f"[Model] {model.num_parameters():,} params loaded | free after: {_free1 / 2**30:.1f} GiB"
+        )
 
-    _free1, _ = _torch.cuda.mem_get_info()
-    print(
-        f"[Model] {model.num_parameters():,} params loaded | free after: {_free1 / 2**30:.1f} GiB"
-    )
-    return model, tokenizer
+    return model, tokenizer, server_model, _LLM_URL
 
 
 @app.cell
-def chat(model, re, retrieve, tokenizer, torch):
-    # --- Chat: RAG over the corpus, answered by the local model ---
+def chat(_LLM_URL, model, re, retrieve, server_model, tokenizer, torch):
+    # --- Chat: RAG over the corpus, answered by the vLLM sidecar (or local model) ---
+    import json as _json
+    import urllib.request as _urlreq
+
     import marimo as mo
 
     SYSTEM_PROMPT = (
@@ -298,16 +329,44 @@ def chat(model, re, retrieve, tokenizer, torch):
         "- NEVER fabricate facts, names, values, or mechanics not present in the context."
     )
 
-    def generate(messages, config):
-        question = messages[-1].content
-        context = retrieve(question)
-        prompt = (
-            SYSTEM_PROMPT
-            + "\n\nContext:\n"
-            + context
-            + "\n\nQuestion: "
-            + question
+    _BASE_PROMPT_CHARS = 4096  # matches the tokenizer truncation budget
+
+    def _chat_completion_stream(prompt, max_tokens=512):
+        # Server path: SSE generator for mo.ui.chat. vLLM streams the first
+        # content delta in ~0.1 s, so text appears progressively instead of
+        # after the full blocking decode.
+        payload = _json.dumps(
+            {
+                "model": server_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+                "max_tokens": max_tokens,
+                "stream": True,
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
+        ).encode()
+        req = _urlreq.Request(
+            _LLM_URL + "/chat/completions",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
         )
+        with _urlreq.urlopen(req, timeout=600) as resp:
+            for raw in resp:
+                line = raw.strip()
+                # skip blank/keep-alive/comment lines, [DONE], and the
+                # role-only first chunk (no "content" key)
+                if (
+                    not line.startswith(b"data: ")
+                    or line == b"data: [DONE]"
+                ):
+                    continue
+                chunk = _json.loads(line[6:])
+                delta = chunk["choices"][0]["delta"].get("content")
+                if delta:
+                    yield delta
+
+    def _local_generate(prompt, max_tokens=512):
         text = tokenizer.apply_chat_template(
             [{"role": "user", "content": prompt}],
             tokenize=False,
@@ -321,7 +380,7 @@ def chat(model, re, retrieve, tokenizer, torch):
         with torch.no_grad():
             out = model.generate(
                 inp,
-                max_new_tokens=512,
+                max_new_tokens=max_tokens,
                 do_sample=False,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.pad_token_id,
@@ -333,10 +392,26 @@ def chat(model, re, retrieve, tokenizer, torch):
             r"^\s*(answer|response)\s*[:\uff1a]\s*", "", answer, flags=re.I
         )
 
+    def generate(messages, config):
+        question = messages[-1].content
+        context = retrieve(question)
+        prompt = (
+            SYSTEM_PROMPT
+            + "\n\nContext:\n"
+            + context
+            + "\n\nQuestion: "
+            + question
+        )
+        if server_model:
+            yield from _chat_completion_stream(prompt)
+        else:
+            # local fallback: one chunk, same cleanup as before
+            yield _local_generate(prompt)
+
     chat = mo.ui.chat(
         generate, show_configuration_controls=False, max_height=600
     )
-    chat
+    chat  # noqa: B018 -- cell must return the widget for display
     return
 
 
