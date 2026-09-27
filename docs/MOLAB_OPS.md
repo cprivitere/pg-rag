@@ -138,6 +138,34 @@ transformers path. Measured on RTX PRO 6000 Blackwell (sb-28a5a64d9252f1eb,
 | bf16 eager transformers (old) | 15.4–17.3 | ~20 s |
 | vLLM FP8 sidecar | 39.5 | 7.6 s (2.5×) |
 | vLLM FP8 + MTP-3 (single-user 0.40 util) | **60.5–72.5** | **3.5–4.2 s** (5–6× vs bf16) |
+| bf16 transformers + `torch.compile(max-autotune-no-cudagraphs)` | 16.0–16.1 | 15.7–16.0 s (no gain over eager) |
+| llama.cpp b11205 Q8_0 + MTP | measured 2026-09-27 (re-run pending) | — |
+| llama.cpp b11205 UD-Q4_K_XL + MTP | measured 2026-09-27 (re-run pending) | — |
+
+Inference bake-off notes (2026-09-27, all rows measured with the same two
+greedy prompts, `max_tokens=256`, thinking disabled, `tok/s =
+completion_tokens/(total−TTFT)` from `stream_options.include_usage`; raw
+lines in `pg-rag-builder/tmp_bakeoff_results.jsonl`):
+
+- **torch.compile row**: bf16 = 2× weight bytes vs FP8, and compiling the
+  forward with `mode="max-autotune-no-cudagraphs"` (`dynamic=False`, SDPA)
+  does **not** close that gap — 16.0/16.1 tok/s on both prompts, i.e. the
+  old eager range. First-call autotune cost 1321 s on this model (expect a
+  20-min one-time warmup; cached in `/tmp/torchinductor_root` for the
+  sandbox lifetime only). `ttft_s` is unobservable in this path
+  (TextStreamer first-chunk hook read 0.0). Harness:
+  `scripts/molab_bench_torch.py` (pg-rag-builder).
+- **vLLM re-measure caveat**: streaming token counts require
+  `stream_options: {"include_usage": true}` — without it vLLM batches
+  several tokens per content chunk (102 chunks for 256 tokens), so
+  chunk-counting under-reports decode speed ~2.4×. The MTP acceptance
+  profile (2.56–2.73 mean, ~52% draft rate) was identical across sessions.
+- **llama.cpp rows**: bench was interrupted by a sandbox recreate (410
+  Gone) during the Q8_0 download; the launcher
+  (`scripts/molab_llama_launch.sh`, pg-rag-builder) is committed and ran
+  clean to server spawn (b11205 CUDA tarball, `-hf unsloth/...`, port
+  8010, `--spec-type draft-mtp`, `--parallel 8`, `--cache-reuse 256`);
+  numbers to be filled in on the re-run.
 
 Launch (from pg-rag-builder, run inside the sandbox via the molab skill):
 
