@@ -193,6 +193,45 @@ lines: `pg-rag-builder/tmp_bakeoff_results.jsonl` + pulled log files):
   Practical rule: **on molab, serve vLLM via the sidecar script, and
   run llama.cpp via the Python bindings, not the offline vLLM API.**
 
+## Unsloth quant sweep (2026-09-27, partial)
+
+Scope: the unsloth Qwen3.8 offerings beyond the rows above. Every row is
+2×2 greedy prompts (`max_tokens=256`, thinking off) + a 3-case RAG
+fact-presence check (golden-lite: `fireball-2`, `field-mushroom-locations`,
+`bacon-for-joeh`; prompts built offline from the local corpus so every
+engine sees identical context; scored with `golden_check.py`'s normalize).
+Harnesses: `scripts/molab_bench_torch.py` (env-driven:
+`MODEL`/`ENGINE_TAG`/`TORCH_COMPILE`/`GOLDEN_MODE`/`LOAD_KWARGS_JSON`),
+`scripts/molab_golden_lite.py` (HTTP scorer), `scripts/molab_bench_http.py`
+(speed), `scripts/molab_nvfp4_launch.sh` (reference-only, see below).
+
+| variant | engine | tok/s | verdict |
+|---|---|---|---|
+| `unsloth/Qwen3.8-27B-unsloth-bnb-4bit` (NF4, fp16) | transformers eager | 15.0–15.3 | ≈ bf16 eager — 4-bit NF4 buys nothing on a 96 GiB card; golden **2/3** (missed multi-fact mushroom case) |
+| `unsloth/Qwen3.8-27B-NVFP4` (22.6 GB) | vLLM sidecar | **not measurable under no-build rule** | startup requires flashinfer JIT-compiling NVFP4 GEMM kernels (`fp4_gemm_cutlass_sm120`); two attempts failed on sandbox quirks (linker wants `cu13/lib64`, wheel ships `lib/`; fixable with symlinks but the JIT itself is disallowed). On Blackwell, unsloth NVFP4 = vLLM-only = flashinfer-JIT-only. |
+| `unsloth/Qwen3.6-35B-A3B-NVFP4` (26.5 GB MoE) | vLLM sidecar | not attempted | same NVFP4/JIT constraint; dropped per user directive |
+| `unsloth/Qwen3.8-27B-GGUF` Q8_0 + draft-MTP (llama-server) | llama-server | not completed | sandbox teardowns killed two rounds mid-load (see below) |
+| `unsloth/Qwen3.8-27B-GGUF` UD-Q4_K_XL + draft-MTP | llama-server | not completed | same |
+
+Sweep-day sandbox stability (4 sandboxes in one day, RTX PRO 6000):
+every teardown happened during a **long model load/download** (vLLM
+init ×3 across the bake-off + sweep, 17–29 GB GGUF load ×2), never
+during llama.cpp or vLLM-sidecar *compute*. Rows that completed all fit
+inside one sub-5-minute block (download → load → bench → free, nothing
+left running between blocks). `torch-bnb4` (22.3 GB, one block) and the
+in-venv llama bindings round (29 GB in two blocks) completed; every
+attempt that left a heavy background process running across block
+boundaries (llama-server 17.6 GB load, vLLM init) died at 410.
+Practical rule update: **on molab, each engine row must complete
+within one bounded block; never leave a model load or download running
+across blocks.**
+
+Also banked: golden-lite harness bug — raw RAG prompts must go through
+`apply_chat_template`; raw-text input produced empty generations on all
+three cases (first bnb pass scored 0/3 with empty heads; after the
+template fix: fireball 3/3, bacon 3/3, mushrooms 0/3). The fixed loop
+lives in `scripts/molab_bench_torch.py::run_golden`.
+
 Launch (from pg-rag-builder, run inside the sandbox via the molab skill):
 
 ```bash
