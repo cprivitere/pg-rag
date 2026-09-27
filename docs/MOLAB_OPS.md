@@ -141,6 +141,7 @@ transformers path. Measured on RTX PRO 6000 Blackwell (sb-28a5a64d9252f1eb,
 | bf16 transformers + `torch.compile(max-autotune-no-cudagraphs)` | 16.0–16.1 | 15.7–16.0 s (no gain over eager) |
 | llama.cpp `llama-cpp-python` in-process Q8_0 (GPU offload, no spec) | 38.1 | 6.7–6.8 s (2× vs bf16) |
 | llama.cpp `llama-cpp-python` in-process UD-Q4_K_XL (GPU offload, no spec) | 55.6 | 4.6 s (2.9× vs bf16) |
+| unsloth-bnb-4bit NF4 (transformers eager) | 15.0–15.3 | 16.8–17.0 s (no gain vs bf16; golden 2/3) |
 
 Inference bake-off notes (2026-09-27, all rows measured with the same two
 greedy prompts, `max_tokens=256`, thinking disabled; 2 runs each. Raw
