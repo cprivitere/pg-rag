@@ -137,15 +137,14 @@ transformers path. Measured on RTX PRO 6000 Blackwell (sb-28a5a64d9252f1eb,
 |---|---|---|
 | bf16 eager transformers (old) | 15.4–17.3 | ~20 s |
 | vLLM FP8 sidecar | 39.5 | 7.6 s (2.5×) |
-| vLLM FP8 + MTP-3 (single-user 0.40 util) | **60.5–72.5** | **3.5–4.2 s** (5–6× vs bf16) |
+| vLLM FP8 + MTP-3 (single-user 0.40 util) | **60.5–72.5** (2026-09-26) / 73.4–80.9 (2026-09-27 re-measure) | **3.5–4.2 s** (5–6× vs bf16) |
 | bf16 transformers + `torch.compile(max-autotune-no-cudagraphs)` | 16.0–16.1 | 15.7–16.0 s (no gain over eager) |
-| llama.cpp b11205 Q8_0 + MTP | measured 2026-09-27 (re-run pending) | — |
-| llama.cpp b11205 UD-Q4_K_XL + MTP | measured 2026-09-27 (re-run pending) | — |
+| llama.cpp `llama-cpp-python` in-process Q8_0 (GPU offload, no spec) | 38.1 | 6.7–6.8 s (2× vs bf16) |
+| llama.cpp `llama-cpp-python` in-process UD-Q4_K_XL (GPU offload, no spec) | 55.6 | 4.6 s (2.9× vs bf16) |
 
 Inference bake-off notes (2026-09-27, all rows measured with the same two
-greedy prompts, `max_tokens=256`, thinking disabled, `tok/s =
-completion_tokens/(total−TTFT)` from `stream_options.include_usage`; raw
-lines in `pg-rag-builder/tmp_bakeoff_results.jsonl`):
+greedy prompts, `max_tokens=256`, thinking disabled; 2 runs each. Raw
+lines: `pg-rag-builder/tmp_bakeoff_results.jsonl` + pulled log files):
 
 - **torch.compile row**: bf16 = 2× weight bytes vs FP8, and compiling the
   forward with `mode="max-autotune-no-cudagraphs"` (`dynamic=False`, SDPA)
@@ -160,12 +159,38 @@ lines in `pg-rag-builder/tmp_bakeoff_results.jsonl`):
   several tokens per content chunk (102 chunks for 256 tokens), so
   chunk-counting under-reports decode speed ~2.4×. The MTP acceptance
   profile (2.56–2.73 mean, ~52% draft rate) was identical across sessions.
-- **llama.cpp rows**: bench was interrupted by a sandbox recreate (410
-  Gone) during the Q8_0 download; the launcher
-  (`scripts/molab_llama_launch.sh`, pg-rag-builder) is committed and ran
-  clean to server spawn (b11205 CUDA tarball, `-hf unsloth/...`, port
-  8010, `--spec-type draft-mtp`, `--parallel 8`, `--cache-reuse 256`);
-  numbers to be filled in on the re-run.
+  The in-process/offline-API vLLM variant (`vllm.LLM()` in a cell) was
+  killed by molab on every attempt (sandbox teardown mid-init or
+  mid-bench); the **served sidecar path is the one that survives and is
+  the production config** — run `scripts/molab_vllm_launch.sh`.
+- **llama.cpp rows (final)**: measured with prebuilt
+  `llama-cpp-python==0.3.35` cu125 wheel (`py3-none-manylinux_2_35`) +
+  the `cudart-llama-b11205-bin-ubuntu-cuda-12.8` companion tarball on
+  `LD_LIBRARY_PATH` (the wheel's `libggml-cuda.so` links
+  `libcudart.so.12`, which the sandbox's CUDA-13 image does not ship).
+  Full GPU offload verified via `nvidia-smi` (27.7 GiB Q8_0 / 17.4 GiB
+  Q4_K_XL on the 96 GiB card). **No speculative decoding** — the Python
+  bindings have no MTP equivalent, so these are one-token-per-step
+  numbers; llama.cpp's draft-MTP server would sit higher. Steady-state
+  tok/s is the run-2 number (run 1 carries post-load clock ramp):
+  38.1 (Q8_0) and 55.6 (Q4_K_XL). Q4_K_XL beats Q8_0 because of the
+  smaller weight stream, and both stay well below vLLM+MTP-3.
+- **llama-cpp setup recipe** (no compilation needed — the source build is
+  NOT required): `uv pip install llama-cpp-python==0.3.35
+  https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.35-cu125/llama_cpp_python-0.3.35-py3-none-manylinux_2_35_x86_64.whl`,
+  then fetch `cudart-llama-b11205-bin-ubuntu-cuda-12.8-x64.tar.gz` from
+  llama.cpp b11205, extract, and prefix
+  `LD_LIBRARY_PATH=<cudart128-dir>:...`. GGUFs from `unsloth/Qwen3.8-27B-GGUF`
+  (Q8_0 ≈ 28 GB, UD-Q4_K_XL ≈ 17.5 GB). Harness:
+  `scripts/molab_bench_llama.py` (pg-rag-builder).
+- **Sandbox stability log (molab, RTX PRO 6000, 2026-09-27)**: across
+  sandboxes, the *served* vLLM sidecar survived hours of benching;
+  llama.cpp compute survived complete bench runs; but vLLM's
+  offline-API path (`vllm.LLM()` — EngineCore subprocess + flashinfer
+  JIT/CUDA-graph capture) was associated with sandbox teardown on every
+  attempt. Cause undiagnosed (molab-side; no client-visible error).
+  Practical rule: **on molab, serve vLLM via the sidecar script, and
+  run llama.cpp via the Python bindings, not the offline vLLM API.**
 
 Launch (from pg-rag-builder, run inside the sandbox via the molab skill):
 
