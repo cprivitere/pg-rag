@@ -210,8 +210,8 @@ Harnesses: `scripts/molab_bench_torch.py` (env-driven:
 | `unsloth/Qwen3.8-27B-unsloth-bnb-4bit` (NF4, fp16) | transformers eager | 15.0–15.3 | ≈ bf16 eager — 4-bit NF4 buys nothing on a 96 GiB card; golden **2/3** (missed multi-fact mushroom case) |
 | `unsloth/Qwen3.8-27B-NVFP4` (22.6 GB) | vLLM sidecar | **not measurable under no-build rule** | startup requires flashinfer JIT-compiling NVFP4 GEMM kernels (`fp4_gemm_cutlass_sm120`); two attempts failed on sandbox quirks (linker wants `cu13/lib64`, wheel ships `lib/`; fixable with symlinks but the JIT itself is disallowed). On Blackwell, unsloth NVFP4 = vLLM-only = flashinfer-JIT-only. |
 | `unsloth/Qwen3.6-35B-A3B-NVFP4` (26.5 GB MoE) | vLLM sidecar | not attempted | same NVFP4/JIT constraint; dropped per user directive |
-| `unsloth/Qwen3.8-27B-GGUF` Q8_0 + draft-MTP (llama-server) | llama-server | not completed | sandbox teardowns killed two rounds mid-load (see below) |
-| `unsloth/Qwen3.8-27B-GGUF` UD-Q4_K_XL + draft-MTP | llama-server | not completed | same |
+| `unsloth/Qwen3.8-27B-GGUF` UD-Q4_K_XL, no spec (llama-server, **local Windows Vulkan**, RX 7900 XTX 24 GB) | llama-server b11215 | 42.5 | 6.2 s; VRAM 17.3 GB (total committed); golden **2/3** — same 2-fact mushroom miss as bnb-4bit; draft-MTP failed to load on this build (`invalid vector subscript` on the Q4_0 draft), so no-MTP |
+| `unsloth/Qwen3.8-27B-GGUF` Q8_0 | — | not run | 29 GB does not fit the 24 GB local card; molab path still blocked by teardown-during-load |
 
 Sweep-day sandbox stability (4 sandboxes in one day, RTX PRO 6000):
 every teardown happened during a **long model load/download** (vLLM
