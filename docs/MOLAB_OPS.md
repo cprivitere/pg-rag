@@ -226,6 +226,15 @@ Practical rule update: **on molab, each engine row must complete
 within one bounded block; never leave a model load or download running
 across blocks.**
 
+Sweep-day update (sandbox #12): even the sub-5-minute llama-server
+launch path (17.6 GB Q4_K_XL download+load, ~4 min in) was killed —
+the molab teardown window is tighter than one bounded block for any
+model that must download+load in the same block. Five sandboxes lost
+in one day, all during loads. Remaining sweep rows (llama GGUF
+draft-MTP ×2, bf16, FP8-unsloth sidecar) are therefore unbenchable on
+molab until the platform stops tearing down sandboxes during model
+loads; they stay blocked, not attempted-blind.
+
 Also banked: golden-lite harness bug — raw RAG prompts must go through
 `apply_chat_template`; raw-text input produced empty generations on all
 three cases (first bnb pass scored 0/3 with empty heads; after the
