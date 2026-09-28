@@ -235,6 +235,16 @@ draft-MTP ×2, bf16, FP8-unsloth sidecar) are therefore unbenchable on
 molab until the platform stops tearing down sandboxes during model
 loads; they stay blocked, not attempted-blind.
 
+Sweep abandoned by the user after seven sandbox losses (#13 died in
+vLLM init with the JIT fix proven through the torch.compile stage;
+#14, the furthest attempt, died during CUDA graph capture at ~10.5 min
+with weights resident at 25 GiB). **Production config is unchanged:**
+vLLM FP8 + MTP-3 sidecar (`scripts/molab_vllm_launch.sh`, served at
+:8000, `pg-assistant`) — the row-5 numbers above are the production
+benchmark and the notebook auto-detects it. A future retry needs only
+`bash /tmp/nvfp4_launch.sh 27B` on a sandbox that tolerates a >10-min
+init; the launcher and harness are committed and proven through JIT.
+
 Also banked: golden-lite harness bug — raw RAG prompts must go through
 `apply_chat_template`; raw-text input produced empty generations on all
 three cases (first bnb pass scored 0/3 with empty heads; after the
