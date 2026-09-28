@@ -122,7 +122,7 @@ The bucket carries exactly one `documents.json`. Publishing rules:
 - `data/golden/*.json` — golden eval cases; unrelated to molab, but the
   SYSTEM_PROMPT in the notebook mirrors the local pipeline's prompt
   conventions (context-grounded, no fabrication).
-- `scripts/molab_vllm_launch.sh` (pg-rag-builder) — one-shot sidecar
+- `scripts/molab_vllm_launch.sh` — one-shot sidecar
   launcher (venv install + FP8 download + serve, see below).
 
 ## vLLM sidecar (inference speed)
@@ -145,7 +145,8 @@ transformers path. Measured on RTX PRO 6000 Blackwell (sb-28a5a64d9252f1eb,
 
 Inference bake-off notes (2026-09-27, all rows measured with the same two
 greedy prompts, `max_tokens=256`, thinking disabled; 2 runs each. Raw
-lines: `pg-rag-builder/tmp_bakeoff_results.jsonl` + pulled log files):
+lines: `tmp_bakeoff_results.jsonl` in the private checkout + pulled log
+files):
 
 - **torch.compile row**: bf16 = 2× weight bytes vs FP8, and compiling the
   forward with `mode="max-autotune-no-cudagraphs"` (`dynamic=False`, SDPA)
@@ -154,7 +155,7 @@ lines: `pg-rag-builder/tmp_bakeoff_results.jsonl` + pulled log files):
   20-min one-time warmup; cached in `/tmp/torchinductor_root` for the
   sandbox lifetime only). `ttft_s` is unobservable in this path
   (TextStreamer first-chunk hook read 0.0). Harness:
-  `scripts/molab_bench_torch.py` (pg-rag-builder).
+  `scripts/molab_bench_torch.py`.
 - **vLLM re-measure caveat**: streaming token counts require
   `stream_options: {"include_usage": true}` — without it vLLM batches
   several tokens per content chunk (102 chunks for 256 tokens), so
@@ -183,7 +184,7 @@ lines: `pg-rag-builder/tmp_bakeoff_results.jsonl` + pulled log files):
   llama.cpp b11205, extract, and prefix
   `LD_LIBRARY_PATH=<cudart128-dir>:...`. GGUFs from `unsloth/Qwen3.8-27B-GGUF`
   (Q8_0 ≈ 28 GB, UD-Q4_K_XL ≈ 17.5 GB). Harness:
-  `scripts/molab_bench_llama.py` (pg-rag-builder).
+  `scripts/molab_bench_llama.py`.
 - **Sandbox stability log (molab, RTX PRO 6000, 2026-09-27)**: across
   sandboxes, the *served* vLLM sidecar survived hours of benching;
   llama.cpp compute survived complete bench runs; but vLLM's
@@ -251,7 +252,8 @@ three cases (first bnb pass scored 0/3 with empty heads; after the
 template fix: fireball 3/3, bacon 3/3, mushrooms 0/3). The fixed loop
 lives in `scripts/molab_bench_torch.py::run_golden`.
 
-Launch (from pg-rag-builder, run inside the sandbox via the molab skill):
+Launch (from a checkout with the harnesses, run inside the sandbox via
+the molab skill):
 
 ```bash
 bash scripts/molab_vllm_launch.sh   # venv + checkpoint + serve, ~6 min
