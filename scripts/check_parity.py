@@ -70,6 +70,18 @@ OVERLAY_FILES = {
     "data/golden/il2cpp-mechanic-combat-xp.json",
     "data/golden/il2cpp-mechanic-curse-remedy.json",
     "data/golden/il2cpp-schema-item-fields.json",
+    # agentic SQLite prototype (store + tool loop + CLI + tests)
+    "src/pgrag/agentic/store.py",
+    "src/pgrag/agentic/session.py",
+    "src/pgrag/agentic/tools.py",
+    "src/pgrag/agentic/loop.py",
+    "scripts/build_sqlstore.py",
+    "scripts/agentic_chat.py",
+    "scripts/build_tool_corpus.py",
+    "tests/test_sqlstore_build.py",
+    "tests/test_agentic_tools.py",
+    "tests/test_agentic_loop.py",
+    "tests/test_session_ingest.py",
 }
 
 
