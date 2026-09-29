@@ -31,6 +31,7 @@ SANCTIONED = {
     "docs/MOLAB_OPS.md": "notebook lives in public; private variant points there",
     "docs/TEST_CONTRACTS.md": "private contract map includes decomp tests",
     "mise.toml": "private has the sync-il2cpp task (public has check-parity note wording)",
+    ".gitignore": "private tracks data/eval/*.json fixtures (public has no data/eval)",
     "pyproject.toml": "package name pg-rag-public vs pg-rag-private",
     "uv.lock": "package name only",
     "scripts/check_docs.py": "private quotes the 42-golden set (incl. il2cpp)",
@@ -82,6 +83,13 @@ OVERLAY_FILES = {
     "tests/test_agentic_tools.py",
     "tests/test_agentic_loop.py",
     "tests/test_session_ingest.py",
+    # agentic tuning harness (sweeps over model/temperature/reasoning budget)
+    "scripts/agentic_tune.py",
+    "tests/test_agentic_tune.py",
+    # agentic eval case fixtures (private cases for the loop eval)
+    "data/eval/tool_cases.json",
+    "data/eval/tune_cases.json",
+    "data/agentic_tune/README.md",
 }
 
 
