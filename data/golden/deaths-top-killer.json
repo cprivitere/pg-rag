@@ -1,0 +1,12 @@
+{
+ "id": "deaths-top-killer",
+ "question": "What enemy has killed my character the most times?",
+ "type": "general",
+ "facts": [
+  [
+   "Aktaari Royal Guard"
+  ]
+ ],
+ "store": true,
+ "notes": "Store-only case: facts live in data/sqlite_gorgon.db (glogger play history), not in the RAG corpus. Run via the agentic loop (`mise agentic-eval`), not pipeline golden checks."
+}

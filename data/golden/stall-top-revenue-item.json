@@ -1,0 +1,17 @@
+{
+ "id": "stall-top-revenue-item",
+ "question": "Looking at my own player-shop stall history, which item has earned me the most total councils from customer purchases, and how much?",
+ "type": "general",
+ "facts": [
+  [
+   "Scroll of Demonic Research"
+  ],
+  [
+   "750",
+   "750000",
+   "750,000"
+  ]
+ ],
+ "store": true,
+ "notes": "Store-only case: facts live in data/sqlite_gorgon.db (glogger play history), not in the RAG corpus. Run via the agentic loop (`mise agentic-eval`), not pipeline golden checks."
+}

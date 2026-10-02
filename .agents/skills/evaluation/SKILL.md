@@ -26,11 +26,13 @@ Each file:
 
 - `facts` is a list of variant groups: the answer PASSES if ANY variant in
   each group appears (normalized substring) in the LLM answer.
-- 38 files exist today (18 entity / 12 general / 3 recipe / 5 comparison),
+- 47 files exist today (18 entity / 17 general / 7 recipe / 5 comparison),
   spanning recipes-by-ingredient, level-gated crafting, item acquisition/drops,
   ability lookups, comparisons, quest requirements, wiki lore, wiki how-to
-  assembly. Future additions should favor the balanced categories (recipe is
-  3/38 today — the thinnest bucket).
+  assembly. 4 store-only cases (glogger play-history facts, `"store": true`)
+  count in this total but are excluded from the pipeline harnesses — they run
+  via the agentic eval. Future additions should favor the balanced categories (comparison is
+  5/47 today — the thinnest bucket).
 
 ## Running it
 
@@ -39,6 +41,14 @@ Each file:
 - `tests/test_golden_check.py` parametrizes over `data/golden/*.json` at
   collection time → new goldens are AUTO-collected as offline-skipped tests
   (skip unless servers up). No test code needed per golden.
+- `mise golden-type recipe` — subset by type (entity|recipe|comparison|general,
+  repeatable); `--max-facts N` caps case weight. Both `golden_check.py` and
+  `golden_rerun.py` accept `--type`/`--max-facts`.
+- **Store-only cases** (`"store": true` in the golden JSON): facts live in the
+  agentic SQLite store (glogger play history), not in the RAG corpus — the
+  pipeline harnesses (golden_check/golden_rerun/-m short/-m long) skip them;
+  they run via the agentic tool loop instead (`mise agentic-eval`, which
+  appends them to the short tier automatically).
 
 ## Retrieval eval suite (pre-LLM IR metrics)
 
@@ -115,8 +125,8 @@ Each file:
 
 ## Planned direction
 
-- Golden set is **at target (38)** — future additions should fill the thinnest
-  buckets (recipe is 3/38 today) or capture a *named regression case*,
+- Golden set is **at target (43)** — future additions should fill the thinnest
+  buckets (recipe is 3/43 today) or capture a *named regression case*,
   e.g.:
   - `grow-field-mushrooms` ("How do I grow Field Mushrooms?") — fails before
     wiki page expansion, passes after (already present).

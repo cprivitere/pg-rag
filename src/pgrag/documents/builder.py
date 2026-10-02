@@ -1336,7 +1336,6 @@ def _assemble_documents(db):
     documents.extend(build_wiki_documents(db))
     documents.extend(build_creature_zones_documents(db))
     documents.extend(build_curated_documents())
-    documents.extend(_il2cpp_documents())
 
     for doc in documents:
         doc.setdefault("metadata", {})
@@ -1423,21 +1422,6 @@ def _assemble_documents(db):
     documents.extend(build_gift_summaries(db.tables))
 
     return documents
-
-
-def _il2cpp_documents():
-    """Optional decomp-source hook.
-
-    The private overlay repo provides `pgrag.documents.decomp_builder`
-    (IL2CPP dump-derived enum/schema/mechanic cards). A public checkout
-    without the overlay contributes zero documents — the corpus is
-    additive-only, and this import must never crash the public build.
-    """
-    try:
-        from pgrag.documents.decomp_builder import build_il2cpp_documents
-    except ImportError:
-        return []
-    return build_il2cpp_documents()
 
 
 def build_documents(db):

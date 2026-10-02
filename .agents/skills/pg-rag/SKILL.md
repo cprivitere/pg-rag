@@ -1,11 +1,11 @@
 ---
 name: pg-rag
-description: How the pg-rag-public pipeline actually works — loaders, document generation, indexing, and retrieval stages. Use when modifying the RAG pipeline, retrieval behavior, indexing, chunking, embeddings, or reranking. Project-wide orientation (commands, dirs, services) lives in AGENTS.md; test discipline in the `testing` skill.
+description: How the pg-rag pipeline actually works — loaders, document generation, indexing, and retrieval stages. Use when modifying the RAG pipeline, retrieval behavior, indexing, chunking, embeddings, or reranking. Project-wide orientation (commands, dirs, services) lives in AGENTS.md; test discipline in the `testing` skill.
 ---
 
 # pg-rag — pipeline architecture
 
-pg-rag-public turns Project Gorgon CDN tables + wiki content into a searchable
+pg-rag turns Project Gorgon CDN tables + wiki content into a searchable
 knowledge base. Everything below already exists — do not redesign it without
 reading the code first. For project-wide orientation (commands, key directories,
 services) see `AGENTS.md`.
@@ -33,8 +33,6 @@ re-retrieves (`_AGENTIC_MAX_ROUNDS = 1`, bounded sibling expansion via
   at `EMBED_WINDOW_TOKENS` — bge-small hard-rejects >512 tokens — and
   reassemble at retrieval via `parent_id`), `resolver.py` + `skill_profiles.py`
   + `summaries.py` (cross-refs, leveling dossiers, gathering summaries).
-  The optional `decomp_builder` hook (IL2CPP dump-derived cards) lives in the
-  private overlay repo; public checkouts build without it.
 - `embeddings/llama_embeddings.py` → :8081.
 - `vectorstore/build_index.py` — incremental hash-based upsert; refuses a
   stale `DOCUMENTS_VERSION`; validates the collection dim.
@@ -56,3 +54,15 @@ re-retrieves (`_AGENTIC_MAX_ROUNDS = 1`, bounded sibling expansion via
 - Commands: `AGENTS.md` → "Development Commands".
 - Regression-triage / test discipline: the `testing` skill +
   `docs/TEST_CONTRACTS.md`.
+
+
+## Agentic SQL tool loop
+
+`src/pgrag/agentic/` — a SQLite store of primary sources (CDN tables, raw
+wiki pages, live play-session data) + an LLM tool loop that queries it
+(`sql_query`, `find_entities`, `get_page`, `corpus_search`, `player_state`),
+CLI-only via `scripts/agentic_chat.py` (`mise sql-store` / `agentic-chat` /
+`agentic-eval`). Needs only the LLM (:8080); never touches documents.json,
+Chroma, or the golden pipeline. `--corpus tool` swaps corpus_search's BM25
+source to the Phase B trimmed variant. Contracts: `docs/TEST_CONTRACTS.md`
+layer "L-agentic".

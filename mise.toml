@@ -1,8 +1,6 @@
 [env]
 # Portable paths - update this if mywebui moves
 WEBUI_DIR = "F:/ProjectGorgon/mywebui"
-# Live Steam client used to re-stage IL2CPP binaries for the decomp source
-GAME_INSTALL_DIR = "C:/Program Files (x86)/Steam/steamapps/common/Project Gorgon"
 # Logs directory
 LOGS_DIR = "{{ config_root }}/logs"
 # Point PATH to your uv virtual environment's ROCm libraries
@@ -131,25 +129,58 @@ run = [
 ]
 alias = "syc"
 
+
 [tasks.validate]
 description = "Validate vectorstore health; rebuild if issues found"
 run = "uv run pgrag validate && echo 'Index healthy' || (echo 'Rebuilding...' && uv run pgrag build-index)"
 alias = "va"
 
+[tasks."sql-store"]
+description = "Build data/sqlite_gorgon.db (CDN + wiki + session + glogger primary sources) for the agentic tool loop"
+run = "uv run python scripts/build_sqlstore.py"
+alias = "sq"
+
+[tasks."agentic-chat"]
+description = "Agentic CLI chat over the SQLite store (tool loop; needs only LLM :8080)"
+run = "uv run python scripts/agentic_chat.py"
+alias = "ac"
+
+[tasks."agentic-eval"]
+description = "Agentic tool-loop eval over the golden fact set (short tier; needs only LLM :8080)"
+run = "uv run python scripts/agentic_chat.py --eval --tier short"
+alias = "ae"
+
+[tasks."agentic-tune"]
+description = "Agentic loop tuning sweeps (temperature/reasoning/model) -> data/agentic_tune/"
+run = "uv run python scripts/agentic_tune.py --eval-set cases --sweep-temperature 0,0.2,0.4,0.7 --sweep-seeds 0,1,2"
+alias = "at"
+
 [tasks.golden]
-description = "Run golden eval set (needs embed + llm services up). Exits 1 on missing facts. `mise golden-short`/`mise gds` for quick tier (9 files, ~3-5 min)"
+description = "Run golden eval set (needs embed + llm services up). Exits 1 on missing facts. `mise golden-short`/`mise gds` for quick tier (8 files, ~3-5 min; store-only glogger cases run via mise agentic-eval)"
 run = "uv run python scripts/golden_check.py"
 alias = "gd"
 
 [tasks."golden-short"]
-description = "Run short golden eval tier (9 representative queries, ~3-5 min)"
+description = "Run short golden eval tier (8 representative queries, ~3-5 min)"
 run = "uv run pytest -m short tests/test_golden_check.py"
 alias = "gds"
 
 [tasks."golden-one"]
-description = "Rerun named golden case(s) for quick verification: `mise golden-one -- fireball-ability` (comma-separated ids allowed; appends to data/golden/history.jsonl)"
-run = "uv run python scripts/golden_rerun.py --id {{ arg(name='ids', var=true) }}"
+description = "Rerun named golden case(s) for quick verification: `mise golden-one fireball-ability` (comma-separated ids allowed; appends to data/golden/history.jsonl)"
+usage = 'arg "<ids>" var=#true help="Golden case id(s), comma-separated"'
+run = "uv run python scripts/golden_rerun.py --id {{ usage.ids | join(sep=',') }}"
 alias = "go"
+
+[tasks."golden-type"]
+description = "Run golden subset by type: `mise golden-type recipe` or `mise golden-type entity recipe` (needs embed + LLM up; also forwards --max-facts)"
+usage = 'arg "<types>" var=#true help="Golden type(s): entity|recipe|comparison|general"'
+run = '''
+foreach ($t in @('{{ usage.types | join(sep='\',\'') }}')) {
+  uv run python scripts/golden_check.py --type "$t"
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+'''
+alias = "gt"
 
 [tasks."golden-flaky"]
 description = "Focus on historically troublesome golden cases (>50% recent miss-rate via history.jsonl, plus manual data/golden/FLAKY.txt). Records accrue on every golden run"
@@ -239,10 +270,6 @@ description = "Check docs/skills against the repo: pointers resolve, contract co
 run = "uv run python scripts/check_docs.py"
 alias = "dr"
 
-[tasks."check-parity"]
-description = "Two-repo parity guard: shared files byte-identical with pg-rag-private, overlay never leaked into public, sanctioned diffs verified"
-run = "uv run python scripts/check_parity.py"
-alias = "cp"
 
 # --- Log viewing ---
 
@@ -286,4 +313,5 @@ run = [
 alias = "fo"
 
 [tools]
+python = "3.14.8"
 ruff = "latest"

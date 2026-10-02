@@ -86,17 +86,15 @@ override it (security policy). Consequences:
   nothing in the current pipeline reads them.
 - Access from the sandbox is anonymous (no HF_TOKEN in molab sandboxes);
   the bucket is public-read. Writes come only from a repo checkout via
-  `mise upload-docs` (needs `HF_TOKEN` with write scope). The public
-  corpus is published from the public repo; if the private overlay's
-  corpus is ever published, it replaces the file wholesale — see the
-  corpus-variant note below.
+  `mise upload-docs` (needs `HF_TOKEN` with write scope). The corpus is
+  published from this repo — see the corpus-variant note below.
 
 ## The notebook ↔ repo contract
 
 - Source of truth for the notebook is the PUBLIC repo
-  (`cprivitere/pg-rag-public`, notebook at
+  (`cprivitere/pg-rag`, notebook at
   `notebooks/molab-mirror/notebook.py`). molab loads it from GitHub:
-  `https://molab.marimo.io/github/cprivitere/pg-rag-public/blob/main/notebooks/molab-mirror/notebook.py`
+  `https://molab.marimo.io/github/cprivitere/pg-rag/blob/main/notebooks/molab-mirror/notebook.py`
   (public repo → no GitHub auth needed on molab).
 - Sandbox-local edits via `cm.edit_cell` are LIVE-ONLY. Persist a cell
   edit by exporting the notebook (base64 via scratchpad) and committing
@@ -108,14 +106,9 @@ override it (security policy). Consequences:
 
 The bucket carries exactly one `documents.json`. Publishing rules:
 
-- **Default (public-safe)**: publish from this repo
-  (`mise generate-docs && mise upload-docs`) — 261,703 docs, zero
-  il2cpp-derived content.
-- **Full (with decomp cards)**: publish only deliberately, from a
-  checkout with the private overlay installed. That replaces the bucket
-  file wholesale (with 305 extra enum/schema/mechanic docs). Revert by
-  re-publishing from this repo. The notebook is identical either way;
-  only the corpus differs.
+- **Only mode**: publish from this repo
+  (`mise generate-docs && mise upload-docs`) — 264,493 docs, all sources
+  TOS-compliant (CDN + wiki + computed + curated).
 
 ## Repo artifacts touched by molab work
 

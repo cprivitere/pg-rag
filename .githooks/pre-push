@@ -1,0 +1,20 @@
+#!/bin/sh
+# Pre-push: enforce pg-rag game-interaction hard lines
+# (docs/research/pg-rag-game-interaction-limits.md).
+# Skippable in emergencies with PG_SKIP_CONSTRAINTS=1, but never silently —
+# the scanner prints a loud warning when skipped.
+
+echo "[pre-push] running compliance scan (scripts/check_constraints.py)..."
+if [ "$PG_SKIP_CONSTRAINTS" = "1" ]; then
+    echo "WARNING: PG_SKIP_CONSTRAINTS=1 - compliance scan SKIPPED (never do this silently)" >&2
+    exit 0
+fi
+
+uv run --no-sync python scripts/check_constraints.py
+rc=$?
+if [ $rc -ne 0 ]; then
+    echo "" >&2
+    echo "COMPLIANCE CHECK FAILED - push aborted." >&2
+    echo "See docs/research/pg-rag-game-interaction-limits.md" >&2
+    exit $rc
+fi

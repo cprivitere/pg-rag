@@ -1,6 +1,6 @@
 ---
 name: testing
-description: Regression-triage and test discipline for pg-rag-public — how to decide fix-source-vs-update-test when a test fails, contract-change rules, and where the layer→test map lives. Use when changing behavior, editing tests, or triaging a failing test.
+description: Regression-triage and test discipline for pg-rag — how to decide fix-source-vs-update-test when a test fails, contract-change rules, and where the layer→test map lives. Use when changing behavior, editing tests, or triaging a failing test.
 ---
 
 # testing — regression triage & test discipline

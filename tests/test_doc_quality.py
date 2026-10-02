@@ -47,7 +47,7 @@ KNOWN_TYPES = {
     "mechanic",
     "combatxp",
 }
-KNOWN_SOURCES = {"cdn", "wiki", "computed", "curated", "il2cpp"}
+KNOWN_SOURCES = {"cdn", "wiki", "computed", "curated"}
 
 _CDN_RESIDUE = ["{{", "}}", "[[", "]]", "{|"]
 _WIKI_RESIDUE = ["{{", "}}"]

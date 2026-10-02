@@ -1,0 +1,12 @@
+{
+ "id": "gift-most-npc",
+ "question": "Which NPC have I given the most gifts to?",
+ "type": "general",
+ "facts": [
+  [
+   "Cheb"
+  ]
+ ],
+ "store": true,
+ "notes": "Store-only case: facts live in data/sqlite_gorgon.db (glogger play history), not in the RAG corpus. Run via the agentic loop (`mise agentic-eval`), not pipeline golden checks."
+}

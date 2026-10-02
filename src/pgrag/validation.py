@@ -44,7 +44,7 @@ from pgrag.vectorstore.health_check import (
 DEFAULT_DOCUMENTS_PATH = "data/documents.json"
 
 # Values of doc["metadata"]["source"] emitted by the document builders.
-KNOWN_SOURCES = {"cdn", "wiki", "computed", "curated", "il2cpp"}
+KNOWN_SOURCES = {"cdn", "wiki", "computed", "curated"}
 
 
 def _check_sources(cdn_dir, wiki_dir, warnings):

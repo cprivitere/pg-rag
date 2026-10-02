@@ -182,19 +182,6 @@ def test_combat_xp_without_level_unplanned():
     assert plan_query("what is the best combat exp?") is None
 
 
-# --- code/source intent ---
-
-
-def test_game_code_plans_to_il2cpp():
-    p = plan_query("What ability requirements are defined in the game code?")
-    assert p == {"native": {"source": "il2cpp"}, "token": {}, "label": "game code / source code"}
-
-
-def test_source_code_phrasing_plans_to_il2cpp():
-    p = plan_query("where is this defined in the source code?")
-    assert p["native"] == {"source": "il2cpp"}
-
-
 def test_bare_code_word_unplanned():
-    # "code" alone (cheat code, postal code) is NOT code/source-decomp intent.
+    # "code" alone (cheat code, postal code) never routes to a native filter.
     assert plan_query("what is the cheat code") is None

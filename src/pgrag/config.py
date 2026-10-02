@@ -14,7 +14,6 @@ WIKI_DIR = DATA_DIR / "wiki"
 DERIVED_DIR = DATA_DIR / "derived"
 WIKI_PARSED_CACHE = DERIVED_DIR / "wiki_parsed.json"
 CURATED_DIR = WIKI_DIR / "curated"
-IL2CPP_DIR = DATA_DIR / "il2cpp"
 
 # Document-shape version. generate_documents() stamps
 # DERIVED/documents_version.json with this; build-index refuses to embed a
@@ -22,7 +21,7 @@ IL2CPP_DIR = DATA_DIR / "il2cpp"
 # serve stale docs — the classic build-index-vs-build-documents trap).
 # Bump whenever document generation changes shape (new metadata keys, table
 # records, chunking) so a stale persist is surfaced, not re-embedded.
-DOCUMENTS_VERSION = 13
+DOCUMENTS_VERSION = 14
 
 DOCUMENTS_VERSION_FILE = DERIVED_DIR / "documents_version.json"
 

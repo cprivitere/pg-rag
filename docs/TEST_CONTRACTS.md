@@ -1,6 +1,6 @@
 # TEST_CONTRACTS — what breaks when, and what to touch
 
-The load-bearing guardrail for pg-rag-public: a layer → tests → contract map
+The load-bearing guardrail for pg-rag: a layer → tests → contract map
 with an explicit **regression-triage protocol**. The point is that a fresh
 model run (no conversation history) can look at a failing test and decide
 correctly — *fix the source* vs *update the test* — instead of patching a
@@ -66,8 +66,6 @@ test (prove the source is fine) or recording a deliberate contract change
   `test_flatten.py`, `test_resolve.py`, `test_metadata.py`,
   `test_wiki_expansion.py`, `test_wiki_builder.py`, `test_leveling.py`,
   `test_creature_zones.py`, `test_combat_xp.py`
-  (the optional `decomp_builder` hook and its tests live in the private
-  overlay repo)
 - **Source**: `src/pgrag/documents/` (`builder.py`, `wiki_builder.py`,
   `chunking.py`, `resolver.py`, `skill_profiles.py`, `summaries.py`,
   `creature_zones.py`), `src/pgrag/build.py`
@@ -97,9 +95,6 @@ test (prove the source is fine) or recording a deliberate contract change
   *three* files — `test_documents.py`, `test_summaries.py`,
   `test_gathering_summaries.py`. Their module docstrings name which
   function each owns; if you edit summary generation, run all three.
-- **Refresh tooling**: the optional IL2CPP decomp source (staging,
-  dumper, generation) lives in the private overlay repo; public
-  checkouts build a corpus without it.
 
 ### L2 — Index / build / persistence
 
@@ -231,15 +226,15 @@ test (prove the source is fine) or recording a deliberate contract change
 - **Source**: `scripts/golden_check.py`, `scripts/golden_rerun.py`,
   `src/pgrag/rag/retrieval_eval.py`,
   `rag/retriever.retrieve` (trace), `scripts/bakeoff_corpus.py`
-- **Contracts**: golden shape `{id, question, type, facts: [[variants…]], xfail?: bool}` — `xfail: true` marks a known-gap probe: runner+test treat a persistent miss as expected, but a pass (gap just closed) is a FAIL forcing unflagging; offline guard in test_golden_xfail_gate.py.
+- **Contracts**: golden shape `{id, question, type, facts: [[variants…]], xfail?: bool}` — `xfail: true` marks a known-gap probe: runner+test treat a persistent miss as expected, but a pass (gap just closed) is a FAIL forcing unflagging; offline guard in test_golden_xfail_gate.py. `"store": true` marks a store-only case (facts in the agentic SQLite store, e.g. glogger play history): pipeline harnesses skip it; it runs via `mise agentic-eval` (appended to the short tier).
   (changing it breaks offline auto-collection — RULES/WATCHDOG trap); IR
   metric canonical-unit counting (`_row_`/`_coverage`/`_chunk_` collapse);
-  Tiered split: `test_golden_facts_short` (`-m short`, 9 files, ~3-5 min) and `test_golden_facts_long` (`-m long`, 33 files, ~11-23 min); bare run includes all 42.
+  Tiered split: `test_golden_facts_short` (`-m short`, 8 files, ~3-5 min) and `test_golden_facts_long` (`-m long`, 39 files, ~11-23 min); bare run includes all 47 pipeline files (store-only cases excluded — they run via `mise agentic-eval`, whose short tier is 12 cases).
   trace field set + `ask()`-fill no-payload-mutation; bakeoff corpus
   type-stratified queries.
 - **Change ⇒** `uv run pytest tests/test_golden_check.py tests/test_retrieval_eval.py
   tests/test_retrieval_trace.py tests/test_bakeoff_corpus.py`
-  Use `-m short` for the quick tier (9 files, ~3-5 min) or `-m long` for the full tier (33 files).
+  Use `-m short` for the quick tier (8 files, ~3-5 min) or `-m long` for the full tier (39 files).
   Include `tests/test_golden_rerun.py` in the sibling run when the rerun
   tooling shape changes.
   **Golden-rerun tooling** (`scripts/golden_rerun.py`, offline tests in
@@ -250,7 +245,9 @@ test (prove the source is fine) or recording a deliberate contract change
   recent-10 miss-share exceeds 50% (plus manual entries in
   `data/golden/FLAKY.txt`); `mise golden-flaky-list` audits shares.
   history.jsonl is an accumulating ledger, **not a build output** — its
-  tests use tmp paths only. Fact specs are *variant lists* exactly so
+  tests use tmp paths only. `mise golden-type <type...>` runs one type's
+  subset via `scripts/golden_check.py --type` (repeatable; `--max-facts N`
+  caps case weight); both runners accept the flags. Fact specs are *variant lists* exactly so
   inflections of the same phrase (e.g. fireball-ability's
   "throw"/"throws a ball of fire") count as the same fact: add a variant,
   never delete one, when the corpus wording legitimately differs from the
@@ -294,6 +291,61 @@ test (prove the source is fine) or recording a deliberate contract change
 - **Change ⇒** `uv run pytest tests/test_validation.py tests/test_health_check.py`,
   then `uv run pgrag validate`.
 
+
+### L-agentic — SQLite store + agentic tool loop
+
+- **Tests**: `test_sqlstore_build.py`, `test_agentic_tools.py`,
+  `test_session_ingest.py`, `test_agentic_loop.py`, `test_agentic_tune.py`,
+  `test_glogger_ingest.py`, `test_preflight_sync.py`
+- **Source**: `src/pgrag/agentic/` (`store.py`, `session.py`, `tools.py`,
+  `loop.py`, `glogger.py`), `scripts/build_sqlstore.py`,
+  `scripts/agentic_chat.py`, `scripts/agentic_tune.py`
+- **Contracts**: `build_store` is idempotent (INSERT OR REPLACE + per-file
+  manifest mtimes in `data/sqlite_state.json`) and builds from tmp fixture
+  sources in tests (never real `data/`); ingredients without `ItemCode`
+  keep `ItemKeys`/`Desc` (NULL item_code is valid); wiki titles come only
+  from `.meta.json` (never hashed filenames); Lint_* keyword markers stay in
+  `raw`, filtered out of the joined keyword columns; session parsers are
+  tolerant (unmatched lines are counted and skipped, never fatal) and
+  re-ingest of a changed file replaces its rows exactly (no dupes); missing
+  session dir skips those tables and the build still succeeds.
+  `agentic_chat._preflight_sync` refreshes session + glogger data before any
+  chat (`--no-sync` skips; the eval path never syncs), prints only tables
+  with nonzero row counts (watermark/snapshot metadata keys filtered), and
+  degrades to a printed note instead of raising when a source is unreadable
+  — a glogger failure after a successful session refresh reports both
+  facts rather than claiming the store is untouched.
+  `ingest_glogger` WAL-safe copies the glogger DB (never opens the live
+  file), mirrors event tables incrementally by AUTOINCREMENT id watermark
+  (monotonic even across source deletes), re-copies per-snapshot tables when
+  the latest `character_snapshots.id` advances, skips glogger's own CDN
+  mirrors (ours is fresher), and is a no-op (not an error) when the source
+  is absent. Rerun with unchanged sources reports 0 rows for every table
+  (idempotent counts). `execute_tool` returns errors as strings (model self-corrects), allows
+  only single read-only SELECTs (write/PRAGMA rejected, LIMIT 200 injected,
+  2M-op progress-handler budget), and caps rows/cells/pages. `run_loop`
+  mirrors pipeline.ask()'s 5-key return shape, executes at most
+  `max_rounds` tool rounds (native tool_calls OR fenced ```tool blocks),
+  caps each tool-result payload at 12000 chars, and forces a final no-tools
+  answer (`tools=None`) once the round budget is exhausted. Tests
+  monkeypatch `loop._post` — never a live LLM.
+  `scripts/agentic_tune.py` sweeps (model, temperature, seed, reasoning
+  budget, max-rounds) into `data/agentic_tune/<run-id>.json`
+  (skip-if-exists, `--force` re-runs; `--compare` tabulates). Parity: the
+  `golden-short` eval set ALWAYS runs temperature 0 / seed 0 — the harness
+  pins it regardless of CLI args. Tuning cases live in
+  `data/eval/tune_cases.json` (never `data/golden/` — that set is run by
+  the shared `ask()` harness). Golden fact variants may gain a variant only
+  when the fact is observably present in the answer in different wording
+  (e.g. blacksmithing-leveling-25-30 accepts "750 xp" = reward_xp_first
+  quoted from SQL); the assertion set must not shrink.
+- **Change ⇒** `uv run pytest tests/test_sqlstore_build.py
+  tests/test_agentic_tools.py tests/test_session_ingest.py
+  tests/test_agentic_loop.py tests/test_agentic_tune.py
+  tests/test_glogger_ingest.py tests/test_preflight_sync.py` (+ the file you
+  edited), then `mise lint`.
+  Any change to tool behavior also wants an end-to-end
+  `mise agentic-chat --question ...` smoke (needs LLM :8080 only).
 
 ### L9 — Lint gate (`ruff`)
 

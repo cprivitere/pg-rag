@@ -21,7 +21,7 @@ def main() -> None:
     p = sub.add_parser("build-index", help="Upsert documents into the ChromaDB index")
     p.add_argument(
         "--source",
-        choices=["cdn", "wiki", "computed", "curated", "il2cpp"],
+        choices=["cdn", "wiki", "computed", "curated"],
         help="Only rebuild documents from this source, leaving all others untouched",
     )
     p.set_defaults(func=_build_index)

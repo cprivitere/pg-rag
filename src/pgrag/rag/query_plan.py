@@ -47,15 +47,6 @@ _RECIPE = re.compile(
 )
 _ABILITY = re.compile(r"\b(?:ability|abilities|spell|power)\b", re.I)
 
-# Code-intent queries ("what ... is defined in the game code", "source code")
-# -> the authoritative answers are the il2cpp decomp cards (schema/enum/mechanic),
-# not wiki prose or CDN tables. Narrowing Chroma to source=il2cpp keeps those 305
-# cards from being drowned under ~260k wiki/cdn docs on a broad general blend.
-_CODE_SOURCE = re.compile(
-    r"\b(?:game|source)\s+code\b|\bgame['\u2019]s?\s+code\b|\bin\s+the\s+code\b",
-    re.I,
-)
-
 # Skill words likely to name a recipe/ability skill. Only a curated subset is
 # worth matching; an unknown skill simply yields no skill clause (still safe).
 _SKILL_WORDS = [
@@ -358,10 +349,6 @@ def plan_query(question):
     combat_xp_plan = _plan_combat_xp_level(q)
     if combat_xp_plan is not None:
         return combat_xp_plan
-
-    # --- Code/source intent ("...in the game code") -> il2cpp decomp cards ---
-    if _CODE_SOURCE.search(q):
-        return {"native": {"source": "il2cpp"}, "token": {}, "label": "game code / source code"}
 
     # --- Ability + damage type ---
     if _ABILITY.search(q):

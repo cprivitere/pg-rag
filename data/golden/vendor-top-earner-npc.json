@@ -1,0 +1,17 @@
+{
+ "id": "vendor-top-earner-npc",
+ "question": "Selling to NPC vendors, which NPC has earned me the most councils in total?",
+ "type": "general",
+ "facts": [
+  [
+   "Flia"
+  ],
+  [
+   "621",
+   "621389",
+   "621,389"
+  ]
+ ],
+ "store": true,
+ "notes": "Store-only case: facts live in data/sqlite_gorgon.db (glogger play history), not in the RAG corpus. Run via the agentic loop (`mise agentic-eval`), not pipeline golden checks."
+}

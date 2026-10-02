@@ -7,7 +7,9 @@ excluded modules stay unguarded. Formatting is NOT gated here (the formatter
 is a tool, not a test assertion); only `check` findings fail.
 
 Module-level because the lint scan is process-wide: one subprocess per pytest
-session, not per test.
+session, not per test. `--no-sync` keeps the nested `uv run` from deciding the
+outer pytest session's venv is stale and trying to recreate it mid-run
+(Windows: the running pytest.exe holds .venv/Scripts → os error 32/5).
 """
 
 import subprocess
@@ -15,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-RUFF_CMD = ["uv", "run", "ruff", "check", "src", "scripts", "tests"]
+RUFF_CMD = ["uv", "run", "--no-sync", "ruff", "check", "src", "scripts", "tests"]
 
 
 def _collect_ruff_violations():
