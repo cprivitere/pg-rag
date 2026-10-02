@@ -248,6 +248,33 @@ def test_run_cases_xfail_miss_is_not_a_failure(tmp_path, monkeypatch, capsys):
     assert "[KNOWN-GAP]" in capsys.readouterr().out
 
 
+def test_run_cases_all_attempts_error_is_a_failure(tmp_path, monkeypatch, capsys):
+    """Contract: if check_golden raises on EVERY attempt (e.g. a service is
+    down), the case counts as a miss — never a false PASS. Regression guard
+    for the embed-down run that reported false PASSes (2026-10-02)."""
+    monkeypatch.setattr(gr, "HISTORY_FILE", tmp_path / "history.jsonl")
+
+    def _raise(golden, trace=None):
+        raise ConnectionError("Cannot connect to embedding server")
+
+    monkeypatch.setattr(gr, "check_golden", _raise)
+    golden = {"id": "c", "question": "q", "type": "general", "facts": [["x"]]}
+    hist = tmp_path / "history.jsonl"
+    code = gr.run_cases(
+        [(tmp_path / "c.json", golden)],
+        max_attempts=2,
+        diagnose=False,
+        trace=False,
+        history_path=hist,
+    )
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "[FAIL] c (harness error every attempt" in out
+    rec = json.loads(hist.read_text(encoding="utf8").strip())
+    assert rec["missing"] is True
+    assert rec["attempt_n"] == 2
+
+
 def test_run_cases_xpass_is_a_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(gr, "check_golden", _FakeCheck([]))
     golden = {
@@ -267,3 +294,64 @@ def test_run_cases_xpass_is_a_failure(tmp_path, monkeypatch):
         )
         == 1
     )
+
+
+# ---------- resolve_ids --type / --max-facts filters (offline) ----------
+
+
+def _seed_golden_dir(tmp_path, monkeypatch):
+    """4 canned goldens covering two types x two fact counts."""
+    gdir = tmp_path / "golden"
+    gdir.mkdir()
+    specs = [
+        ("recipe-two.json", {"id": "recipe-two", "type": "recipe", "facts": [["a"], ["b"]]}),
+        ("recipe-five.json", {"id": "recipe-five", "type": "recipe", "facts": [["a"]] * 5}),
+        ("entity-two.json", {"id": "entity-two", "type": "entity", "facts": [["a"], ["b"]]}),
+        ("entity-five.json", {"id": "entity-five", "type": "entity", "facts": [["a"]] * 5}),
+    ]
+    for name, g in specs:
+        (gdir / name).write_text(json.dumps(g), encoding="utf8")
+    monkeypatch.setattr(gr, "GOLDEN_DIR", gdir)
+    return gdir
+
+
+def test_resolve_ids_type_filter(tmp_path, monkeypatch):
+    _seed_golden_dir(tmp_path, monkeypatch)
+    cases = gr.resolve_ids(_Args(type="recipe", max_facts=None, selection="all"))
+    assert [p.stem for p, _ in cases] == ["recipe-five", "recipe-two"]
+
+
+def test_resolve_ids_max_facts_filter(tmp_path, monkeypatch):
+    _seed_golden_dir(tmp_path, monkeypatch)
+    cases = gr.resolve_ids(_Args(type=None, max_facts=2, selection="all"))
+    assert [p.stem for p, _ in cases] == ["entity-two", "recipe-two"]
+
+
+def test_resolve_ids_filters_intersect(tmp_path, monkeypatch):
+    _seed_golden_dir(tmp_path, monkeypatch)
+    cases = gr.resolve_ids(_Args(type="entity", max_facts=2, selection="all"))
+    assert [p.stem for p, _ in cases] == ["entity-two"]
+
+
+def test_resolve_ids_type_excludes_explicit_ids(tmp_path, monkeypatch, capsys):
+    _seed_golden_dir(tmp_path, monkeypatch)
+    cases = gr.resolve_ids(_Args(type="recipe", max_facts=None, ids="entity-two"))
+    assert cases == []
+    assert "no goldens match --type recipe" in capsys.readouterr().out
+
+
+def test_resolve_ids_all_branch_empty_match_prints(tmp_path, monkeypatch, capsys):
+    _seed_golden_dir(tmp_path, monkeypatch)
+    cases = gr.resolve_ids(_Args(type="general", max_facts=None, selection="all"))
+    assert cases == []
+    assert "no goldens match --type general" in capsys.readouterr().out
+
+
+class _Args:
+    """Namespace stand-in with the fields resolve_ids reads."""
+
+    def __init__(self, type=None, max_facts=None, ids=None, selection=None):
+        self.type = type
+        self.max_facts = max_facts
+        self.ids = ids
+        self.selection = selection

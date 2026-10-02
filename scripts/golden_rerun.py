@@ -156,8 +156,39 @@ def miss_stats(history: list[dict] | None = None) -> list[tuple]:
 
 
 def resolve_ids(args) -> list[tuple[Path, dict]]:
-    """(golden_path, golden_dict) list for the requested selection."""
+    """(golden_path, golden_dict) list for the requested selection.
+
+    Honors `args.type` / `args.max_facts` filters on every branch; a
+    selection that was non-empty before filtering but empty after prints
+    `no goldens match` and returns []."""
     all_golden = {p.stem: p for p in sorted(GOLDEN_DIR.glob("*.json"))}
+
+    def _matches(g: dict) -> bool:
+        if g.get("store"):
+            # Store-only case: facts live in the agentic SQLite store, not the
+            # RAG corpus — the pipeline harness can never produce them.
+            return False
+        return (args.type is None or g.get("type") == args.type) and (
+            args.max_facts is None or len(g["facts"]) <= args.max_facts
+        )
+
+    def _filter_label() -> str:
+        parts = [
+            f"--type {args.type}" if args.type else None,
+            f"--max-facts {args.max_facts}" if args.max_facts is not None else None,
+        ]
+        return " ".join(p for p in parts if p)
+
+    def _load_filtered(paths: list[Path], prefilter_count: int) -> list[tuple[Path, dict]]:
+        pairs = []
+        for p in paths:
+            g = json.loads(p.read_text(encoding="utf8"))
+            if _matches(g):
+                pairs.append((p, g))
+        if not pairs and prefilter_count:
+            print(f"no goldens match {_filter_label()}")
+        return pairs
+
     if args.selection == "flaky":
         ids = flaky_ids(explicit_manual=True)
         if not ids:
@@ -167,13 +198,10 @@ def resolve_ids(args) -> list[tuple[Path, dict]]:
             )
             return []
         print(f"Flaky selection: {', '.join(ids)}")
-        return [
-            (all_golden[g], json.loads(all_golden[g].read_text(encoding="utf8")))
-            for g in ids
-            if g in all_golden
-        ]
+        present = [all_golden[g] for g in ids if g in all_golden]
+        return _load_filtered(present, len(present))
     if args.selection == "all":
-        return [(p, json.loads(p.read_text(encoding="utf8"))) for p in all_golden.values()]
+        return _load_filtered(list(all_golden.values()), len(all_golden))
     # explicit --id list
     wanted = [s.strip() for s in (args.ids or "").split(",") if s.strip()]
     missing = [w for w in wanted if w not in all_golden]
@@ -181,7 +209,18 @@ def resolve_ids(args) -> list[tuple[Path, dict]]:
         print(f"Unknown golden id(s): {missing}")
         print(f"Valid ids: {sorted(all_golden)}")
         sys.exit(2)
-    return [(all_golden[w], json.loads(all_golden[w].read_text(encoding="utf8"))) for w in wanted]
+    store_only = [
+        w for w in wanted if json.loads(all_golden[w].read_text(encoding="utf-8")).get("store")
+    ]
+    if store_only:
+        print(
+            "Store-only golden id(s) cannot run here — facts live in the agentic"
+            " SQLite store, not the RAG corpus:"
+        )
+        for w in store_only:
+            print(f"  {w}: run via mise agentic-eval (or agentic_chat.py --eval)")
+        sys.exit(2)
+    return _load_filtered([all_golden[w] for w in wanted], len(wanted))
 
 
 def run_cases(
@@ -198,14 +237,16 @@ def run_cases(
 
     total_miss = 0
     xfail_gap_closed = 0
+    errored_cases = []
     for path, golden in cases:
         misses = []
         attempt = 0
         result = None
         context = ""
-        # contract: attempt_n = the attempt on which the final check ran (or 0
-        # if the harness errored every round); the loop reverts `attempt` from
-        # the original `for attempt in range(...)` name — B007 intended no rename.
+        # contract: attempt_n = the attempt on which the final check ran
+        # (max_attempts if every attempt errored and none produced a result);
+        # the loop reverts `attempt` from the original `for attempt in
+        # range(...)` name — B007 intended no rename.
         for attempt in range(1, max_attempts + 1):  # noqa: B007 - attempt is the loop-carried attempt counter
             rec_trace = {} if trace else None
             try:
@@ -224,6 +265,24 @@ def run_cases(
                     print(f"    (trace write failed: {exc})")
             if not misses:
                 break
+        if result is None:
+            # Every attempt errored (e.g. a service is down): the case was
+            # never actually checked — record a miss, never a false PASS.
+            errored_cases.append(path.stem)
+            missing = True
+            query_type = "?"
+            _persist(
+                {
+                    "id": golden["id"],
+                    "missing": True,
+                    "missing_facts": ["<harness-error: all attempts failed>"],
+                    "query_type": query_type,
+                    "attempt_n": attempt,
+                }
+            )
+            total_miss += 1
+            print(f"[FAIL] {golden['id']} (harness error every attempt — check services)")
+            continue
         missing = bool(misses)
         query_type = (result or {}).get("query_type", "?")
         _persist(
@@ -287,6 +346,18 @@ def main() -> int | None:
     )
     parser.add_argument(
         "--trace", action="store_true", help="write retrieval traces to data/retrieval_traces/"
+    )
+    parser.add_argument(
+        "--type",
+        choices=["entity", "recipe", "comparison", "general"],
+        help="run only goldens whose JSON `type` matches",
+    )
+    parser.add_argument(
+        "--max-facts",
+        type=int,
+        default=None,
+        metavar="N",
+        help="run only goldens with <= N fact groups (weight cap)",
     )
     args = parser.parse_args()
 

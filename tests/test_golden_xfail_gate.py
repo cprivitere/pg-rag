@@ -66,3 +66,50 @@ def test_real_fail_main_exits_one(tmp_path, monkeypatch, capsys):
     )
     assert code == 1
     assert "[FAIL]" in capsys.readouterr().out
+
+
+# ---------- --type / --max-facts filter gate (offline) ----------
+
+
+def test_main_type_filter_runs_only_matching(tmp_path, monkeypatch, capsys):
+    """Contract: --type skips non-matching goldens before check_golden (no LLM
+    call for filtered-out cases) and runs the rest normally."""
+    called = []
+    gc_dir = tmp_path / "golden"
+    gc_dir.mkdir()
+    for i, name in enumerate(("one.json", "two.json")):
+        golden = {"id": name[:-5], "question": "q", "type": "recipe" if i == 0 else "general", "facts": [["probe-fact"]]}
+        (gc_dir / name).write_text(json.dumps(golden), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["golden_check", "--type", "recipe"])
+    monkeypatch.setattr(gc, "GOLDEN_DIR", gc_dir)
+    monkeypatch.setattr(gc, "TRACE_DIR", tmp_path / "traces")
+
+    def fake_check(golden, trace=None):
+        called.append(golden["id"])
+        return ({"answer": "none", "query_type": "general", "documents": []}, [], "")
+
+    monkeypatch.setattr(gc, "check_golden", fake_check)
+    gc.main()
+    assert called == ["one"]
+    assert "OK: all golden facts present" in capsys.readouterr().out
+
+
+def test_main_empty_match_exits_zero_with_message(tmp_path, monkeypatch, capsys):
+    """Contract: filters excluding every golden print `no goldens match`, exit
+    0, and never invoke check_golden (no misleading OK line)."""
+    gc_dir = tmp_path / "golden"
+    gc_dir.mkdir()
+    golden = {"id": "one", "question": "q", "type": "general", "facts": [["probe-fact"]]}
+    (gc_dir / "one.json").write_text(json.dumps(golden), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["golden_check", "--type", "comparison"])
+    monkeypatch.setattr(gc, "GOLDEN_DIR", gc_dir)
+    monkeypatch.setattr(gc, "TRACE_DIR", tmp_path / "traces")
+
+    def fake_check(golden, trace=None):
+        raise AssertionError("check_golden must not run for filtered-out set")
+
+    monkeypatch.setattr(gc, "check_golden", fake_check)
+    gc.main()
+    out = capsys.readouterr().out
+    assert "no goldens match --type comparison" in out
+    assert "OK: all golden facts present" not in out

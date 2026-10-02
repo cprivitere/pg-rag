@@ -37,7 +37,6 @@ SANCTIONED = {
     "scripts/check_docs.py": "private quotes the 42-golden set (incl. il2cpp)",
     "scripts/pg_rag.py": "PG_RAG_ROOT default points at its own checkout",
     "src/pgrag/documents/builder.py": "private imports decomp_builder directly (no guarded hook)",
-    "tests/test_golden_check.py": "private golden set includes the il2cpp xfail case",
     # identity prose (repo name appears in the text)
     ".agents/skills/pg-rag/SKILL.md": "repo-name identity + overlay mention",
     ".agents/skills/testing/SKILL.md": "repo-name identity",
@@ -57,6 +56,7 @@ SANCTIONED = {
 # public repo (leak guard in main()).
 OVERLAY_FILES = {
     "IL2CPP_DECOMP_CORPUS_PHASE_1_PLAN.md",
+    "TODO.md",  # renamed from TODO.txt in 67f0e74; private planning notes
     "docs/discovered-mechanic-prose.md",
     "docs/discovered-schemas.md",
     "scripts/analyze_schemas.py",
@@ -71,11 +71,22 @@ OVERLAY_FILES = {
     "data/golden/il2cpp-mechanic-combat-xp.json",
     "data/golden/il2cpp-mechanic-curse-remedy.json",
     "data/golden/il2cpp-schema-item-fields.json",
+    # recipe goldens added in 799f7af (corpus rebalance to 47)
+    "data/golden/beginners-arrow-recipe.json",
+    "data/golden/bland-mutton-vindaloo-recipe.json",
+    "data/golden/durstins-mutton-stew-recipe.json",
+    "data/golden/serbule-style-lamb-chops-recipe.json",
+    # glogger play-history golden cases (need the private glogger store)
+    "data/golden/stall-top-revenue-item.json",
+    "data/golden/gift-most-npc.json",
+    "data/golden/deaths-top-killer.json",
+    "data/golden/vendor-top-earner-npc.json",
     # agentic SQLite prototype (store + tool loop + CLI + tests)
     "src/pgrag/agentic/store.py",
     "src/pgrag/agentic/session.py",
     "src/pgrag/agentic/tools.py",
     "src/pgrag/agentic/loop.py",
+    "src/pgrag/agentic/glogger.py",
     "scripts/build_sqlstore.py",
     "scripts/agentic_chat.py",
     "scripts/build_tool_corpus.py",
@@ -83,6 +94,8 @@ OVERLAY_FILES = {
     "tests/test_agentic_tools.py",
     "tests/test_agentic_loop.py",
     "tests/test_session_ingest.py",
+    "tests/test_glogger_ingest.py",
+    "tests/test_preflight_sync.py",
     # agentic tuning harness (sweeps over model/temperature/reasoning budget)
     "scripts/agentic_tune.py",
     "tests/test_agentic_tune.py",

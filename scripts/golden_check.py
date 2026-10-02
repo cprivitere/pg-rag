@@ -68,14 +68,41 @@ def main():
         "to a JSONL bundle for oracle replay on a stronger reader. Bare "
         "--export writes data/golden/golden_context_bundle.jsonl.",
     )
+    parser.add_argument(
+        "--type",
+        choices=["entity", "recipe", "comparison", "general"],
+        help="run only goldens whose JSON `type` matches (repeatable "
+        "selections are not supported here; use one value)",
+    )
+    parser.add_argument(
+        "--max-facts",
+        type=int,
+        default=None,
+        metavar="N",
+        help="run only goldens with <= N fact groups (weight cap)",
+    )
     args = parser.parse_args()
+
+    def _matches(golden):
+        return (args.type is None or golden.get("type") == args.type) and (
+            args.max_facts is None or len(golden["facts"]) <= args.max_facts
+        )
 
     total_miss = 0
     export_records = []
     capture_trace = os.environ.get("PGRAG_TRACE") == "1"
     total_xpass = 0
+    ran_any = False
     for path in sorted(GOLDEN_DIR.glob("*.json")):
         golden = json.loads(path.read_text(encoding="utf-8"))
+        if golden.get("store"):
+            # Store-only case: facts live in the agentic SQLite store, not the
+            # RAG corpus — pipeline.ask can never produce them. Runs via
+            # `mise agentic-eval` instead.
+            continue
+        if not _matches(golden):
+            continue
+        ran_any = True
         trace = {} if capture_trace else None
         result, misses, context = check_golden(golden, trace=trace)
         if args.export:
@@ -123,6 +150,14 @@ def main():
             else:
                 print(f"    MISSING: {first}")
         total_miss += len(misses)
+
+    if not ran_any:
+        filters = [
+            f"--type {args.type}" if args.type else None,
+            f"--max-facts {args.max_facts}" if args.max_facts is not None else None,
+        ]
+        print("no goldens match " + " ".join(f for f in filters if f))
+        return
 
     if args.export:
         out = Path(args.export)

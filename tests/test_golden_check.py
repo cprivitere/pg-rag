@@ -2,8 +2,11 @@
 GOLDEN_DIR; requires the LLM (:8080) and embedding (:8081) servers and retries
 sampled LLM answers to damp nondeterminism.
 
-Tiered by marker: -m short (9 representative queries, ~3-5 min) or
--m long (remaining 34, ~11-23 min). Default (no -m) runs all 43."""
+Tiered by marker: -m short (8 representative queries, ~3-5 min) or
+-m long (remaining 39, ~11-23 min). Default (no -m) runs all 47 pipeline
+files — store-only cases ("store": true in their JSON, glogger play-history
+facts) are excluded here; they run in the agentic eval (`mise agentic-eval`,
+12 cases incl. 8 short-tier ids)."""
 
 import json
 
@@ -21,11 +24,20 @@ _SHORT_FILES = [
     GOLDEN_DIR / "fireball-vs-fire-breath-damage.json",  # comparison: damage numbers
     GOLDEN_DIR / "healing-potion-omega.json",  # recipe: crafting/effects
     GOLDEN_DIR / "cheesemaking-leveling.json",  # entity: arithmetic, 8 facts, hardest
-    GOLDEN_DIR / "il2cpp-mechanic-curse-remedy.json",  # general: xfail gate
     GOLDEN_DIR / "grow-field-mushrooms.json",  # general: 5 facts, medium
+    # NOTE: store-only glogger cases ("store": true in their JSON) are NOT in
+    # the pipeline tiers — they run in the agentic eval (`mise agentic-eval`),
+    # which appends them to the short tier automatically.
 ]
 
-_LONG_FILES = [f for f in sorted(GOLDEN_DIR.glob("*.json")) if f not in _SHORT_FILES]
+_LONG_FILES = [
+    f
+    for f in sorted(GOLDEN_DIR.glob("*.json"))
+    if f not in _SHORT_FILES and not json.loads(f.read_text(encoding="utf-8")).get("store")
+]
+# Store-only cases (top-level "store": true): facts live in the agentic SQLite
+# store (glogger play history), not in the RAG corpus — the pipeline harness
+# can never produce them. They run in the agentic eval (`mise agentic-eval`).
 
 
 def test_normalize_contractions_strip_not_space():
@@ -84,7 +96,7 @@ def _check_golden_file(path):
 @pytest.mark.short
 @pytest.mark.parametrize("path", _SHORT_FILES, ids=lambda p: p.stem)
 def test_golden_facts_short(path, require_servers):
-    """Short golden tier: 9 representative queries covering all types
+    """Short golden tier: 8 representative queries covering all types
     (entity, comparison, recipe, general). ~3-5 min. Filter: -m short."""
     _check_golden_file(path)
 
@@ -92,6 +104,7 @@ def test_golden_facts_short(path, require_servers):
 @pytest.mark.long
 @pytest.mark.parametrize("path", _LONG_FILES, ids=lambda p: p.stem)
 def test_golden_facts_long(path, require_servers):
-    """Long golden tier: remaining 34 queries. ~11-23 min. Filter: -m long.
-    Default (no -m) runs both tiers = all 43 files exactly once."""
+    """Long golden tier: remaining 39 queries. ~11-23 min. Filter: -m long.
+    Default (no -m) runs both tiers = all 47 pipeline files exactly once
+    (store-only cases excluded; see module docstring)."""
     _check_golden_file(path)
