@@ -134,6 +134,44 @@ def test_new_event_rows_incremental(tmp_path, src_db, manifests):
     conn.close()
 
 
+def test_release_fallback_when_personal_absent(tmp_path, manifests, monkeypatch):
+    """contract: DEFAULT_GLOGGER_DB points at the Personal build; when it's
+    absent and no explicit path was passed, ingest falls back to the Release
+    install. An explicit missing path still no-ops (no surprise fallback)."""
+    personal = tmp_path / "personal"
+    release = tmp_path / "release"
+    release.mkdir()
+    src_db = release / "glogger.db"
+    c = sqlite3.connect(src_db)
+    c.executescript(
+        """
+        CREATE TABLE stall_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, event_timestamp TEXT,
+            event_at TEXT, log_timestamp TEXT, log_title TEXT, action TEXT,
+            player TEXT, owner TEXT, item TEXT, quantity INTEGER,
+            price_unit REAL, price_total INTEGER, raw_message TEXT,
+            entry_index INTEGER, ignored INTEGER, created_at TEXT
+        );
+        INSERT INTO stall_events (event_timestamp, action, player, item,
+            quantity, raw_message, entry_index, ignored, created_at)
+        VALUES ("t1", "bought", "P", "Item", 1, "raw", 0, 0, "c");
+        """
+    )
+    c.commit()
+    c.close()
+    monkeypatch.setattr(glogger, "DEFAULT_GLOGGER_DB", personal / "glogger.db")
+    monkeypatch.setattr(glogger, "RELEASE_GLOGGER_DB", src_db)
+
+    conn = _store(tmp_path)
+    counts = ingest_glogger(conn)
+    assert counts["stall_events"] == 1
+
+    # Explicit missing path: no fallback, clean no-op.
+    counts2 = ingest_glogger(conn, tmp_path / "explicit-none.db")
+    assert counts2 == {}
+    conn.close()
+
+
 def test_stall_unknown_kinds_refined(tmp_path, manifests):
     """contract: glogger's action='unknown' stall lines are re-classified on
     ingest — hire fees → 'hire_stall' + price_total, visitor notes →

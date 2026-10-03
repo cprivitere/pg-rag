@@ -31,9 +31,11 @@ from pathlib import Path
 
 from pgrag.agentic.store import MANIFEST_PATH
 
-DEFAULT_GLOGGER_DB = (
-    Path.home() / "AppData" / "Roaming" / "glogger.Release" / "glogger.db"
-)
+# The user's daily driver is the fork-local PERSONAL build (glogger.Personal
+# appdata, schema v68 with stall_price_observations + richer game_state
+# tables). The Release install stays as fallback for fresh-copy resync.
+DEFAULT_GLOGGER_DB = Path.home() / "AppData" / "Roaming" / "glogger.Personal" / "glogger.db"
+RELEASE_GLOGGER_DB = Path.home() / "AppData" / "Roaming" / "glogger.Release" / "glogger.db"
 
 # id-keyed event-log tables: copied incrementally by id > watermark.
 # (source table, our PK is the source's id) — column sets are identical to
@@ -61,10 +63,22 @@ _SNAPSHOT_TABLES = (
 )
 
 # Live game-state tables glogger upserts in place (no history): full re-copy.
-_STATE_TABLES = ("game_state_favor", "game_state_npc_vendor", "game_state_storage")
+# game_state_inventory/equipment/mount are Personal-build v68 additions
+# (live bag state, paper-doll appearance, mounted flag) — same upsert regime.
+_STATE_TABLES = (
+    "game_state_favor",
+    "game_state_npc_vendor",
+    "game_state_storage",
+    "game_state_inventory",
+    "game_state_equipment",
+    "game_state_mount",
+)
 
 # Small append-only oddballs without clean ids: full refresh is cheapest.
-_FULL_TABLES = ("gourmand_eaten_foods",)
+# stall_price_observations: Personal-build v68 market-intel table — prices
+# observed at OTHER players' stalls (typed/OCR captures + auto-detected
+# purchases; 0 sentinel = price pending). Append-only, no watermark id.
+_FULL_TABLES = ("gourmand_eaten_foods", "stall_price_observations")
 
 # glogger's CDN mirrors + UI-only tables we must NOT ingest (ours is fresh).
 SKIP_TABLES = (
@@ -212,6 +226,10 @@ def ingest_glogger(
     snapshot and state tables propagate deletions on their next re-copy.
     """
     src = Path(glogger_db or DEFAULT_GLOGGER_DB)
+    if not src.exists() and glogger_db is None and RELEASE_GLOGGER_DB.exists():
+        # Personal build uninstalled/absent — fall back to the Release
+        # install so the store never silently loses the glogger source.
+        src = RELEASE_GLOGGER_DB
     if not src.exists():
         print(f"glogger DB not found at {src}; skipping glogger tables.")
         return {}
