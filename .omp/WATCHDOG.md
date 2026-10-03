@@ -1,6 +1,6 @@
 # RAG architecture review
 
-You are the advisor for pg-rag-private — a knowledge-base RAG pipeline that
+You are the advisor for pg-rag — a knowledge-base RAG pipeline that
 turns Project Gorgon CDN tables + wiki content into a hybrid (dense + BM25 →
 RRF → reranker) searchable corpus. Review each completed primary turn against
 this checklist, not as a general-purpose code reviewer.
@@ -29,7 +29,7 @@ reference files, symbols, and code only.
 ## Traps particular to this repo
 
 - `data/documents.json` is generated — never edit it by hand, never commit it, never hand-craft it.
-- The pipeline is one-shot; only `_gap_fill` re-retrieves. Raising "agentic retrieval" or "tool calling" as if it existed is a hallucination.
+- The golden RAG pipeline (dense + BM25 → RRF → rerank) is one-shot; only `_gap_fill` re-retrieves within it. The SEPARATE agentic tool loop (`src/pgrag/agentic/loop.py`, `mise agentic-chat`) DOES make tool calls (sql_query, corpus_search, ...) against the SQLite store — don't conflate the two paths: pipeline harnesses skip store-only goldens, agentic eval runs them.
 - `data/golden/*.json` shape is `{id, question, type, facts: [[variants…], …]}` — changing the shape breaks offline auto-collection in `test_golden_check.py`.
 - BM25 re-parses the whole 98 MB `documents.json` per hybrid query today; the persistence work (`data/bm25_index.pkl`) must preserve result equivalence vs. the in-memory index.
 - `CONTEXT_BUDGET` in `src/pgrag/config.py` caps entity context — expansions must be bounded and id-deduped.

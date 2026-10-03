@@ -1,6 +1,6 @@
 # RAG Builder Rules
 
-Hard requirements for pg-rag-private sessions. Sticky: re-attached near the current turn, so they apply even after the opening context scrolls away.
+Hard requirements for pg-rag sessions. Sticky: re-attached near the current turn, so they apply even after the opening context scrolls away.
 
 1. **Never rebuild the entire corpus unless explicitly requested.** Prefer incremental paths: `pgrag build-index --source cdn|wiki|computed|curated` for partial rebuilds; full `mise sync` only when the user asks for a full refresh.
 2. **Never modify generated documents manually.** `data/documents.json`, `data/wiki/.parsed.json`, `data/bm25_index.pkl` are build outputs — change builders/loaders, never the artifacts.

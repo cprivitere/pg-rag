@@ -1,4 +1,4 @@
-# Project-scoped oh-my-pi settings for pg-rag-public.
+# Project-scoped oh-my-pi settings for pg-rag.
 #
 # Deliberately lean (no swarm, no MCP servers, no model-role duplication):
 # global config at ~/.omp/agent/config.yml owns credentials and model roles

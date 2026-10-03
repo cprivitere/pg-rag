@@ -1,4 +1,4 @@
-// Cross-instance corpus-build lock for pg-rag-public.
+// Cross-instance corpus-build lock for pg-rag.
 //
 // Why a file lock instead of the launch broker: a pre-hook is an extension
 // module (pi.on("tool_call")) and cannot speak the broker's private socket

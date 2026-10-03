@@ -1,0 +1,80 @@
+{
+ "cases": [
+  {
+   "id": "cheesemaking-cumulative",
+   "question": "How much total XP would I earn from crafting every Cheesemaking recipe with a skill level requirement between 17 and 24?",
+   "type": "aggregation",
+   "facts": [
+    [
+     "656"
+    ]
+   ]
+  },
+  {
+   "id": "fireball-firebreath-compare",
+   "question": "Which ability has the higher base PvE damage, Fireball or Fire Breath?",
+   "type": "comparison",
+   "facts": [
+    [
+     "fire breath"
+    ],
+    [
+     "80"
+    ],
+    [
+     "fireball"
+    ],
+    [
+     "14"
+    ]
+   ]
+  },
+  {
+   "id": "blacksmithing-first-craft",
+   "question": "What XP does the Huge Dragon Statue recipe give on the first-time craft at Blacksmithing level 25?",
+   "type": "entity",
+   "facts": [
+    [
+     "750"
+    ]
+   ]
+  },
+  {
+   "id": "mushroom-farming-page",
+   "question": "What skill level is required for Mushroom Farming?",
+   "type": "entity",
+   "facts": [
+    [
+     "60"
+    ],
+    [
+     "mycology"
+    ]
+   ]
+  },
+  {
+   "id": "npc-gift-preferences",
+   "question": "What does Agrashab love as gifts?",
+   "type": "entity",
+   "facts": [
+    [
+     "fairy wings"
+    ],
+    [
+     "magic clubs"
+    ]
+   ]
+  },
+  {
+   "id": "chat-activity",
+   "question": "How many times did I say something in Nearby chat?",
+   "type": "aggregation",
+   "facts": [
+    [
+     "2053",
+     "2,053"
+    ]
+   ]
+  }
+ ]
+}

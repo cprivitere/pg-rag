@@ -222,6 +222,12 @@ data/*
 !data/golden/
 data/golden/*
 !data/golden/*.json
+!data/eval/
+data/eval/*
+!data/eval/*.json
+!data/agentic_tune/
+data/agentic_tune/*
+!data/agentic_tune/README.md
 
 .vscode/
 
