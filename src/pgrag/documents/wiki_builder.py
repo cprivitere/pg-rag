@@ -12,7 +12,7 @@ CACHE_FILE = WIKI_PARSED_CACHE
 # Bump when the cached doc shape OR generated text changes, so stale cache
 # entries are rebuilt instead of served with old content (a mtime-equal page
 # with a changed section-cleanup step would otherwise keep residue forever).
-CACHE_VERSION = 7
+CACHE_VERSION = 8
 
 # CDN tables whose entity names wiki pages can link to.
 _ENTITY_TABLES = {
@@ -57,9 +57,68 @@ def _build_entity_index(db):
 # Templates whose first argument is a meaningful name that gets
 # destroyed by strip_code().  We rewrite them to plain text first.
 _TEMPLATE_PATTERN = re.compile(
-    r"\{\{(Item|NPC|Quest|Skill|Area|Recipe|LoreBook|Ability)"
+    r"\{\{(Item|NPC|Quest|Skill|Area|Recipe|LoreBook|Ability|Loot)"
     r"\|([^}|]+)(?:\|[^}]*)?\}\}"
 )
+
+# {{MOB Location|area=…|location=…|lootlevel=…}}: the ONLY carrier of a mob's
+# spawn description and loot tier. strip_code() destroys it (it's a template
+# shell), which is why 10,212 of 11,344 mob-location pages previously emitted
+# zero narrative docs — "where can I find X" questions had no location prose
+# to retrieve. Rewrite to a readable sentence BEFORE stripping.
+_MOB_LOCATION_RE = re.compile(
+    r"\{\{MOB Location\s*"
+    r"(?P<body>[^{}]*?)"
+    r"\}\}",
+    re.S,
+)
+
+# {{MOB infobox|type=…|effective=…|ineffective=…|vineffective=…}}: carries the
+# creature-type and combat-weakness stats; rewrite to prose the same way.
+_MOB_INFOBOX_RE = re.compile(
+    r"\{\{MOB infobox\s*(?P<body>[^{}]*?)\}\}",
+    re.S,
+)
+
+
+def _template_arg(body: str, name: str) -> str:
+    m = re.search(rf"\|\s*{name}\s*=\s*([^|]*)", body)
+    return m.group(1).strip() if m else ""
+
+
+def _rewrite_mob_templates(text: str) -> str:
+    def _location(m: re.Match) -> str:
+        body = m.group("body")
+        area = _template_arg(body, "area")
+        location = _template_arg(body, "location")
+        lootlevel = _template_arg(body, "lootlevel")
+        if not area and not location:
+            return ""
+        phrase = f"Located in {area}" if area else "Located"
+        if location:
+            phrase += f", specifically {location}"
+        if lootlevel:
+            phrase += f"; loot level {lootlevel}"
+        return phrase + "."
+
+    def _infobox(m: re.Match) -> str:
+        body = m.group("body")
+        bits = []
+        for key, label in (
+            ("type", "Creature type"),
+            ("effective", "Effectively damaged by"),
+            ("ineffective", "Ineffective against"),
+            ("vineffective", "Very ineffective against"),
+            ("immune", "Immune to"),
+        ):
+            v = _template_arg(body, key)
+            if v:
+                bits.append(f"{label}: {v}")
+        return ". ".join(bits) + "." if bits else ""
+
+    text = _MOB_LOCATION_RE.sub(_location, text)
+    text = _MOB_INFOBOX_RE.sub(_infobox, text)
+    return text
 
 
 def _preserve_template_names(wikicode_text):
@@ -229,7 +288,7 @@ def _parse_page_by_headings(page_name, raw_text, metadata, seen_ids):
             seen_ids.add(rec_id)
             documents.append(rec)
 
-        text = _preserve_template_names(str(section_wikicode))
+        text = _rewrite_mob_templates(_preserve_template_names(str(section_wikicode)))
         text = mwparserfromhell.parse(text).strip_code(normalize=False, collapse=True).strip()
 
         # Same stray-double-brace hygiene as the level-2 path, plus HTML
@@ -322,7 +381,7 @@ def _parse_page(page_name, raw_text, entity_info=None):
             seen_ids.add(rec_id)
             documents.append(rec)
 
-        text = _preserve_template_names(str(section))
+        text = _rewrite_mob_templates(_preserve_template_names(str(section)))
         text = mwparserfromhell.parse(text).strip_code(normalize=False, collapse=True).strip()
 
         # mwparserfromhell glitch: unclosed ''' before a == heading leaves
@@ -345,7 +404,11 @@ def _parse_page(page_name, raw_text, entity_info=None):
         if not text or len(text) < MIN_SECTION_CHARS:
             continue
 
-        if text.startswith("__NOTOC__"):
+        # __NOTOC__ previously marked lead sections as boilerplate to skip;
+        # mob infoboxes now rewrite to meaningful prose (creature type +
+        # damage effectiveness), so strip the marker and keep the lead.
+        text = text.replace("__NOTOC__", " ").strip()
+        if not text or len(text) < MIN_SECTION_CHARS:
             continue
 
         doc_id = f"wiki_{page_name}"

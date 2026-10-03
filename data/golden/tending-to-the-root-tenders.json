@@ -1,0 +1,31 @@
+{
+ "id": "tending-to-the-root-tenders",
+ "question": "What is the Tending To the Root-Tenders quest and how do I complete it?",
+ "type": "entity",
+ "facts": [
+  [
+   "Mope",
+   "NPC_Mope"
+  ],
+  [
+   "Povus",
+   "AreaPovus"
+  ],
+  [
+   "10",
+   "kill 10",
+   "Kill Ratkin Root-Tenders",
+   "x10"
+  ],
+  [
+   "Root-Tender",
+   "Root-Tenders",
+   "root tender"
+  ],
+  [
+   "Tolerated",
+   "favor"
+  ]
+ ],
+ "notes": "Quest facts from quest_27201/27202 'Tending To the Root-Tenders' (Mope in Povus; objective Kill Ratkin Root-Tenders x10; favor Tolerated requirement). Contract note: the daily-repeatable nature (ReuseTime_Days=1, SuccessText 'needed again') is stated ONLY in the 27202 doc, which the entity dossier for this question shape does not surface \u2014 pinned facts are the ones the served context carries. Combat-weakness stats live in ratkin-root-tender-location.json. Live session research -> golden, 2026-10-03."
+}

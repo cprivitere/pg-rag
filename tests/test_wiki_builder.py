@@ -5,7 +5,11 @@ LoreBook/Ability template names while other wikicode is stripped, and
 build_wiki_documents emitting row, coverage, and narrative records.
 """
 
-from pgrag.documents.wiki_builder import _preserve_template_names, build_wiki_documents
+from pgrag.documents.wiki_builder import (
+    _preserve_template_names,
+    _rewrite_mob_templates,
+    build_wiki_documents,
+)
 
 
 class FakeDB:
@@ -430,3 +434,79 @@ def test_no_heading_page_with_template_infobox_stays_empty():
 """
     db = FakeDB({"Acid Arrow": raw})
     assert build_wiki_documents(db) == []
+
+
+# --- _rewrite_mob_templates (MOB Location / MOB infobox prose rewrite) ---
+
+
+def test_mob_location_rewrites_to_location_sentence():
+    raw = """{{MOB Location
+| area = Povus
+| location = Rocky hillsides
+| health    = 2921
+| armor     = 955
+| rage      = 2099
+| lootlevel = 80
+}}"""
+    out = _rewrite_mob_templates(raw)
+    assert "Located in Povus, specifically Rocky hillsides; loot level 80." in out
+    assert "{{" not in out
+
+
+def test_mob_infobox_rewrites_to_stat_prose():
+    raw = """{{MOB infobox
+| title = Ratkin Root-Tender
+| type      = Rodent
+| effective = Fire, Electricity
+| ineffective = Poison
+| vineffective = Nature, Trauma
+}}"""
+    out = _rewrite_mob_templates(raw)
+    assert "Creature type: Rodent." in out
+    assert "Effectively damaged by: Fire, Electricity." in out
+    assert "Ineffective against: Poison." in out
+    assert "Very ineffective against: Nature, Trauma." in out
+    assert "{{" not in out
+
+
+def test_mob_location_without_location_arg():
+    raw = "{{MOB Location\n| area = Povus\n| lootlevel = 90\n}}"
+    out = _rewrite_mob_templates(raw)
+    assert "Located in Povus; loot level 90." in out
+
+
+def test_mob_page_locations_doc_emits_from_location_template():
+    """contract: a stub mob page (all sections < 50 chars after template
+    stripping) still emits a Locations doc carrying the spawn prose —
+    10,212 of 11,344 MOB Location pages previously emitted zero narrative
+    docs, making 'where can I find X' unretrievable."""
+    raw = """__NOTOC__
+{{MOB infobox
+| title = Test Beast
+| type = Rodent
+| effective = Fire
+}}
+{{Quote|source=[[Test Beast]]|SQUEAK!}}
+[[Test Beast]] is a rodent.
+== Locations ==
+{{MOB Location
+| area = Povus
+| location = Rocky hillsides
+| lootlevel = 80
+}}
+== Combat Abilities ==
+'''High Evasion'''
+:{{AIP:TestHammerer}}
+"""
+    docs = build_wiki_documents(FakeDB({"Test Beast": raw}))
+    ids = [d["id"] for d in docs]
+    narrative = [i for i in ids if "_table_" not in i]
+    assert "wiki_Test Beast_Locations" in narrative, ids
+    loc = next(d for d in docs if d["id"] == "wiki_Test Beast_Locations")
+    assert "Rocky hillsides" in loc["text"]
+    assert "loot level 80" in loc["text"]
+    # lead doc survives the NOTOC guard because the infobox became prose
+    base = [d for d in docs if d["id"] == "wiki_Test Beast"]
+    assert base and "Creature type: Rodent." in base[0]["text"]
+    # metadata linkage intact
+    assert loc["metadata"]["parent_id"] == "wiki_Test Beast"
