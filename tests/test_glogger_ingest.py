@@ -134,6 +134,62 @@ def test_new_event_rows_incremental(tmp_path, src_db, manifests):
     conn.close()
 
 
+def test_stall_unknown_kinds_refined(tmp_path, manifests):
+    """contract: glogger's action='unknown' stall lines are re-classified on
+    ingest — hire fees → 'hire_stall' + price_total, visitor notes →
+    'visitor_note' + player=sender, 'hid X from shoppers' → 'hid_item' +
+    item, 'set shop tag to T' → 'shop_tag' + item=tag. glogger-parsed actions
+    (bought/configured/…) and genuinely unrecognizable lines stay untouched."""
+    p = tmp_path / "glogger.db"
+    c = sqlite3.connect(p)
+    c.executescript(
+        """
+        CREATE TABLE stall_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_timestamp TEXT, event_at TEXT, log_timestamp TEXT,
+            log_title TEXT, action TEXT, player TEXT, owner TEXT, item TEXT,
+            quantity INTEGER, price_unit REAL, price_total INTEGER,
+            raw_message TEXT, entry_index INTEGER, ignored INTEGER,
+            created_at TEXT
+        );
+        INSERT INTO stall_events (event_timestamp, action, player, owner,
+            quantity, raw_message, entry_index, ignored, created_at)
+        VALUES
+            ("t1", "unknown", "", "Me", 1,
+             "Me paid 900 Councils to hire Groviz the Gross for 24 hours",
+             0, 0, "c"),
+            ("t2", "unknown", "", "Me", 1,
+             "Me paid 1900 Councils to hire Groviz the Gross for another 24 hours. Paid hours remaining = 35",
+             0, 0, "c"),
+            ("t3", "unknown", "", "Me", 1,
+             "WyvernsImpermanence sent a note to shop owner", 0, 0, "c"),
+            ("t4", "unknown", "", "Me", 1,
+             "Me hid Tattered Red Book from shoppers", 0, 0, "c"),
+            ("t5", "unknown", "", "Me", 1,
+             'Me set shop tag to "The werecow says, "AMOO!""', 0, 0, "c"),
+            ("t6", "unknown", "", "Me", 1,
+             "gibberish line glogger could not parse either", 0, 0, "c"),
+            ("t7", "bought", "Buyer", "Me", 1, "Buyer bought Widget", 0, 0, "c");
+        """
+    )
+    c.commit()
+    c.close()
+    conn = _store(tmp_path)
+    counts = ingest_glogger(conn, p)
+    assert counts["stall_events"] == 7
+    rows = conn.execute(
+        "SELECT action, player, item, price_total FROM stall_events ORDER BY id"
+    ).fetchall()
+    assert rows[0] == ("hire_stall", "", None, 900)
+    assert rows[1] == ("hire_stall", "", None, 1900)
+    assert rows[2] == ("visitor_note", "WyvernsImpermanence", None, None)
+    assert rows[3] == ("hid_item", "", "Tattered Red Book", None)
+    assert rows[4] == ("shop_tag", "", '"The werecow says, "AMOO!""', None)
+    assert rows[5][0] == "unknown"  # unrecognized stays unknown, untouched
+    assert rows[6][0] == "bought"  # glogger-parsed action untouched
+    conn.close()
+
+
 def test_new_snapshot_recopies_state(tmp_path, src_db, manifests):
     conn = _store(tmp_path)
     ingest_glogger(conn, src_db)

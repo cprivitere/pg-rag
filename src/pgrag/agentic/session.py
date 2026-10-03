@@ -23,6 +23,7 @@ from pgrag.agentic.store import (
     _CHAT_BODY_RE,
     _CHAT_LINE_RE,
     _ITEM_LINE_RE,
+    _LOCALPLAYER_RE,
     _PLAYER_EVENT_RE,
     _SPEAKER_CHANNELS,
     _SYSTEM_RE,
@@ -133,7 +134,12 @@ def _ingest_chat_logs(conn: sqlite3.Connection, chat_dir: Path) -> tuple[int, in
 
 
 def _ingest_player_logs(conn: sqlite3.Connection, base: Path) -> tuple[int, int]:
-    """LocalPlayer Process* events from Player.log + Player-prev.log."""
+    """LocalPlayer Process* events from Player.log + Player-prev.log.
+
+    Returns (rows_added, drifted_lines). Non-matching lines are only drift
+    when they still look like the targeted prefix family
+    (``[HH:MM:SS] LocalPlayer …``); Unity engine noise (the bulk of a Unity
+    log) is not counted — a file full of it is normal, not format drift."""
     cur = conn.cursor()
     added = 0
     unmatched = 0
@@ -145,7 +151,8 @@ def _ingest_player_logs(conn: sqlite3.Connection, base: Path) -> tuple[int, int]
                 line = line.rstrip("\n")
                 m = _PLAYER_EVENT_RE.match(line)
                 if not m:
-                    unmatched += 1
+                    if _LOCALPLAYER_RE.match(line):
+                        unmatched += 1
                     continue
                 ts, name, args = m.group(1), f"Process{m.group(2)}", m.group(3)
                 cur.execute(
@@ -256,7 +263,7 @@ def ingest_session(conn: sqlite3.Connection, session_dir: Path) -> dict[str, int
     n, unmatched = _ingest_player_logs(conn, session_dir)
     counts["player_events"] = n
     if unmatched:
-        print(f"  player: {unmatched} unmatched lines skipped (format drift?)")
+        print(f"  player: {unmatched} LocalPlayer lines unmatched (format drift?)")
 
     reports_dir = session_dir / "Reports"
     if reports_dir.exists():

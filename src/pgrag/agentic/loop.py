@@ -216,8 +216,11 @@ Notes:
     action, player, owner, item, quantity, price_unit, price_total,
     raw_message, entry_index, ignored, created_at) — your player-shop stall
     ledger. action: added/removed/configured/visible/bought/collected/
-    unknown. 'bought' rows have price_unit + price_total and player=buyer;
-    'collected' rows are your payout pickups; 'configured' sets a price.
+    hire_stall/visitor_note/hid_item/shop_tag/unknown. 'bought' rows have
+    price_unit + price_total and player=buyer; 'collected' rows are your
+    payout pickups (price_total); 'configured' sets a price; 'hire_stall'
+    rows are stall-keeper hire fees (price_total = fee paid, item NULL);
+    'visitor_note' rows have player = the visitor who left a note.
     Revenue = SUM(price_total) WHERE action='bought'; owners' own buys are
     NOT excluded automatically — group by player to separate.
   - game_state_gift_log(id, character_name, npc_key, npc_name, gifted_at,

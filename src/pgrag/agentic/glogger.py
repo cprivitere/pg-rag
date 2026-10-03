@@ -23,6 +23,7 @@ event logs). Watermarks live in data/sqlite_state.json under "glogger".
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -85,6 +86,49 @@ SKIP_TABLES = (
 # Manifest namespace: MANIFEST_PATH()["glogger"] = {"<table>": {...}}
 # Event tables carry {"wm": <int id watermark>}; per-snapshot tables carry
 # {"max_snapshot": <int>}.
+
+# --- stall_events refinement ---------------------------------------------
+# glogger's own stall parser leaves four game-log line kinds as action=
+# 'unknown' with NULL item/price fields (observed corpus: 78 hire fees,
+# 3 visitor notes, 1 hide, 1 shop-tag). The raw_message is the unambiguous
+# game line, so we re-classify on ingest and fill what the line states:
+#   hire_stall   "<Name> paid <N> Councils to hire <NPC> for [another]
+#                24 hours[. Paid hours remaining = H]" → price_total=N
+#   visitor_note "<Player> sent a note to shop owner"     → player=sender
+#   hid_item     "<Name> hid <Item> from shoppers"        → item=Item
+#   shop_tag     "<Name> set shop tag to \"<Tag>\""       → item=Tag
+# 'unknown' stays for anything still unrecognized (parser-contract literal).
+_STALL_HIRE_RE = re.compile(
+    r"^(?P<who>.+?) paid (?P<fee>\d+) Councils to hire (?P<npc>.+?) for "
+    r"(?:another )?24 hours"
+)
+_STALL_NOTE_RE = re.compile(r"^(?P<who>.+?) sent a note to shop owner$")
+_STALL_HIDE_RE = re.compile(r"^(?P<who>.+?) hid (?P<item>.+?) from shoppers$")
+_STALL_TAG_RE = re.compile(r"^(?P<who>.+?) set shop tag to (?P<tag>.+)$")
+
+
+def _refine_stall_row(row: tuple, cols: list[str]) -> tuple:
+    """Re-classify one mirrored stall_events row. Only action='unknown' rows
+    are touched; a recognized kind sets action and whatever fields the line
+    itself states (never invents values glogger left NULL)."""
+    idx = {c: i for i, c in enumerate(cols)}
+    row = list(row)
+    if row[idx["action"]] != "unknown":
+        return tuple(row)
+    raw = row[idx["raw_message"]] or ""
+    if m := _STALL_HIRE_RE.match(raw):
+        row[idx["action"]] = "hire_stall"
+        row[idx["price_total"]] = int(m.group("fee"))
+    elif m := _STALL_NOTE_RE.match(raw):
+        row[idx["action"]] = "visitor_note"
+        row[idx["player"]] = m.group("who")
+    elif m := _STALL_HIDE_RE.match(raw):
+        row[idx["action"]] = "hid_item"
+        row[idx["item"]] = m.group("item")
+    elif m := _STALL_TAG_RE.match(raw):
+        row[idx["action"]] = "shop_tag"
+        row[idx["item"]] = m.group("tag")
+    return tuple(row)
 
 
 def _copy_source_snapshot(src_db: Path, workdir: Path) -> Path:
@@ -225,12 +269,15 @@ def _ingest_from_snapshot(
         if table not in src_tables:
             continue
         cols = _columns(sconn, table)
+        refine = _refine_stall_row if table == "stall_events" else None
         wm = int(per_table.get(table, {}).get("wm") or 0)
         rows = sconn.execute(
             f'SELECT {", ".join(chr(34) + c + chr(34) for c in cols)}'
             f' FROM "{table}" WHERE id > ? ORDER BY id',
             (wm,),
         ).fetchall()
+        if refine:
+            rows = [refine(row, cols) for row in rows]
         added = copy_rows(table, cols, rows)
         counts[table] = added
         if rows:

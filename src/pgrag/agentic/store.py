@@ -139,6 +139,11 @@ _JOIN = " | "
 _LINT_RE = re.compile(r"Lint_\w+")
 # Player.log LocalPlayer Process events (per plan parser contract).
 _PLAYER_EVENT_RE = re.compile(r"\[(\d{2}:\d{2}:\d{2})\] LocalPlayer: Process(\w+)\((.*)\)$")
+# LocalPlayer-ish lines: same prefix family the Process parser targets. Unity
+# engine noise never starts "[HH:MM:SS] LocalPlayer", so a non-match that
+# still has this prefix is real format drift; everything else is noise the
+# parser was never meant to read.
+_LOCALPLAYER_RE = re.compile(r"^\[\d{2}:\d{2}:\d{2}\] LocalPlayer")
 # Chat line: `26-06-11 08:05:44\t<body>` (per plan parser contract).
 _CHAT_LINE_RE = re.compile(r"^(\d{2}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\t(.*)$")
 _CHAT_BODY_RE = re.compile(r"^\[([^\]]+)\] ?(.*)$")

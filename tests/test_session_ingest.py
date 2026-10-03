@@ -116,13 +116,17 @@ def test_chat_reingest_replaces_changed_file(tmp_path):
         pass  # manifest isolation handled by _isolate_manifest
 
 
-def test_player_log_events(tmp_path):
+def test_player_log_events(tmp_path, capsys):
+    # contract: non-matching lines count as drift ONLY when they still carry
+    # the "[HH:MM:SS] LocalPlayer" prefix family; Unity engine noise is never
+    # counted (a full Unity log is normal, not format drift).
     player = {
         "Player.log": (
             "Initialize engine version: 6000.3.11f1\n"
             '[01:59:36] LocalPlayer: ProcessAddItem(5011, 3, "Bottle of Fertilizer")\n'
             '[01:59:37] LocalPlayer: ProcessUpdateSkill(724207, "FirstAid", 99)\n'
             "unrelated unity noise\n"
+            "[01:59:38] LocalPlayer: ProcessSomethingWeird(\n"
         ),
         "Player-prev.log": '[23:00:00] LocalPlayer: ProcessAddQuest(45455, "A Quest")\n',
     }
@@ -137,6 +141,9 @@ def test_player_log_events(tmp_path):
         assert rows[0][0] == "ProcessAddItem" and "5011" in rows[0][1]
         assert rows[1][0] == "ProcessUpdateSkill" and "FirstAid" in rows[1][1]
         assert rows[2][0] == "ProcessAddQuest" and rows[2][2] == "Player-prev.log"
+        # exactly the one malformed LocalPlayer line is drift; engine noise isn't
+        out = capsys.readouterr().out
+        assert "player: 1 LocalPlayer lines unmatched" in out
     finally:
         conn.close()
         pass  # manifest isolation handled by _isolate_manifest
