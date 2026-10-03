@@ -7,7 +7,7 @@ questions with a local LLM.
 
 ## Chat on molab
 
-[![Open in molab](https://marimo.io/molab-shield.svg)](https://molab.marimo.io/github/cprivitere/pg-rag-public/blob/main/notebooks/molab-mirror/notebook.py)
+[![Open in molab](https://marimo.io/molab-shield.svg)](https://molab.marimo.io/github/cprivitere/pg-rag/blob/main/notebooks/molab-mirror/notebook.py)
 
 `notebooks/molab-mirror/notebook.py` is a marimo notebook that runs the chat
 pipeline on [molab](https://molab.marimo.io) (marimo's free cloud notebooks) on
@@ -15,7 +15,7 @@ an RTX PRO 6000 (96 GB VRAM): click the badge to open it from GitHub, attach
 the GPU from the notebook specs button, and ask questions. The first run
 downloads the model weights and corpus; both are cached per-sandbox afterwards.
 Details in the
-[notebook README](https://github.com/cprivitere/pg-rag-public/blob/main/notebooks/molab-mirror/README.md);
+[notebook README](https://github.com/cprivitere/pg-rag/blob/main/notebooks/molab-mirror/README.md);
 platform mechanics in `docs/MOLAB_OPS.md`.
 
 ## Pipeline

@@ -27,7 +27,7 @@ No training, no distillation, no QA generation — those routes were removed
 
 Open from GitHub via [molab](https://molab.marimo.io/github):
 
-    https://molab.marimo.io/github/cprivitere/pg-rag-public/blob/main/notebooks/molab-mirror/notebook.py
+    https://molab.marimo.io/github/cprivitere/pg-rag/blob/main/notebooks/molab-mirror/notebook.py
 
 (Public repo: no GitHub auth needed on molab.)
 

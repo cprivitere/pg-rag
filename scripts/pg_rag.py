@@ -10,7 +10,7 @@ Usage:
   3. Ask game-related questions — queries route through the custom pipeline
 
 Environment:
-  PG_RAG_ROOT — root directory of the pg-rag repo (default: F:\ProjectGorgon\pg-rag-public)
+  PG_RAG_ROOT — root directory of the pg-rag repo (default: F:\ProjectGorgon\pg-rag)
 """
 
 import asyncio
@@ -21,7 +21,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-PG_ROOT = Path(os.environ.get("PG_RAG_ROOT", r"F:\ProjectGorgon\pg-rag-public"))
+PG_ROOT = Path(os.environ.get("PG_RAG_ROOT", r"F:\ProjectGorgon\pg-rag"))
 if str(PG_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(PG_ROOT / "src"))
 
