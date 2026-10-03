@@ -1,8 +1,7 @@
 # Ideas to try
 
-- major revamp of goldens
+- Goldens
   - Add goldens by me asking you questions that you research and then turn into goldens
-  - leverage the ability to call only certain types of goldens to reduce test time
 
 - Track pricing of items in player stalls and player work orders
 
