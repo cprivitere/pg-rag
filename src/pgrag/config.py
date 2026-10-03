@@ -21,7 +21,7 @@ CURATED_DIR = WIKI_DIR / "curated"
 # serve stale docs — the classic build-index-vs-build-documents trap).
 # Bump whenever document generation changes shape (new metadata keys, table
 # records, chunking) so a stale persist is surfaced, not re-embedded.
-DOCUMENTS_VERSION = 14
+DOCUMENTS_VERSION = 15
 
 DOCUMENTS_VERSION_FILE = DERIVED_DIR / "documents_version.json"
 

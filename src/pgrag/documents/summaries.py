@@ -207,6 +207,65 @@ def build_wiki_harvest_map(wiki):
     return harvest_map
 
 
+_GROW_TABLE_RE = re.compile(
+    r"\|\s*\{\{Item\|(?P<item>[^}|]+)\}\}[^|\n]*"
+    r"\|\|(?P<level>[^|\n]*)"
+    r"\|\|(?P<time>[^|\n]*)"
+    r"\|\|(?P<adequate>[^|\n]*)"
+    r"\|\|(?P<verywell>[^|\n]*)"
+    r"\|\|(?P<robust>[^|\n]*)"
+    r"\|\|(?P<p>[^|\n]*)"
+)
+
+
+def build_wiki_grow_summaries(wiki):
+    """Parse per-item grow tables (Growing Time / Adequate in / Very well in
+    columns) from wiki pages into one summary doc per page.
+
+    Mushroom Farming is the current carrier: its table's per-mushroom row
+    (level, grow time, substrates, moon phases) is the only place the grow
+    facts live, and grow-questions ("How do I grow Field Mushrooms?") rank
+    stub-item families above it, so a dedicated summary gives retrieval a
+    direct hit regardless of reranker state."""
+    summaries = []
+    for page_name, raw_text in wiki.items():
+        if "Growing Time" not in raw_text:
+            continue
+        rows = []
+        for m in _GROW_TABLE_RE.finditer(raw_text):
+            cells = [m.group(k).strip() for k in ("level", "time", "adequate", "verywell", "robust", "p")]
+            item = m.group("item").strip()
+            if not item or not any(cells):
+                continue
+            rows.append((item, cells))
+        if not rows:
+            continue
+        skill = _WIKI_SKILL_MAP.get(page_name, page_name)
+        lines = [f"{page_name} growing table (per item, wiki):"]
+        for item, cells in rows:
+            level, grow_time, adequate, verywell, robust, poor = cells
+            moon = f"; moon phases: robust in {robust}" + (f", poor in {poor}" if poor and poor != "-" else "")
+            lines.append(
+                f"- {item}: {skill} level {level or 'N/A'}; grows in {grow_time or 'unknown'}; "
+                f"adequate substrate {adequate or 'unknown'}; very well in {verywell or 'unknown'}{moon}"
+            )
+        slug = page_name.lower().replace(" ", "_")
+        summaries.append(
+            {
+                "id": f"summary_wiki_growing_{slug}",
+                "type": "summary",
+                "text": "\n".join(lines),
+                "metadata": {
+                    "source": "wiki",
+                    "table": "summaries",
+                    "name": f"{page_name} Growing Table Summary",
+                    "type": "summary",
+                },
+            }
+        )
+    return summaries
+
+
 def build_wiki_gathering_summaries(wiki):
     """Parse harvestable tables from wiki pages and build skill-level summaries.
 

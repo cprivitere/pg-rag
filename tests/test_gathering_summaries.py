@@ -9,6 +9,7 @@ build_documents() end-to-end summary supplementation.
 from pgrag.documents.summaries import (
     build_gathering_summaries,
     build_wiki_gathering_summaries,
+    build_wiki_grow_summaries,
     build_wiki_harvest_map,
 )
 
@@ -353,3 +354,56 @@ def test_wiki_harvest_row_multiple_items_per_line():
 
 def test_wiki_harvest_map_empty():
     assert build_wiki_harvest_map({}) == {}
+
+
+# --- build_wiki_grow_summaries tests ---
+
+
+def test_grow_summary_parsed_with_all_columns():
+    """contract: a wiki page with a Growing Time table yields one summary doc
+    whose text carries every per-item fact: skill level, grow time, adequate
+    + very-well substrates, and robust/poor moon phases."""
+    wiki = {
+        "Mushroom Farming": """{| class="wikitable"
+! Mushroom !! Mycology Req !! Growing Time !! Adequate in !! Very well in !! Moon phase (robustly) !! Moon phase
+|-
+| {{Item|Field Mushroom}} || 15 || 05 hrs || Bone || Organs || Waxing Gibbous Moon, Last-Quarter Moon || First-Quarter Moon, Waning Crescent Moon
+|-
+| {{Item|Parasol Mushroom}} || N/A || 02 hrs || Dirt || Organs || Full Moon, Waning Crescent Moon || New Moon, Waxing Gibbous Moon
+|}
+"""
+    }
+    summaries = build_wiki_grow_summaries(wiki)
+    assert len(summaries) == 1
+    doc = summaries[0]
+    assert doc["id"] == "summary_wiki_growing_mushroom_farming"
+    assert doc["type"] == "summary"
+    assert doc["metadata"]["source"] == "wiki"
+    assert doc["metadata"]["table"] == "summaries"
+    text = doc["text"]
+    # The skill name comes from _WIKI_SKILL_MAP ("Mushroom Farming" is not a
+    # gathering-harvest page, so it stays the page name) — assert level +
+    # facts, not the mapped skill label.
+    assert "Field Mushroom:" in text and "level 15" in text
+    assert "grows in 05 hrs" in text
+    assert "adequate substrate Bone" in text
+    assert "very well in Organs" in text
+    assert "robust in Waxing Gibbous Moon, Last-Quarter Moon" in text
+    assert "poor in First-Quarter Moon, Waning Crescent Moon" in text
+    assert "Parasol Mushroom:" in text and "level N/A" in text
+
+
+def test_grow_summary_ignores_pages_without_grow_table():
+    wiki = {
+        "Mycology": """== Harvestables ==
+{| class="wikitable"
+|-
+| {{Item|Parasol Mushroom}} || 0
+|}
+"""
+    }
+    assert build_wiki_grow_summaries(wiki) == []
+
+
+def test_grow_summary_empty_wiki():
+    assert build_wiki_grow_summaries({}) == []

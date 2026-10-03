@@ -1,6 +1,6 @@
 """Tests scripts.golden_check.check_golden against the golden JSON files in
-GOLDEN_DIR; requires the LLM (:8080) and embedding (:8081) servers and retries
-sampled LLM answers to damp nondeterminism.
+GOLDEN_DIR; requires the LLM (:8080), embedding (:8081), and reranker (:8082)
+servers and retries sampled LLM answers to damp nondeterminism.
 
 Tiered by marker: -m short (8 representative queries, ~3-5 min) or
 -m long (remaining 39, ~11-23 min). Default (no -m) runs all 47 pipeline
@@ -53,7 +53,13 @@ def test_normalize_contractions_strip_not_space():
 def _servers_up():
     import requests
 
-    for port in (8080, 8081):
+    # :8082 too: with the reranker down, retrieval degrades to the lexical
+    # fallback and general-query wiki expansion loses the substantive page
+    # (stub-item families eat both expansion slots — the grow-field-mushrooms
+    # flake cluster). Golden runs must reflect the healthy path, not the
+    # degraded fallback; reranker stats (data/rerank_stats.json) recorded 736
+    # such fallback runs before this gate.
+    for port in (8080, 8081, 8082):
         try:
             requests.get(f"http://127.0.0.1:{port}/health", timeout=2)
         except Exception:
@@ -63,11 +69,13 @@ def _servers_up():
 
 @pytest.fixture()
 def require_servers():
-    """Runtime skip: golden checks need the LLM (:8080) + embedding (:8081)
-    servers. Checked per-test so a server coming up/down mid-run doesn't make
-    the suite depend on collection-time state."""
+    """Runtime skip: golden checks need the LLM (:8080), embedding (:8081),
+    and reranker (:8082) servers. Checked per-test so a server coming
+    up/down mid-run doesn't make the suite depend on collection-time state."""
     if not _servers_up():
-        pytest.skip("V38: golden check needs LLM (:8080) + embedding (:8081) servers")
+        pytest.skip(
+            "V38: golden check needs LLM (:8080) + embedding (:8081) + reranker (:8082) servers"
+        )
 
 
 def _check_golden_file(path):

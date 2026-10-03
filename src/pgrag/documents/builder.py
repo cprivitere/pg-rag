@@ -16,6 +16,7 @@ from pgrag.documents.summaries import (
     build_gift_summaries,
     build_summary_documents,
     build_wiki_gathering_summaries,
+    build_wiki_grow_summaries,
     build_wiki_harvest_map,
 )
 from pgrag.documents.wiki_builder import build_wiki_documents
@@ -1419,6 +1420,7 @@ def _assemble_documents(db):
     ]
     documents.extend(gathering)
     documents.extend(wiki_gathering)
+    documents.extend(build_wiki_grow_summaries(db.wiki))
     documents.extend(build_gift_summaries(db.tables))
 
     return documents
