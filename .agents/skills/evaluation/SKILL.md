@@ -26,13 +26,63 @@ Each file:
 
 - `facts` is a list of variant groups: the answer PASSES if ANY variant in
   each group appears (normalized substring) in the LLM answer.
-- 47 files exist today (18 entity / 17 general / 7 recipe / 5 comparison),
+- 50 files exist today (20 entity / 18 general / 7 recipe / 5 comparison),
   spanning recipes-by-ingredient, level-gated crafting, item acquisition/drops,
   ability lookups, comparisons, quest requirements, wiki lore, wiki how-to
-  assembly. 4 store-only cases (glogger play-history facts, `"store": true`)
-  count in this total but are excluded from the pipeline harnesses — they run
-  via the agentic eval. Future additions should favor the balanced categories (comparison is
-  5/47 today — the thinnest bucket).
+  assembly, and player-state audits. 5 store-only cases (player facts,
+  `"store": true`) count in this total but are excluded from the pipeline
+  harnesses — they run via the agentic eval. Future additions should favor the
+  balanced categories (comparison is 5/50 today — the thinnest bucket).
+
+## Live-session goldens (answer-then-validate workflow)
+
+The standing session workflow: the user asks a gameplay question → research
+the answer against the live store + corpus → give the answer → **pin it as a
+golden so the same question stays answerable**. The golden is not optional
+documentation; it is the acceptance gate.
+
+1. **Research** against the store (`data/sqlite_gorgon.db`) and corpus. Sync
+   first when the user just played: `ingest_glogger`/`ingest_session` are
+   incremental (or run `mise agentic-chat`, whose preflight syncs).
+2. **Answer the user.** Ground every claim in a store table or corpus doc; if
+   a fact needed manual derivation (JOIN, arithmetic, name-mapping), note it
+   — that is exactly the part the model may fumble.
+3. **Derive fact groups** from what you verified. Every fact must exist in the
+   data you actually checked (grep the store / documents.json first — an
+   un-grounded fact is a permanently-failing test).
+4. **Route the golden:** facts from the player's own state (sheet abilities,
+   stall ledger, kills, favor) → `"store": true` (pipeline tiers skip it;
+   `mise agentic-eval` picks it up automatically). Facts from CDN/wiki corpus
+   → plain golden, validated with `mise golden-one -- <id>`.
+5. **Validate before committing:** run the golden through its eval path
+   (`mise agentic-eval` for store-only, `golden_rerun.py --id <id>` for
+   corpus). A FAIL means the model can't reproduce your answer — diagnose
+   (`--diagnose` for pipeline, trace_rounds for agentic) and fix the gap
+   (tool, prompt note, doc builder) before committing. A golden that fails on
+   commit is a known-gap trap, not a convenience.
+6. **Commit** the golden together with whatever fix it forced.
+
+### Traps learned the hard way (each cost a debug session)
+
+- **`abilities.level_req` is not a known-gate.** Shrine/riddle unlocks
+  (TameBear/TameCat) carry `level_req=1` yet may be unknown. The known list
+  lives ONLY in `char_reports` sheet `Skills[<skill>].Abilities`; non-skill
+  abilities (CharmRat) are bucketed under the pseudo-skill `"Unknown"` — audit
+  both buckets. `player_state section=abilities` does this diff.
+- **`game_state_skills` is fresher than the sheet dump for LEVELS** (log-sourced
+  vs export-time); the sheet is the only source for ability LISTS. Cross-check
+  both; state which timestamp each claim comes from.
+- **Pipeline context is corpus-side; player-state facts can never appear in
+  it.** Diagnosing a store-only golden via the pipeline gives a guaranteed
+  RET-SIDE/GEN-SIDE false signal — route first, diagnose second.
+- **Name mismatches across sources:** wiki "Bear Anatomy" ↔ CDN/game "Bear and
+  Bugbear Anatomy"; sheet keys have no spaces (`AnimalHandling`). Normalize
+  before diffing.
+- **A personal-data answer usually implies a schema/tool gap.** The AH audit
+  session produced `player_state section=abilities`; the stall session
+  produced the stall classifier. If you needed manual SQL gymnastics to answer
+  a question the model will get again, that gymnastics belongs in a tool or
+  doc-builder, not in the golden alone.
 
 ## Running it
 
@@ -125,8 +175,10 @@ Each file:
 
 ## Planned direction
 
-- Golden set is **at target (43)** — future additions should fill the thinnest
-  buckets (recipe is 3/43 today) or capture a *named regression case*,
+- Golden set is **at 50 and growing** via live-session goldens (see the
+  workflow above) — new questions from play sessions are the primary intake;
+  comparison is the thinnest bucket (5/50). Beyond session intake, capture a
+  *named regression case*,
   e.g.:
   - `grow-field-mushrooms` ("How do I grow Field Mushrooms?") — fails before
     wiki page expansion, passes after (already present).
