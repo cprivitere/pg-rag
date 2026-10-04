@@ -174,10 +174,14 @@ def _find_entities(store_path: str, args: dict) -> str:
     )
 
 
-def _strip_wiki_markup(text: str) -> str:
+def _strip_wiki_markup(text: str, title: str = "") -> str:
     """Wiki dump to readable text: strip HTML tags, emphasis runs, and the
     loud MediaWiki template/heading noise (wrapped template payloads survive;
-    leftover infobox bodies drop wholesale)."""
+    leftover infobox bodies drop wholesale). ``title`` resolves the
+    {{msg:BASEPAGENAME}} magic word to the page's own name (headings like
+    "Training {{msg:BASEPAGENAME}}" otherwise render the literal string)."""
+    if title:
+        text = re.sub(r"\{\{msg:BASEPAGENAME\}\}", title, text)
     text = re.sub(r"<[^>\n]+>", "", text)
     text = re.sub(r"'{2,5}", "", text)
     # {{Quote|source=X|...}} and {{Item|Y}} keep their payload, drop the wrapper.
@@ -246,7 +250,7 @@ def _get_page(store_path: str, args: dict) -> str:
             f"Call get_page again with one of: {names}{more}"
         )
     conn.close()
-    text = _strip_wiki_markup(row[1] or "")
+    text = _strip_wiki_markup(row[1] or "", title=row[0])
     total = len(text)
     if total > _PAGE_CAP:
         text = text[:_PAGE_CAP] + f"…[truncated {total - _PAGE_CAP} chars]"

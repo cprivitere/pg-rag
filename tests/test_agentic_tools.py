@@ -81,7 +81,7 @@ def store(tmp_path_factory):
         encoding="utf-8",
     )
     (wiki / "Mycology_91d06ad5.txt").write_text(
-        "== Overview ==\nFungi.\n{{Item|Stinkhorn}} '''stinks'''.",
+        "== Overview ==\nFungi.\n== Training {{msg:BASEPAGENAME}} ==\nLearn from a trainer.\n{{Item|Stinkhorn}} '''stinks'''.",
         encoding="utf-8",
     )
     db = root / "store.db"
@@ -204,6 +204,11 @@ def test_get_page_exact_ambiguous_missing(store):
     assert "Fungi." in out
     assert "{{Item|" not in out  # template noise stripped
     assert "Stinkhorn" in out  # template payload kept
+    # {{msg:BASEPAGENAME}} is a MediaWiki magic word: resolves to the page
+    # title in headings ("== Training {{msg:BASEPAGENAME}} =="), never leaks
+    # the literal token.
+    assert "## Training Mycology" in out
+    assert "BASEPAGENAME" not in out
     out = execute_tool(str(store), "get_page", {"title": "Myc"})
     assert "Ambiguous" in out and "Mycology" in out
     out = execute_tool(str(store), "get_page", {"title": "No Such Page"})

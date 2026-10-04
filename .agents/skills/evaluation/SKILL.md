@@ -26,13 +26,13 @@ Each file:
 
 - `facts` is a list of variant groups: the answer PASSES if ANY variant in
   each group appears (normalized substring) in the LLM answer.
-- 50 files exist today (20 entity / 18 general / 7 recipe / 5 comparison),
+- 51 files exist today (21 entity / 18 general / 7 recipe / 5 comparison),
   spanning recipes-by-ingredient, level-gated crafting, item acquisition/drops,
   ability lookups, comparisons, quest requirements, wiki lore, wiki how-to
   assembly, and player-state audits. 5 store-only cases (player facts,
   `"store": true`) count in this total but are excluded from the pipeline
   harnesses — they run via the agentic eval. Future additions should favor the
-  balanced categories (comparison is 5/50 today — the thinnest bucket).
+  balanced categories (comparison is 5/51 today — the thinnest bucket).
 
 ## Live-session goldens (answer-then-validate workflow)
 
@@ -175,9 +175,9 @@ documentation; it is the acceptance gate.
 
 ## Planned direction
 
-- Golden set is **at 50 and growing** via live-session goldens (see the
+- Golden set is **at 51 and growing** via live-session goldens (see the
   workflow above) — new questions from play sessions are the primary intake;
-  comparison is the thinnest bucket (5/50). Beyond session intake, capture a
+  comparison is the thinnest bucket (5/51). Beyond session intake, capture a
   *named regression case*,
   e.g.:
   - `grow-field-mushrooms` ("How do I grow Field Mushrooms?") — fails before

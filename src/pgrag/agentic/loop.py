@@ -512,6 +512,7 @@ def _execute(calls: list[dict], store_path: str, corpus: str, trace_rounds: list
         if "_raw" in call:
             result = f"Could not parse tool call: {call['_raw']}"
             rows_or_len = None
+            name = ""
         else:
             name = call.get("name") or ""
             args = call.get("args") or {}
@@ -530,7 +531,7 @@ def _execute(calls: list[dict], store_path: str, corpus: str, trace_rounds: list
                     "ms": int((time.time() - started) * 1000),
                 }
             )
-        results.append(_cap(result))
+        results.append(result if name == "get_page" else _cap(result))
     return results
 
 

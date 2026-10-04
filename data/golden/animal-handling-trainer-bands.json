@@ -1,0 +1,36 @@
+{
+  "id": "animal-handling-trainer-bands",
+  "question": "Which trainer teaches Animal Handling skill levels 51-60 and 61-70, which teaches 71-80, which teaches 81-90, and which teaches 91-100, and where is each one located?",
+  "type": "entity",
+  "facts": [
+    [
+      "Gisli",
+      "Serbule Keep"
+    ],
+    [
+      "Crelpin",
+      "Fae Realm"
+    ],
+    [
+      "Sir Abbley",
+      "Statehelm"
+    ],
+    [
+      "Emersil the Ever-Gloating",
+      "Povus"
+    ],
+    [
+      "91-100"
+    ],
+    [
+      "81-90"
+    ],
+    [
+      "71-80"
+    ],
+    [
+      "51-60"
+    ]
+  ],
+  "notes": "Wiki trainer bands from Animal Handling Training section (wiki_Animal Handling_Overview + Skill Trainers). Dual 81-90: Emersil (deep Povus) AND Sir Abbley per wiki. Corpus-side; validated via golden_rerun. Found via live-session re-evaluation 2026-10-04; forced two tool fixes: get_page msg:BASEPAGENAME resolution + loop get_page row-cap exemption."
+}

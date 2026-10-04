@@ -310,6 +310,66 @@ def build_entity_context(
             _leveling_included = True
 
     rerank_used = False
+    # Wiki pages linked to this entity (Step 5, run BEFORE the facet loop so
+    # the entity's own wiki docs sit ahead of facet recall-boost in the final
+    # tails ordering — chunk-heavy hubs (skillprofile families ~27k chars) plus
+    # facet results consumed the whole per-entity budget and the budget cut
+    # dropped every wiki doc, including the hub's canonical Training bands
+    # (AH trainer-bands golden, 2026-10-04). Facts-of-record live in the hub
+    # doc AND its linked wiki sections; facets are recall-boost, not truth.)
+    # wiki sections carry entity_id/entity_type metadata (see
+    # documents/wiki_builder.py), so a skill's mechanics table or an item's
+    # How-to-Obtain page joins the dossier. skillprofile hubs link to the CDN
+    # skill doc id.
+    hub_suffix = hub_id[len("skillprofile_") :] if hub_id.startswith("skillprofile_") else None
+    wiki_links = []
+    for doc in docs:
+        doc_meta = doc.get("metadata", {})
+        if not isinstance(doc_meta, dict):
+            continue
+        if doc.get("type") != "wiki" and doc_meta.get("type") != "wiki":
+            continue
+        if doc["id"] in seen:
+            continue
+        eid = doc_meta.get("entity_id")
+        if not eid:
+            continue
+        if hub_suffix and eid == f"skill_{hub_suffix}":
+            pass  # this skill's own wiki page belongs to this dossier
+        elif eid != hub_id:
+            continue
+        if eid in other_hub_ids:
+            # A wiki page owned by another entity in a multi-entity context;
+            # leave it for that entity's block.
+            continue
+        wiki_links.append((doc, doc_meta))
+
+    # Compact table records first: a table's coverage line (all rows' first
+    # cells) then its granular rows, then narrative page sections. The sort
+    # is stable, so corpus order is preserved within each class.
+    _TABLE_RANK = {"coverage": 0, "row": 1}
+
+    def _wiki_rank(item):
+        return _TABLE_RANK.get(item[1].get("table_record"), 2)
+
+    wiki_links.sort(key=_wiki_rank)
+    # Bound granular table rows so one page's table can't flood the dossier.
+    _rows_seen = 0
+    _bounded = []
+    for _link in wiki_links:
+        if _link[1].get("table_record") == "row":
+            if _rows_seen >= _MAX_WIKI_ROWS:
+                continue
+            _rows_seen += 1
+        _bounded.append(_link)
+    wiki_links = _bounded
+    for doc, doc_meta in wiki_links:
+        seen.add(doc["id"])
+        ids.append(doc["id"])
+        texts.append(doc["text"])
+        metas.append(doc_meta)
+        dists.append(0.0)
+
     # Per-facet caps: recipe is the heaviest pull. A full-set dossier used a
     # fixed 20 recipes + 5x10 other facet docs (~70 CDN rows) wrapped around
     # the entity's own few hub chunks — noise that drowned a small LLM's
@@ -375,59 +435,6 @@ def build_entity_context(
             texts.append(res["documents"][0][i])
             metas.append(res["metadatas"][0][i])
             dists.append(res["distances"][0][i])
-
-    # Wiki pages linked to this entity (Step 5): wiki sections carry
-    # entity_id/entity_type metadata (see documents/wiki_builder.py), so a
-    # skill's mechanics table or an item's How-to-Obtain page joins the
-    # dossier. skillprofile hubs link to the CDN skill doc id.
-    hub_suffix = hub_id[len("skillprofile_") :] if hub_id.startswith("skillprofile_") else None
-    wiki_links = []
-    for doc in docs:
-        doc_meta = doc.get("metadata", {})
-        if not isinstance(doc_meta, dict):
-            continue
-        if doc.get("type") != "wiki" and doc_meta.get("type") != "wiki":
-            continue
-        if doc["id"] in seen:
-            continue
-        eid = doc_meta.get("entity_id")
-        if not eid:
-            continue
-        if hub_suffix and eid == f"skill_{hub_suffix}":
-            pass  # this skill's own wiki page belongs to this dossier
-        elif eid != hub_id:
-            continue
-        if eid in other_hub_ids:
-            # A wiki page owned by another entity in a multi-entity context;
-            # leave it for that entity's block.
-            continue
-        wiki_links.append((doc, doc_meta))
-
-    # Compact table records first: a table's coverage line (all rows' first
-    # cells) then its granular rows, then narrative page sections. The sort
-    # is stable, so corpus order is preserved within each class.
-    _TABLE_RANK = {"coverage": 0, "row": 1}
-
-    def _wiki_rank(item):
-        return _TABLE_RANK.get(item[1].get("table_record"), 2)
-
-    wiki_links.sort(key=_wiki_rank)
-    # Bound granular table rows so one page's table can't flood the dossier.
-    _rows_seen = 0
-    _bounded = []
-    for _link in wiki_links:
-        if _link[1].get("table_record") == "row":
-            if _rows_seen >= _MAX_WIKI_ROWS:
-                continue
-            _rows_seen += 1
-        _bounded.append(_link)
-    wiki_links = _bounded
-    for doc, doc_meta in wiki_links:
-        seen.add(doc["id"])
-        ids.append(doc["id"])
-        texts.append(doc["text"])
-        metas.append(doc_meta)
-        dists.append(0.0)
 
     if dtype == "skill":
         # Put low-level recipes first so the LLM sees what is usable at the
