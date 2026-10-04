@@ -178,6 +178,14 @@ Notes:
 - quests favor_npc is 'Area/NPC_Name'; npcs.key is 'NPC_Name'.
 - report JSON in char_reports: Skills {name: {Level, BonusLevels, ...}},
   Currencies {GOLD: n, ...}, NPCs {npc: {FavorLevel}}, ActiveQuests list.
+  Skills[<skill>].Abilities is the ONLY known-ability list (CharacterSheet
+  exports); non-skill abilities (e.g. CharmRat) are bucketed under the
+  pseudo-skill "Unknown". player_state section=abilities diffs a skill's
+  CDN family against that list — use it for 'which abilities do I know'
+  questions. NEVER trust abilities.level_req as a known-gate: shrine/
+  riddle unlocks (TameBear/TameCat carry level_req=1) need their unlock
+  event, not a level. game_state_skills has fresher LEVELS (log-sourced)
+  than the sheet dump — cross-check both.
 - player_items storage: vault/bag/NPC names; value is per-item gold value.
 - chat_events has indexes on speaker and channel: 'SELECT channel, COUNT(*)
   FROM chat_events WHERE speaker = <name>' and channel-only counts are
@@ -277,8 +285,11 @@ Tools (call to gather more data; up to {max_rounds} rounds):
 3. get_page(title) - full wiki page text by exact title (LIKE fallback lists
    candidates). Best for skill/mechanic prose.
 4. corpus_search(query, k=10) - BM25 over the generated corpus.
-5. player_state(character=None, section="summary", query=None) - live
-   session data. section: summary, skills, currencies, quests, favor, items.
+5. player_state(character=None, section="summary", query=None, skill=None) - live
+   session data. section: summary, skills, currencies, quests, favor, items,
+   abilities. abilities REQUIRES skill=<skill name> (e.g. "Animal Handling")
+   and diffs the character sheet's known-ability list against the CDN family —
+   use it for 'which abilities/skills do I know' questions.
 
 How to call tools:
 - Preferred: emit a native tool call (the API's tools parameter).
@@ -369,7 +380,7 @@ def _tools_api() -> list[dict]:
                 "name": "player_state",
                 "description": (
                     "Live play-session data: character skills, currencies, "
-                    "quests, NPC favor, items."
+                    "quests, NPC favor, items, known-ability audit."
                 ),
                 "parameters": {
                     "type": "object",
@@ -384,9 +395,17 @@ def _tools_api() -> list[dict]:
                                 "quests",
                                 "favor",
                                 "items",
+                                "abilities",
                             ],
                         },
                         "query": {"type": "string"},
+                        "skill": {
+                            "type": "string",
+                            "description": (
+                                "Skill name for section=abilities known-vs-"
+                                "missing audit (e.g. 'Animal Handling')."
+                            ),
+                        },
                     },
                     "required": [],
                 },

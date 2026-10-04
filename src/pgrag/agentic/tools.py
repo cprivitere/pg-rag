@@ -354,6 +354,73 @@ def _player_state(store_path: str, args: dict) -> str:
         ]
         return "\n".join(lines)
 
+    if section == "abilities":
+        # Known-ability audit. The known list lives ONLY in the CharacterSheet
+        # dump (char_reports.report -> Skills[<skill>].Abilities); game_state
+        # tables carry levels, not ability lists. Non-skill abilities (e.g.
+        # CharmRat) are bucketed under the pseudo-skill "Unknown" — audit a
+        # skill's family across BOTH buckets. abilities.level_req is not a
+        # reliable known-gate (shrine/riddle unlocks like TameBear carry
+        # level_req=1 but still need their unlock event).
+        skill = (args.get("skill") or "").strip()
+        if not skill:
+            return "player_state abilities error: missing required argument 'skill'."
+        try:
+            conn2 = _conn(store_path)
+        except sqlite3.Error as exc:
+            return f"player_state error: {exc}"
+        rows = conn2.execute(
+            "SELECT internal_name, name, level FROM abilities"
+            " WHERE skill = ? COLLATE NOCASE OR REPLACE(skill, ' ', '') = ?"
+            " COLLATE NOCASE ORDER BY level, name",
+            (skill, skill.replace(" ", "")),
+        ).fetchall()
+        conn2.close()
+        if not rows:
+            return f"player_state abilities error: no CDN ability family '{skill}'."
+        # Sheet keys have no spaces ('AnimalHandling'); try the literal key
+        # first, then the space-stripped form.
+        skills = report.get("Skills") or {}
+        sheet = skills.get(skill) or skills.get(skill.replace(" ", "")) or {}
+        known = set(sheet.get("Abilities") or [])
+        # Non-skill abilities (CharmRat, tool uses) are bucketed under the
+        # pseudo-skill "Unknown". They are NOT part of this skill's family:
+        # count them separately instead of folding them into the diff (they
+        # would otherwise all show as 'not in CDN' noise).
+        unknown_bucket = (
+            (skills.get("Unknown") or {}).get("Abilities") or []
+        )
+        level = sheet.get("Level") or 0
+        bonus = sheet.get("BonusLevels") or 0
+        if not known:
+            return (
+                f"No known-ability list in the character sheet for {skill}"
+                f" (ts {ts}). The CharacterSheet export carries"
+                " Skills[skill].Abilities; this dump predates it."
+            )
+        cdn = {il: (n, float(lr or 0)) for il, n, lr in rows}
+        have = sorted((cdn[i][0], cdn[i][1], i) for i in known if i in cdn)
+        sheet_only = sorted(i for i in known if i not in cdn)
+        missing = [(float(lr), n, il) for il, (n, lr) in cdn.items() if il not in known]
+        missing.sort()
+        lines = [
+            f"{skill} abilities (sheet ts {ts}, level {level} +{bonus}):",
+            f"known in this family: {len(have)} | missing: {len(missing)}"
+            + (f" | sheet-only internals: {len(sheet_only)}" if sheet_only else ""),
+            "KNOWN: " + ", ".join(_n for _n, _lr, _i in have),
+        ]
+        if unknown_bucket:
+            # Non-skill abilities the sheet KNOWS (CharmRat, tool uses, quest
+            # tricks). They are real known abilities — surfaced so the model
+            # never dismisses them as noise; capped at 40 names.
+            names = ", ".join(unknown_bucket[:40])
+            more = f" (+{len(unknown_bucket) - 40} more)" if len(unknown_bucket) > 40 else ""
+            lines.append(f"KNOWN non-skill abilities (Unknown bucket): {names}{more}")
+        if missing:
+            lines.append("MISSING (name [internal] — unlock level):")
+            lines.extend(f"- {n} [{il}] ({lr:.0f})" for lr, n, il in missing)
+        return "\n".join(lines)
+
     if section == "summary":
         return summary_text()
     if section == "skills":
@@ -404,7 +471,7 @@ def _player_state(store_path: str, args: dict) -> str:
         return f"{len(rows)} item rows (ts {ts}):\n{body}"
     return (
         "player_state error: unknown section "
-        f"'{section}'. Use: summary, skills, currencies, quests, favor, items."
+        f"'{section}'. Use: summary, skills, currencies, quests, favor, items, abilities."
     )
 
 

@@ -43,6 +43,37 @@ def store(tmp_path_factory):
         json.dumps({"Cheesemaking": {"Id": 7, "Description": "Cheese.", "Combat": False}}),
         encoding="utf-8",
     )
+    (cdn / "abilities.json").write_text(
+        json.dumps(
+            {
+                "ability_1": {
+                    "Name": "First Aid 1",
+                    "InternalName": "FirstAid1",
+                    "Skill": "First Aid",
+                    "Level": 0,
+                },
+                "ability_2": {
+                    "Name": "First Aid 2",
+                    "InternalName": "FirstAid2",
+                    "Skill": "First Aid",
+                    "Level": 10,
+                },
+                "ability_3": {
+                    "Name": "First Aid 3",
+                    "InternalName": "FirstAid3",
+                    "Skill": "First Aid",
+                    "Level": 20,
+                },
+                "ability_4": {
+                    "Name": "Revive Pet",
+                    "InternalName": "RevivePet1",
+                    "Skill": "Animal Handling",
+                    "Level": 100,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     wiki = root / "wiki"
     wiki.mkdir()
     (wiki / ".meta.json").write_text(
@@ -70,8 +101,13 @@ def store(tmp_path_factory):
         "ServerName": "Dreva",
         "Report": "CharacterSheet",
         "Skills": {
-            "FirstAid": {"Level": 99, "BonusLevels": 5},
+            "FirstAid": {
+                "Level": 99,
+                "BonusLevels": 5,
+                "Abilities": ["FirstAid1", "FirstAid2", "BandageBrew1"],
+            },
             "Alchemy": {"Level": 40},
+            "Unknown": {"Level": 0, "Abilities": ["CharmRat", "DigDeep1"]},
         },
         "Currencies": {"GOLD": 30711, "GUILDCREDITS": 0},
         "ActiveQuests": ["quest_1"],
@@ -204,3 +240,47 @@ def test_player_state_empty_store(tmp_path):
 def test_player_state_unknown_section(store):
     out = execute_tool(str(store), "player_state", {"section": "bank"})
     assert "unknown section" in out
+
+
+def test_player_state_abilities_known_vs_missing(store):
+    """contract: player_state section=abilities diffs the CharacterSheet's
+    known-ability list (Skills[<skill>].Abilities; sheet keys carry no spaces)
+    against the CDN ability family for that skill. Non-skill abilities in the
+    'Unknown' bucket are counted separately, never folded into the family
+    diff. abilities.level is surfaced as the unlock level; level_req-style
+    gate mismatches (shrine unlocks) remain visible in the missing list."""
+    out = execute_tool(
+        str(store),
+        "player_state",
+        {"section": "abilities", "skill": "First Aid"},
+    )
+    lines = out.splitlines()
+    assert "sheet ts" in lines[0] and "level 99 +5" in lines[0]
+    assert "known in this family: 2" in lines[1]
+    assert "missing: 1" in lines[1]
+    assert "KNOWN non-skill abilities (Unknown bucket): CharmRat, DigDeep1" in "\n".join(lines)
+    assert "First Aid 3 [FirstAid3] (20)" in out
+    # known ones are not listed as missing
+    assert "FirstAid1" not in " ".join(line for line in lines if line.startswith("- "))
+
+
+def test_player_state_abilities_unknown_bucket_listed_not_folded(store):
+    """contract: Unknown-bucket abilities are LISTED as known non-skill
+    abilities (they are real known abilities like CharmRat) but never appear
+    in the family diff — not as family members, not as 'missing'."""
+    out = execute_tool(
+        str(store), "player_state", {"section": "abilities", "skill": "First Aid"}
+    )
+    assert "KNOWN non-skill abilities (Unknown bucket): CharmRat, DigDeep1" in out
+    missing_line = next(
+        line for line in out.splitlines() if line.startswith("MISSING")
+    )
+    assert "CharmRat" not in missing_line and "DigDeep1" not in missing_line
+
+
+def test_player_state_abilities_unknown_family(store):
+    """contract: asking for the pseudo-skill 'Unknown' audits its own bucket."""
+    out = execute_tool(
+        str(store), "player_state", {"section": "abilities", "skill": "Unknown"}
+    )
+    assert "no CDN ability family 'Unknown'" in out

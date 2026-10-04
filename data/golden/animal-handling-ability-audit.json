@@ -1,0 +1,33 @@
+{
+ "id": "animal-handling-ability-audit",
+ "question": "Which Animal Handling taming abilities and pet commands do I currently know and which am I missing?",
+ "type": "general",
+ "facts": [
+  [
+   "TameRat",
+   "tame rat",
+   "Tame Rat"
+  ],
+  [
+   "CharmRat",
+   "charm rat",
+   "Charm Rat"
+  ],
+  [
+   "TameBear",
+   "Tame Bear",
+   "bear shrine"
+  ],
+  [
+   "TameBigCat",
+   "Tame Big Cat",
+   "cat shrine"
+  ],
+  [
+   "TameBee",
+   "Tame Bee",
+   "crelpin"
+  ]
+ ],
+ "notes": "Player-state audit facts verified against the 2026-10-04 CharacterSheet dump: known TameRat (AH bucket) + CharmRat (Unknown bucket \u2014 non-skill abilities live there); NOT known: TameBear (Bear Shrine, Kur Mtns, sacrifice 'Perch'), TameCat (Cat Shrine, NE Eltibule, 'String'), TameBee (Crelpin, Fae Realm, AH 70). Bear and Bugbear Anatomy 34 (active AH synergy +1). Pet-command tiers 1-5 known; tier 6+ (level 51+) require trainer-band unlocks (Gisli 51-70, Crelpin 71-80, Abbley/Emersil 81-90). Guard rails for the model: abilities.level_req is NOT a reliable known-gate (TameBear/TameCat carry level_req=1 yet are unknown); the known-ability list lives ONLY in char_reports Skills[<skill>].Abilities with non-skill abilities under 'Unknown'. Live session research -> golden, 2026-10-04. Bear-and-Bugbear-Anatomy 34 (the active +1 synergy) is deliberately NOT a pinned fact: it is a separate SKILL, not part of the ability family the audit surfaces \u2014 the answer shape for 'which taming abilities do I know' is the ability list."
+}
