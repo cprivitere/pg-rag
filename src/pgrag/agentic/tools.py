@@ -106,8 +106,10 @@ def _sql_query(store_path: str, args: dict) -> str:
                 "budget. Rewrite it narrower: filter on indexed columns "
                 "(items.code, items.name, recipes.skill, recipes.skill_level_req, "
                 "recipes.internal_name, chat_events.channel/speaker/ts, "
-                "player_items.name) or FTS-match tables (entity_names, chat_events) "
-                "instead of full scans."
+                "player_items.name) or FTS-match tables (entity_names) "
+                "instead of full scans. chat_events text has NO index — don't "
+                "LIKE-filter its text column; filter channel/speaker/ts and "
+                "query stall_events for sale prices."
             )
         return f"{_SQL_ERROR_PREFIX}{exc}"
     except sqlite3.Error as exc:

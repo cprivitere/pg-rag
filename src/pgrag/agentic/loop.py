@@ -229,6 +229,8 @@ Notes:
     payout pickups (price_total); 'configured' sets a price; 'hire_stall'
     rows are stall-keeper hire fees (price_total = fee paid, item NULL);
     'visitor_note' rows have player = the visitor who left a note.
+    The ONLY price history in the store: price-trend/market-price questions
+    route here first (item_transactions and wiki pages carry no prices).
     Revenue = SUM(price_total) WHERE action='bought'; owners' own buys are
     NOT excluded automatically — group by player to separate.
   - game_state_gift_log(id, character_name, npc_key, npc_name, gifted_at,
@@ -244,7 +246,8 @@ Notes:
     is_crit) — combat history: kills by enemy/zone/ability, deaths by killer.
   - item_transactions(id, timestamp, character_name, item_name, internal_name,
     item_type_id, quantity, context, source) — item gain/loss ledger; context:
-    loot/vendor_sell/storage_deposit/storage_withdraw/unknown/summoned.
+    loot/vendor_sell/storage_deposit/storage_withdraw/unknown/summoned. NO
+    price columns — price questions belong in stall_events.
   - character_recipe_completions(snapshot_id, recipe_key, completions) —
     latest snapshot only; JOIN recipes ON recipes.internal_name = recipe_key
     for names. Zero completions rows exist too (recipes you've unlocked).
