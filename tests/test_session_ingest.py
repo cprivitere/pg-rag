@@ -3,6 +3,7 @@ parsing into their tables from tmp fixtures, tolerant unmatched lines,
 and idempotent re-ingest of changed files."""
 
 import json
+import os
 import sqlite3
 
 import pytest
@@ -89,6 +90,81 @@ def test_chat_parsing_channels_speakers_system(tmp_path):
         assert rows[7][0] == "item" and rows[7][2] == "Smooth Animal Fat"
         # unmatched line skipped without abort
         assert conn.execute("SELECT count(*) FROM chat_events").fetchone()[0] == 8
+    finally:
+        conn.close()
+        pass  # manifest isolation handled by _isolate_manifest
+
+
+def test_chat_continuation_lines_bare_facts_and_wrap(tmp_path, capsys):
+    """Continuation-line contract: (1) a non-timestamped line made only of
+    [Item: X]/[Recipe: X] facts (single or multiple, nested brackets allowed)
+    is stored with channel=item, ts='', facts joined with '; '; (2) a bare
+    bracketed game announcement ([Tonight's ...]) is stored as channel=system;
+    (3) any other non-timestamped line is a wrap continuation of the previous
+    chat row in the same file — appended to that row's text; if the file starts
+    with one it is skipped silently (not stored, not unmatched); (4) blank
+    lines are skipped silently. Real format drift (a timestamped line that
+    matches no known shape) still counts as unmatched."""
+    chat = {
+        "Chat-26-10-04.log": (
+            "26-10-04 10:54:35\t[Trade] Bobjoelol: Buying Toolcrafting kits\n"
+            "Toolcrafting: Weapon Whetstone (Elven Method)\n"
+            "[Recipe: Oscar Fillet]\n"
+            "[Recipe: Bluegill Fillet] [Recipe: Pinfish Fillet]\n"
+            "26-10-04 10:55:00\t[Help] Kari: carp is from roshun\n"
+        ),
+        "Chat-26-10-05.log": (
+            "leads the file with no previous row\n"
+            "26-10-04 10:55:05\t[Nearby] Dusque: no\n"
+            "[Item: Natural Fae Claw]\n"
+            "[CU-3] Covers your Metal needs!\n"
+        ),
+    }
+    base = _session(tmp_path, chat=chat)
+    conn = _conn(tmp_path)
+    try:
+        counts = ingest_session(conn, base)
+        rows = conn.execute(
+            "SELECT channel, speaker, text, source_file FROM chat_events ORDER BY id"
+        ).fetchall()
+        # file 1: Trade row absorbs its wrap; two bare fact rows follow
+        assert rows[0] == (
+            "Trade",
+            "Bobjoelol",
+            "Buying Toolcrafting kits Toolcrafting: Weapon Whetstone (Elven Method)",
+            "Chat-26-10-04.log",
+        )
+        assert rows[1] == ("item", None, "Oscar Fillet", "Chat-26-10-04.log")
+        assert rows[2] == (
+            "item",
+            None,
+            "Bluegill Fillet; Pinfish Fillet",
+            "Chat-26-10-04.log",
+        )
+        assert rows[3] == ("Help", "Kari", "carp is from roshun", "Chat-26-10-04.log")
+        # file 2: leading continuation skipped silently; bare item stored; the
+        # [CU-3] trade ad is a bracketed wrap of the preceding item row
+        assert rows[4] == ("Nearby", "Dusque", "no", "Chat-26-10-05.log")
+        assert rows[5] == (
+            "item",
+            None,
+            "Natural Fae Claw [CU-3] Covers your Metal needs!",
+            "Chat-26-10-05.log",
+        )
+        assert counts["chat_events"] == 6
+        # nothing left unmatched: every shape is captured or skipped
+        out = capsys.readouterr().out
+        assert "unmatched lines skipped" not in out
+        # re-ingest after mtime bump: DELETE by source_file re-parses, no dupes,
+        # wrap already merged stays merged
+        p = base / "ChatLogs" / "Chat-26-10-04.log"
+        os.utime(p, (p.stat().st_atime, p.stat().st_mtime + 5))
+        ingest_session(conn, base)
+        assert conn.execute("SELECT count(*) FROM chat_events").fetchone()[0] == 6
+        assert conn.execute(
+            "SELECT text FROM chat_events"
+            " WHERE source_file='Chat-26-10-04.log' AND channel='Trade'"
+        ).fetchone()[0] == rows[0][2]
     finally:
         conn.close()
         pass  # manifest isolation handled by _isolate_manifest

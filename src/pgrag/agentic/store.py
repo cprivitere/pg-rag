@@ -144,7 +144,12 @@ _PLAYER_EVENT_RE = re.compile(r"\[(\d{2}:\d{2}:\d{2})\] LocalPlayer: Process(\w+
 # still has this prefix is real format drift; everything else is noise the
 # parser was never meant to read.
 _LOCALPLAYER_RE = re.compile(r"^\[\d{2}:\d{2}:\d{2}\] LocalPlayer")
-# Chat line: `26-06-11 08:05:44\t<body>` (per plan parser contract).
+# Chat line: `26-06-11 08:05:44\t<body>` (per plan parser contract). A physical
+# line with no timestamp that is plain text (not starting with '[') is a wrap
+# continuation of the PREVIOUS chat row in the same file: it is appended to that
+# row's text (' ' + stripped line). A no-timestamp line made only of bracket
+# item/recipe facts ([Item: X] / [Recipe: X], single or multiple) is stored on
+# its own with channel=item and ts=''.
 _CHAT_LINE_RE = re.compile(r"^(\d{2}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\t(.*)$")
 _CHAT_BODY_RE = re.compile(r"^\[([^\]]+)\] ?(.*)$")
 # Channels where the body starts with "Speaker: text" (plan contract).
@@ -152,10 +157,22 @@ _SPEAKER_CHANNELS = ("Combat", "Nearby", "Trade", "Help", "Tell", "Party", "Guil
 # System-fact chat lines with no [Chan] prefix (Entering Area / Logged In /
 # Logged Out As).
 _SYSTEM_RE = re.compile(r"(\*\*+ (Entering Area|Logged In|Logged Out)[ :]?.*)")
+# Bare bracketed game announcements ("[Tonight's Povus invasion …]") that arrive
+# on their own physical line (no timestamp, no channel prefix). Lowercase and
+# possessives make them unambiguous next to channel bodies like [Error].
+_ANNOUNCE_RE = re.compile(r"^\[[^\]\n]*['a-z][^\]\n]*\]$")
 # Loot/pickup lines: `[Item: Fancy Sword]` (also `[Item: X] [Item: Y] ...`);
 # some appear bare (no timestamp), some timestamped after the tab.
 _ITEM_LINE_RE = re.compile(r"\[Item: ([^\]]+)\]")
-_BARE_ITEM_RE = re.compile(r"^\s*(\[Item: [^\n]*\])\s*$")
+# Bare bracket-fact line (no timestamp): a line made ONLY of [Item: X] and/or
+# [Recipe: X] facts, single or multiple. Inner brackets are allowed inside a
+# fact (color codes like "[206AB6]" appear inside [Item: …] lines). ts unknown
+# → channel=item, ts=''.
+_BARE_FACTS_RE = re.compile(
+    r"^\s*((?:\[(?:Item|Recipe): (?:[^\[\]\n]|\[[^\]\n]*\])+\][^\S\n]*)+)$"
+)
+# Facts inside a fact line (Item or Recipe), in order; nested-bracket tolerant.
+_FACT_RE = re.compile(r"\[(?:Item|Recipe): ((?:[^\[\]\n]|\[[^\]\n]*\])+)\]")
 
 
 def _join(values) -> str:

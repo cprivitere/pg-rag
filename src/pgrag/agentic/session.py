@@ -19,9 +19,11 @@ import sqlite3
 from pathlib import Path
 
 from pgrag.agentic.store import (
-    _BARE_ITEM_RE,
+    _ANNOUNCE_RE,
+    _BARE_FACTS_RE,
     _CHAT_BODY_RE,
     _CHAT_LINE_RE,
+    _FACT_RE,
     _ITEM_LINE_RE,
     _LOCALPLAYER_RE,
     _PLAYER_EVENT_RE,
@@ -74,13 +76,16 @@ def _ingest_chat_logs(conn: sqlite3.Connection, chat_dir: Path) -> tuple[int, in
     files = sorted(chat_dir.glob("Chat-*.log"))
     for f in _changed_files(conn, "chat", files):
         cur.execute("DELETE FROM chat_events WHERE source_file = ?", (f.name,))
+        last_row = None  # rowid of the last row inserted for this file
         with f.open(encoding="utf-8", errors="replace") as fh:
             for line_no, line in enumerate(fh, 1):
                 line = line.rstrip("\n")
                 m = _CHAT_LINE_RE.match(line)
                 if not m:
-                    if _BARE_ITEM_RE.match(line):
-                        # bare loot line (no timestamp): ts unknown
+                    if not line.strip():
+                        continue  # blank separators carry no facts and are not drift
+                    if _BARE_FACTS_RE.match(line):
+                        # bare item/recipe fact line (no timestamp): ts unknown
                         cur.execute(
                             "INSERT OR REPLACE INTO chat_events"
                             " (ts, channel, speaker, text, source_file, line_no)"
@@ -89,12 +94,42 @@ def _ingest_chat_logs(conn: sqlite3.Connection, chat_dir: Path) -> tuple[int, in
                                 "",
                                 "item",
                                 None,
-                                "; ".join(_ITEM_LINE_RE.findall(line)),
+                                "; ".join(_FACT_RE.findall(line)),
                                 f.name,
                                 line_no,
                             ),
                         )
+                        last_row = cur.lastrowid
                         added += 1
+                    elif _ANNOUNCE_RE.match(line):
+                        # bare game announcement (no timestamp): system channel
+                        cur.execute(
+                            "INSERT OR REPLACE INTO chat_events"
+                            " (ts, channel, speaker, text, source_file, line_no)"
+                            " VALUES (?,?,?,?,?,?)",
+                            ("", "system", None, line, f.name, line_no),
+                        )
+                        last_row = cur.lastrowid
+                        added += 1
+                    elif not line.startswith("[") and line.strip():
+                        if last_row:
+                            # wrap continuation of the previous chat row in this file
+                            cur.execute(
+                                "UPDATE chat_events SET text = text || ' ' || ?"
+                                " WHERE rowid = ?",
+                                (line.strip(), last_row),
+                            )
+                        # else: file starts with a continuation; skip silently
+                    elif line.startswith("[") and last_row:
+                        # bracketed wrap ([CU-3] ad following an empty
+                        # "[Trade] Speaker: " line): the client only prints
+                        # un-timestamped chat lines as continuations; facts and
+                        # announcements were captured above.
+                        cur.execute(
+                            "UPDATE chat_events SET text = text || ' ' || ?"
+                            " WHERE rowid = ?",
+                            (line.strip(), last_row),
+                        )
                     else:
                         unmatched += 1
                     continue
@@ -118,6 +153,8 @@ def _ingest_chat_logs(conn: sqlite3.Connection, chat_dir: Path) -> tuple[int, in
                             text = rest
                 elif sm := _SYSTEM_RE.match(body):
                     channel, text = "system", sm.group(1)
+                elif _ANNOUNCE_RE.match(body):
+                    channel, text = "system", body
                 else:
                     unmatched += 1
                     continue
@@ -127,6 +164,7 @@ def _ingest_chat_logs(conn: sqlite3.Connection, chat_dir: Path) -> tuple[int, in
                     " VALUES (?,?,?,?,?,?)",
                     (ts, channel, speaker, text, f.name, line_no),
                 )
+                last_row = cur.lastrowid
                 added += 1
         _update_manifest("chat", [f])
     conn.commit()
