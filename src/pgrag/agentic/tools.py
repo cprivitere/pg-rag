@@ -287,6 +287,55 @@ def _corpus_search(store_path: str, args: dict, corpus: str = "full") -> str:
     return f"{len(lines)} results:\n" + "\n".join(lines)
 
 
+def _stall_zero_sale_lines(store_path: str, query: str, base: str) -> str:
+    """Zero-sale fallback for section=stall: surface where the item comes
+    from / is spent (sources -> npcs/quests names) instead of dead-ending
+    (e.g. Woe Coin is barter currency spent at Sven the Bleeder, not
+    something the stall ever priced)."""
+    try:
+        conn = _conn(store_path)
+    except sqlite3.Error as exc:
+        return f"player_state error: {exc}"
+    lines = [f"{base} matching '{query}'."]
+    try:
+        codes = [
+            r[0]
+            for r in conn.execute(
+                "SELECT code FROM items WHERE name = ? COLLATE NOCASE", (query,)
+            ).fetchall()
+        ]
+        for code in codes:
+            for _key, entries in conn.execute(
+                "SELECT item_key, entries FROM sources WHERE item_key = ? ORDER BY seq",
+                (f"item_{code}",),
+            ).fetchall():
+                try:
+                    e = json.loads(entries or "{}")
+                except ValueError:
+                    e = {}
+                npc_key = e.get("npc")
+                npc_name = None
+                if npc_key:
+                    row = conn.execute(
+                        "SELECT name FROM npcs WHERE key = ?", (npc_key,)
+                    ).fetchone()
+                    npc_name = row[0] if row else None
+                quest_name = None
+                if e.get("questId"):
+                    row = conn.execute(
+                        "SELECT name FROM quests WHERE id = ?", (e["questId"],)
+                    ).fetchone()
+                    quest_name = row[0] if row else None
+                kind = e.get("type") or "source"
+                target = npc_name or quest_name or npc_key or e.get("questId") or "?"
+                lines.append(f"source: {kind} via {target}")
+    finally:
+        conn.close()
+    if len(lines) == 1:
+        lines.append("No source or barter info found for it in the store either.")
+    return "\n".join(lines)
+
+
 def _player_state(store_path: str, args: dict) -> str:
     section = (args.get("section") or "summary").strip().lower()
     query = args.get("query")
@@ -475,9 +524,87 @@ def _player_state(store_path: str, args: dict) -> str:
             return f"No items matching '{query}'."
         body = _md_table(["type_id", "name", "rarity", "storage", "stack", "value"], rows)
         return f"{len(rows)} item rows (ts {ts}):\n{body}"
+
+    if section == "stall":
+        # Own-stall sale history. stall_events is the glogger-mirrored ledger
+        # of the player's OWN shop — the only stall source in the store, so
+        # every price here is from the player's own listings/sales, never an
+        # observed market price. 'bought' rows are realized prices; visible/
+        # configured rows are asking prices that may not have sold. Report
+        # each sale individually — never average sold prices into one number.
+        item_like = f"%{query}%" if query else None
+        try:
+            conn2 = _conn(store_path)
+        except sqlite3.Error as exc:
+            return f"player_state error: {exc}"
+        try:
+            exists = conn2.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stall_events'"
+            ).fetchone()
+            if not exists:
+                return "No stall data in store (glogger play-history not ingested)."
+            sql = (
+                "SELECT item, event_at, action, player, quantity, price_unit,"
+                " price_total FROM stall_events WHERE ignored = 0"
+            )
+            params: list = []
+            if item_like:
+                sql += " AND item LIKE ?"
+                params.append(item_like)
+            sql += " ORDER BY COALESCE(event_at, event_timestamp) DESC LIMIT 120"
+            rows = conn2.execute(sql, params).fetchall()
+        finally:
+            conn2.close()
+        if not rows:
+            if not query:
+                return "No stall events in store."
+            # Query has no stall history: fall through to the zero-sale
+            # sources branch (e.g. Woe Coin is barter currency — spent at an
+            # NPC, never stall-priced) instead of dead-ending.
+            return _stall_zero_sale_lines(store_path, query, base="No stall events")
+
+        def _price(v) -> str:
+            return f"{v:g}"
+
+        sold = [r for r in rows if r[2] == "bought" and r[5] is not None]
+        asking = [r for r in rows if r[2] in ("visible", "configured") and r[5] is not None]
+        lines = [
+            (
+                "stall_events = YOUR OWN stall ledger (this store has no other"
+                " players' stalls): prices below come from your own listings and"
+                " sales, not a market sample."
+            )
+        ]
+        if sold:
+            lines.append(f"SOLD ({len(sold)} sales, oldest first):")
+            for item, ea, _a, buyer, qty, pu, pt in reversed(sold):
+                lines.append(
+                    f"  {ea} | {item} x{qty} @ {_price(pu)} each = {_price(pt or 0)}"
+                    f" | buyer {buyer}"
+                )
+        else:
+            lines.append("no sales recorded" + (f" for '{query}'" if query else ""))
+        if asking:
+            lines.append(
+                f"ASKING ({len(asking[:40])} listing events, oldest first —"
+                " asking prices, may be unsold):"
+            )
+            for item, ea, action, _buyer, qty, pu, _pt in reversed(asking[:40]):
+                lines.append(f"  {ea} | {item} x{qty} @ {_price(pu)} each ({action})")
+        if len(rows) >= 120:
+            lines.append(
+                "(showing the 120 most recent events only — for totals/aggregates"
+                " over ALL history run sql_query, e.g."
+                " SELECT item, COUNT(*), SUM(price_total) FROM stall_events"
+                " WHERE action='bought' GROUP BY item ORDER BY 3 DESC)"
+            )
+        if not sold and not asking and query:
+            return _stall_zero_sale_lines(store_path, query, base="no stall pricing")
+        return "\n".join(lines)
+
     return (
         "player_state error: unknown section "
-        f"'{section}'. Use: summary, skills, currencies, quests, favor, items, abilities."
+        f"'{section}'. Use: summary, skills, currencies, quests, favor, items, stall, abilities."
     )
 
 

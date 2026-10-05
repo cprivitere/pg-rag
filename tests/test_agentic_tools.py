@@ -289,3 +289,152 @@ def test_player_state_abilities_unknown_family(store):
         str(store), "player_state", {"section": "abilities", "skill": "Unknown"}
     )
     assert "no CDN ability family 'Unknown'" in out
+
+
+def test_player_state_stall_no_glogger(tmp_path):
+    """contract: without glogger ingestion there is no stall_events table; the
+    section says so instead of erroring."""
+    db = tmp_path / "nostall.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(_SCHEMA)
+    conn.execute(
+        "INSERT OR REPLACE INTO char_reports VALUES (?,?,?,?)",
+        ("Tester", "Dreva", "2026-09-13 01:45:36Z", json.dumps({"Character": "Tester"})),
+    )
+    conn.commit()
+    conn.close()
+    out = execute_tool(str(db), "player_state", {"section": "stall"})
+    assert "No stall data in store" in out
+
+
+def test_player_state_stall_sales_individual_prices(store):
+    """contract: player_state section=stall reports the player's OWN stall
+    (the only stall source in the store), lists each realized sale with its
+    per-unit price and buyer — never a single averaged price — and separates
+    sold prices from asking (visible/configured) prices."""
+    conn = sqlite3.connect(store)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS stall_events ("
+        "id TEXT PRIMARY KEY, event_timestamp TEXT, event_at TEXT,"
+        "log_timestamp TEXT, log_title TEXT, action TEXT, player TEXT,"
+        "owner TEXT, item TEXT, quantity INTEGER, price_unit REAL,"
+        "price_total REAL, raw_message TEXT, entry_index TEXT,"
+        "ignored INTEGER, created_at TEXT)"
+    )
+    rows = [
+        # (id, event_at, action, player, item, qty, price_unit, price_total, ignored)
+        ("s1", "2026-07-05 11:41:00", "visible", None, "Butter Churn", 1, 500.0, None, 0),
+        ("s2", "2026-07-06 12:14:00", "bought", "WhiteFurry", "Fertilizer Stick", 1, 500.0, 500, 0),
+        ("s3", "2026-07-24 20:52:00", "bought", "TheScare", "Butter Churn", 1, 4000.0, 4000, 0),
+        ("s4", "2026-07-28 09:39:00", "bought", "WhiteFurry", "Butter Churn", 1, 4000.0, 4000, 0),
+        ("s5", "2026-08-01 10:00:00", "bought", "Zed", "Butter Churn", 1, 500.0, 500, 0),
+        ("s6", "2026-07-22 21:16:00", "configured", None, "Butter Churn", 3, 4000.0, None, 0),
+        ("s7", "2026-08-02 09:00:00", "bought", "Buyer", "Hidden Fat", 1, 900.0, 900, 1),
+    ]
+    for rid, ea, action, player, item, qty, pu, pt, ign in rows:
+        conn.execute(
+            "INSERT OR REPLACE INTO stall_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (rid, ea, ea, None, None, action, player, "TwinkleofToes", item, qty, pu, pt, None, None, ign, ea),
+        )
+    conn.commit()
+    conn.close()
+
+    out = execute_tool(str(store), "player_state", {"section": "stall"})
+    # Ownership framing: these are YOUR OWN stall prices, not a market sample.
+    assert "YOUR OWN stall" in out
+    # Every realized sale listed individually with per-unit price and buyer.
+    assert "@ 4000 each = 4000 | buyer TheScare" in out
+    assert "@ 4000 each = 4000 | buyer WhiteFurry" in out
+    assert "@ 500 each = 500 | buyer Zed" in out
+    # No averaging: mean of Butter Churn sold prices (4000+4000+500)/3 = 2833
+    # must never appear as a price line.
+    assert "2833" not in out
+    # Sold separated from asking.
+    asking = out.split("ASKING")[1]
+    sold = out.split("SOLD")[1].split("ASKING")[0]
+    assert "(configured)" in asking and "(visible)" in asking
+    assert "(configured)" not in sold
+    # Ignored rows excluded.
+    assert "Hidden Fat" not in out
+    # Oldest-first ordering within SOLD.
+    assert sold.index("2026-07-06") < sold.index("2026-07-24") < sold.index("2026-08-01")
+    # Query filter narrows to one item.
+    out2 = execute_tool(
+        str(store), "player_state", {"section": "stall", "query": "Churn"}
+    )
+    assert "Butter Churn" in out2 and "Fertilizer Stick" not in out2
+    # Miss reports no events; unknown item gets the no-info line.
+    out3 = execute_tool(
+        str(store), "player_state", {"section": "stall", "query": "Woe Coin"}
+    )
+    assert "No stall events matching 'Woe Coin'." in out3
+    assert "No source or barter info" in out3
+
+
+def test_player_state_stall_zero_sale_sources(store):
+    """contract: an item with no stall history falls back to its CDN sources —
+    barter NPC and quest names are resolved (sources.item_key='item_'||code →
+    npcs.key / quests.id) instead of a dead-end; unknown items say no info."""
+    conn = sqlite3.connect(store)
+    conn.execute(
+        "INSERT OR REPLACE INTO items VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            77, "Moon Shard", "MoonShard", None, None, 900.0, 1,
+            None, None, None, None, None,
+        ),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO npcs VALUES (?,?,?,?,?,?,?,?,?)",
+        ("NPC_Sven", "Sven the Bleeder", "AreaStatehelm", None, None, None, None, None, None),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO quests VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (42, "The Rat Tax", "SmokeTail3", None, None, None, None, None, None, None, None),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO sources VALUES (?,?,?,?)",
+        ("item_77", 0, json.dumps({"npc": "NPC_Sven", "type": "Barter"}), "items"),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO sources VALUES (?,?,?,?)",
+        ("item_77", 1, json.dumps({"questId": 42, "type": "Quest"}), "items"),
+    )
+    conn.commit()
+    conn.close()
+    out = execute_tool(
+        str(store), "player_state", {"section": "stall", "query": "Moon Shard"}
+    )
+    assert "No stall events matching 'Moon Shard'." in out
+    assert "source: Barter via Sven the Bleeder" in out
+    assert "source: Quest via The Rat Tax" in out
+
+
+def test_player_state_stall_truncation_note(store):
+    """contract: when the stall event window caps at 120, the section says so
+    and points aggregates at sql_query — a truncated list must never be
+    silently treated as complete history."""
+    conn = sqlite3.connect(store)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS stall_events ("
+        "id TEXT PRIMARY KEY, event_timestamp TEXT, event_at TEXT,"
+        "log_timestamp TEXT, log_title TEXT, action TEXT, player TEXT,"
+        "owner TEXT, item TEXT, quantity INTEGER, price_unit REAL,"
+        "price_total REAL, raw_message TEXT, entry_index TEXT,"
+        "ignored INTEGER, created_at TEXT)"
+    )
+    for i in range(120):
+        day = f"2026-08-{(i % 28) + 1:02d} 10:00:00"
+        conn.execute(
+            "INSERT OR REPLACE INTO stall_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                f"t{i}", day, day, None, None, "bought", "Buyer", "TwinkleofToes",
+                "Bulk Widget", 1, 100.0, 100, None, None, 0, None,
+            ),
+        )
+    conn.commit()
+    conn.close()
+    out = execute_tool(
+        str(store), "player_state", {"section": "stall", "query": "Bulk Widget"}
+    )
+    assert "120 most recent" in out
+    assert "sql_query" in out

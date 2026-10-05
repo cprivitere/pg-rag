@@ -192,6 +192,12 @@ Notes:
   cheap. Avoid unfiltered GROUP BY/DISTINCT over all 3.5M rows (operation
   budget). The player character name is usually like the in-game name
   (case-sensitive; check DISTINCT speaker first with LIMIT).
+- Item sources: the sources table maps item_key to acquisition/usage info
+  (entries JSON: npc/questId/type). To turn a barter/quest source into a
+  readable name: SELECT json_extract(entries,'$.npc') FROM sources WHERE
+  item_key='item_<code>' AND json_extract(entries,'$.type')='Barter' →
+  npcs.key → npcs.name (e.g. Woe Coin → NPC_SvenTheBleeder → 'Sven the
+  Bleeder'). item_key is literally 'item_' || code from the items table.
 - Ingredient item codes always resolve: JOIN ingredients.item_code = items.code
   to get names (e.g. SELECT i.item_code, it.name, i.stack FROM ingredients i
   JOIN items it ON it.code = i.item_code WHERE i.recipe_id = ?). Never tell
@@ -229,8 +235,14 @@ Notes:
     payout pickups (price_total); 'configured' sets a price; 'hire_stall'
     rows are stall-keeper hire fees (price_total = fee paid, item NULL);
     'visitor_note' rows have player = the visitor who left a note.
-    The ONLY price history in the store: price-trend/market-price questions
-    route here first (item_transactions and wiki pages carry no prices).
+    The ONLY price history in the store: price-trend/market-price/pricing
+    questions (what items sell for, what's it worth) route here first
+    (item_transactions and wiki pages carry no prices). This is YOUR OWN
+    stall — no other players' stalls exist in the store, so stall prices
+    reflect your own listings/sales, never a market sample. Report each
+    sale's price separately (never average them). Or use
+    player_state section=stall (query=item name) for the pre-digested
+    sale list.
     Revenue = SUM(price_total) WHERE action='bought'; owners' own buys are
     NOT excluded automatically — group by player to separate.
   - game_state_gift_log(id, character_name, npc_key, npc_name, gifted_at,
@@ -290,9 +302,11 @@ Tools (call to gather more data; up to {max_rounds} rounds):
 4. corpus_search(query, k=10) - BM25 over the generated corpus.
 5. player_state(character=None, section="summary", query=None, skill=None) - live
    session data. section: summary, skills, currencies, quests, favor, items,
-   abilities. abilities REQUIRES skill=<skill name> (e.g. "Animal Handling")
+   stall, abilities. abilities REQUIRES skill=<skill name> (e.g. "Animal Handling")
    and diffs the character sheet's known-ability list against the CDN family —
-   use it for 'which abilities/skills do I know' questions.
+   use it for 'which abilities/skills do I know' questions. stall lists your
+   own shop's sales (query=item name filters) — the only price history in the
+   store; each sale is listed individually with buyer and per-unit price.
 
 How to call tools:
 - Preferred: emit a native tool call (the API's tools parameter).
@@ -383,7 +397,8 @@ def _tools_api() -> list[dict]:
                 "name": "player_state",
                 "description": (
                     "Live play-session data: character skills, currencies, "
-                    "quests, NPC favor, items, known-ability audit."
+                    "quests, NPC favor, items, known-ability audit, own-stall "
+                    "sale history (section=stall)."
                 ),
                 "parameters": {
                     "type": "object",
@@ -398,6 +413,7 @@ def _tools_api() -> list[dict]:
                                 "quests",
                                 "favor",
                                 "items",
+                                "stall",
                                 "abilities",
                             ],
                         },
