@@ -77,6 +77,17 @@ AGGREGATION_PATTERNS = [
     r"\brecipes?\s+(?:using|that\s+use|use|can\s+(?:i|you)\s+make)\b",
     r"\bhow\s+do\s+i\s+grow\b",
     r"\bcan\s+i\s+grow\b",
+    # Acquisition-of-an-item intent: "how do I gather/get/obtain/collect/farm
+    # X" asks WHERE X comes from (sources, vendors, barter, quest rewards),
+    # not what X is. The item dossier is spend-side (uses/recipes/gifting);
+    # acquisition facts live in NPC barter pages and sources_items docs, so
+    # route general for hybrid recall — same "entity is the filter" logic as
+    # grow-planting above. Travel phrasing ("How do I get to Gazluk Keep?",
+    # "how to get to Serbule") must keep its entity route: a lookahead
+    # rejects "get to <place>" while accepting every other direct object.
+    r"\bhow\s+(?:do|can|to)\s+(?:i|you|we)\s+(?:gather|obtain|collect|farm)\b",
+    r"\bhow\s+(?:do|can|to)\s+(?:i|you|we)\s+get\b(?!\s+to\b)",
+    r"\bwhere\s+(?:do|can)\s+(?:i|you|we)\s+(?:get|gather|obtain|collect|farm)\b(?!\s+to\b)",
     r"\bwho\s+gives?\s+quests?\s+in\b",
     r"\blore\s+book\b",
     r"\bsaga\b",

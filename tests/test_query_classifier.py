@@ -151,6 +151,30 @@ def test_how_do_i_grow_stays_general():
     assert classify_query("How do I grow Field Mushrooms?") == "general"
 
 
+def test_acquisition_of_item_routes_general():
+    """'How do I gather/get/obtain X' asks WHERE X comes from (barter vendors,
+    quest rewards, sources_items docs), not what X is. The item dossier is
+    spend-side (uses/recipes/gifting), so acquisition phrasing routes general
+    for hybrid recall (contract: query_classifier AGGREGATION acquisition
+    patterns; regression origin: royal-jelly-gathering golden — the item
+    dossier structurally omits the Midge barter rows)."""
+    assert classify_query("How do I gather Royal Jelly?") == "general"
+    assert classify_query("How do I get Royal Jelly?") == "general"
+    assert classify_query("How do I obtain Moonstone?") == "general"
+    assert classify_query("Where do I get Pig Snouts?") == "general"
+
+
+def test_acquisition_does_not_hijack_travel_or_describe():
+    """Travel phrasing ('get to <place>') keeps its pre-change routing, and
+    describe-intent questions about the same item stay on the entity dossier:
+    the acquisition carve-out fires only when get/gather/obtain/collect/farm
+    takes a direct object that is the target itself."""
+    assert classify_query("How do I get to Gazluk Keep?") == "entity"
+    assert classify_query("how to get to Serbule") == "entity"
+    assert classify_query("What is Moonstone?") == "entity"
+    assert classify_query("How do I make White Dye?") == "entity"
+
+
 def test_who_gives_quests_in_area_stays_general():
     """'Who gives quests in the Ranalon Den area?' enumerates quests; the area
     alias must not upgrade it to a single quest dossier."""

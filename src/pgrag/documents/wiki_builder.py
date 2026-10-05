@@ -12,7 +12,7 @@ CACHE_FILE = WIKI_PARSED_CACHE
 # Bump when the cached doc shape OR generated text changes, so stale cache
 # entries are rebuilt instead of served with old content (a mtime-equal page
 # with a changed section-cleanup step would otherwise keep residue forever).
-CACHE_VERSION = 8
+CACHE_VERSION = 9
 
 # CDN tables whose entity names wiki pages can link to.
 _ENTITY_TABLES = {
@@ -73,12 +73,147 @@ _MOB_LOCATION_RE = re.compile(
     re.S,
 )
 
-# {{MOB infobox|type=…|effective=…|ineffective=…|vineffective=…}}: carries the
+# {{MOB infobox|type=…|effective=…|vineffective=…|vineffective=…}}: carries the
 # creature-type and combat-weakness stats; rewrite to prose the same way.
 _MOB_INFOBOX_RE = re.compile(
     r"\{\{MOB infobox\s*(?P<body>[^{}]*?)\}\}",
     re.S,
 )
+
+# mwparserfromhell's strip_code() deletes the ENTIRE content of a multi-arg
+# template shell ({{Spoiler|label|body}} → ""), so favor rewards, quest reward
+# tables, and NPC preference reveals were silently dropped from the corpus
+# (~953 pages lose content; Strom Farblood's "reveal preferences at
+# Comfortable" and 763 quest reward spoilers were unreachable). These
+# rewrites unwrap the shells to plain text BEFORE stripping — the same fix
+# shape as the MOB Location rewrite above. Bodies still pass through
+# _preserve_template_names afterward, so {{Item|X}} inside a body resolves to
+# its display name.
+# 2-arg {{Spoiler|label|body}} dominates (324/353 sampled); 1-arg
+# {{Spoiler|label}} is a collapsed toggle with no hidden body. 2-arg
+# {{Quote|source|body}} and 4-arg {{Quote|source|body|source2|body2}} carry
+# dialogue/reward prose; 1-arg {{Quote|body}} is a bare quotation.
+# {{Favor|Tier}} names a favor tier inline ("at {{Favor|Comfortable}}") —
+# strip_code deleted it, leaving "At , Strom will reveal…" with a blank.
+_FAVOR_TPL_RE = re.compile(r"\{\{[Ff]avor\|([^{}|]+)\}\}")
+
+_SHELL_TPL_NAMES = ("Spoiler", "Quote")
+
+# {{HOLIDAY|RiShin Friends = {{Item|Royal Jelly}} x2}}-style event reward
+# templates keep their args as readable "key = value" lines.
+_HOLIDAY_RE = re.compile(
+    r"\{\{HOLIDAY\s*(?P<body>[^{}]*?)\}\}",
+    re.S,
+)
+
+_NPC_STORAGE_RE = re.compile(
+    r"\{\{NPC STORAGE\s*(?P<body>[^{}]*?)\}\}",
+    re.S,
+)
+
+
+def _rewrite_shell_templates(text: str) -> str:
+    """Unwrap {{Spoiler|…}}/{{Quote|…}} shells (balanced {{ }} aware).
+
+    A linear body regex can't match nested {{…}} inside a spoiler body, so
+    extraction scans to the balanced closing brace and rewrites innermost
+    shells first (the loop re-finds the next outer shell after each rewrite).
+    """
+    while True:
+        hit = None
+        for name in _SHELL_TPL_NAMES:
+            start = text.find("{{" + name)
+            if start == -1:
+                continue
+            i = start + 2
+            depth = 0
+            end = -1
+            while i < len(text) - 1:
+                if text[i : i + 2] == "{{":
+                    depth += 1
+                    i += 2
+                    continue
+                if text[i : i + 2] == "}}":
+                    if depth == 0:
+                        end = i + 2
+                        break
+                    depth -= 1
+                    i += 2
+                    continue
+                i += 1
+            if end == -1:
+                continue  # unbalanced; leave for the hygiene guards
+            hit = (name, start, end)
+            break
+        if hit is None:
+            text = _FAVOR_TPL_RE.sub(lambda m: f"favor tier {m.group(1).strip()}", text)
+            return text
+        name, start, end = hit
+        # Body sits after "{{Name" — skip the remaining "|" of the template
+        # open ({{Spoiler|…); scanning starts inside the name.
+        body_start = start + 2 + len(name)
+        while body_start < end and text[body_start] in "|\r\n\t ":
+            body_start += 1
+        body = text[body_start : end - 2]
+        args = _split_top_args(body)
+        if name == "Spoiler":
+            rendered = (
+                f"{args[0].strip()} {'|'.join(a.strip() for a in args[1:]).strip()}".strip()
+                if len(args) >= 2
+                else args[0].strip()
+            )
+        else:
+            # Quote: pairs of (source, body); 1-arg is a bare quotation.
+            if len(args) == 1:
+                rendered = args[0].strip()
+            else:
+                parts = []
+                for i in range(0, len(args) - 1, 2):
+                    src = re.sub(r"^source=\s*", "", args[i].strip()).strip()
+                    body_i = args[i + 1].strip()
+                    parts.append(f"{src} says: {body_i}" if src else body_i)
+                rendered = " ".join(parts)
+        text = text[:start] + rendered + text[end:]
+
+
+def _split_top_args(body: str) -> list[str]:
+    """Split a template body on top-level '|' (nested {{ }} protected)."""
+    args: list[str] = []
+    depth = 0
+    last = 0
+    i = 0
+    while i < len(body) - 1:
+        if body[i : i + 2] == "{{":
+            depth += 1
+            i += 2
+            continue
+        if body[i : i + 2] == "}}":
+            depth -= 1
+            i += 2
+            continue
+        if depth == 0 and body[i] == "|":
+            args.append(body[last:i])
+            last = i + 1
+        i += 1
+    args.append(body[last:])
+    return args
+
+
+def _rewrite_event_templates(text: str) -> str:
+    """Event/storage templates: keep their key = value args as lines."""
+
+    def _kv(m: re.Match) -> str:
+        body = m.group("body")
+        lines = []
+        for raw in body.split("\n"):
+            entry = raw.strip().strip("|")
+            if entry:
+                lines.append(entry)
+        return "\n".join(lines)
+
+    text = _HOLIDAY_RE.sub(_kv, text)
+    text = _NPC_STORAGE_RE.sub(_kv, text)
+    return text
 
 
 def _template_arg(body: str, name: str) -> str:
@@ -288,7 +423,17 @@ def _parse_page_by_headings(page_name, raw_text, metadata, seen_ids):
             seen_ids.add(rec_id)
             documents.append(rec)
 
-        text = _rewrite_mob_templates(_preserve_template_names(str(section_wikicode)))
+        # Name-preservation FIRST: {{Item|X}} → "X" before the shell rewrites,
+        # so item lines inside Spoiler/Quote bodies keep their display names
+        # ({{Item|Uncrossing Oil}} x8 → "Uncrossing Oil x8", not bare " x8").
+        # Then shell/favor/event rewrites (they expect pre-preserved args —
+        # e.g. Quote renders "source=[[X]] says: …" and the wiki link strip
+        # happens in the final strip_code pass).
+        text = _rewrite_event_templates(
+            _rewrite_shell_templates(
+                _rewrite_mob_templates(_preserve_template_names(str(section_wikicode)))
+            )
+        )
         text = mwparserfromhell.parse(text).strip_code(normalize=False, collapse=True).strip()
 
         # Same stray-double-brace hygiene as the level-2 path, plus HTML
@@ -381,7 +526,11 @@ def _parse_page(page_name, raw_text, entity_info=None):
             seen_ids.add(rec_id)
             documents.append(rec)
 
-        text = _rewrite_mob_templates(_preserve_template_names(str(section)))
+        text = _rewrite_event_templates(
+            _rewrite_shell_templates(
+                _rewrite_mob_templates(_preserve_template_names(str(section)))
+            )
+        )
         text = mwparserfromhell.parse(text).strip_code(normalize=False, collapse=True).strip()
 
         # mwparserfromhell glitch: unclosed ''' before a == heading leaves

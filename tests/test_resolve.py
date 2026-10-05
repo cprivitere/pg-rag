@@ -227,3 +227,22 @@ def test_gap_fill_skips_expansion_without_parent_id(monkeypatch):
     pipeline.ask("what about Pooping", trace=trace, allow_gap_fill=True)
     assert e["called"] is False
     assert trace["resolve"] == {"rounds": 0, "expanded": 0}
+
+
+def test_npc_key_alias_resolves_wiki_verified_names():
+    """contract: summonable/event NPC keys missing from npcs.json resolve to
+    their wiki-verified display names instead of 'Unknown NPC (...)'.
+    Regression origin: astounding-ink-acquisition golden — Astounding Ink is
+    sold by the summonable Vendor Fox (26 sources entries), which rendered
+    'Vendor from Unknown NPC (NPC_VendorFox)'. Seasonal/event NPC keys
+    (Velkort Halloween) resolve too; truly unknown keys still fall back."""
+    from pgrag.documents.resolver import GameResolver
+
+    class EmptyDB:
+        def __init__(self):
+            self.tables = {"npcs": {}}
+
+    r = GameResolver(EmptyDB())
+    assert r.npc_name("NPC_VendorFox") == "Vendor Fox"
+    assert r.npc_name("NPC_Velkort_Halloween") == "Velkort"
+    assert r.npc_name("NPC_Nonexistent") == "Unknown NPC (NPC_Nonexistent)"

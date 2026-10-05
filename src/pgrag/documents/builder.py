@@ -484,6 +484,14 @@ def build_quest_documents(db):
                         reward_skills.append(skill_name)
                 elif r_t == "Recipe":
                     rewards_text.append(f"Recipe: {r.get('Recipe', '')}")
+                elif r_t == "Currency":
+                    # Renown-style currency rewards ("StatehelmRenown") were
+                    # skipped entirely — 698 quests award a currency, so the
+                    # reward section vanished for them (regression origin:
+                    # strom-farblood-favor golden; its quests award 25
+                    # Statehelm Renown each).
+                    currency = re.sub(r"([a-z])([A-Z])", r"\1 \2", str(r.get("Currency", "")))
+                    rewards_text.append(f"+{r.get('Amount', 0)} {currency}")
 
         for ri in quest.get("Rewards_Items", []):
             rewards_text.append(f"Item: {ri.get('Item', '')} x{ri.get('StackSize', 1)}")
@@ -626,6 +634,22 @@ Location: {area}"""
                     line += f" - Skills: {', '.join(skills)}"
                 service_lines.append(line)
             text += "\n\nServices:\n" + "\n".join(service_lines)
+
+        # Gift preferences (CDN "Preferences") were never rendered — "who
+        # likes X as a gift" / "what does <npc> like" had no doc-side facts
+        # (regression origin: strom-farblood-favor golden; Strom's only
+        # documented preference is Battle Chemistry Equipment).
+        preferences = npc.get("Preferences", [])
+        pref_lines = []
+        for pref in preferences:
+            if not isinstance(pref, dict):
+                continue
+            desire = pref.get("Desire", "")
+            pref_name = pref.get("Name", "")
+            if pref_name:
+                pref_lines.append(f"- {desire}: {pref_name}".strip(": "))
+        if pref_lines:
+            text += "\n\nGift preferences:\n" + "\n".join(pref_lines)
 
         documents.append(
             {

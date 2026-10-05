@@ -224,3 +224,54 @@ is already directly tested. The real, verified problems are **discoverability**
 (shared functions constrained by many files, with no map) and **process**
 (findings were being encoded without line-level verification). Both are fixed
 in `docs/TEST_CONTRACTS.md` and the rules files. No rearchitecting needed.
+
+## Addendum (2026-10-04) — template shells no longer delete wiki content
+
+`strom-farblood-favor` (new golden) exposed a **systemic wiki-builder gap**:
+`strip_code()` deletes the entire content of multi-arg template shells, so
+`{{Spoiler|label|body}}` and `{{Quote|source|body}}` vanished whole — favor
+rewards (175 NPC pages), quest reward spoilers (763 pages), preference
+reveals, NPC dialogue. `{{Favor|Tier}}` also vanished, leaving "At , Strom
+will reveal…" with a blank. ~953 pages lose content to this (surveyed).
+
+Fix (wiki_builder, both parse paths): balanced-brace unwrapping of
+Spoiler/Quote shells + `{{Favor|X}}` → "favor tier X" + event/storage
+templates kept as key = value lines, ordered after
+`_preserve_template_names` so `{{Item|X}}` inside bodies keeps display
+names. `CACHE_VERSION` 8→9 (cached docs would otherwise serve old text
+forever — mtime-equal pages never reparse), `DOCUMENTS_VERSION` bumped.
+
+Follow-on corpus gaps the same golden forced (builder, `DOCUMENTS_VERSION`
+bumped twice more): quest **Currency** rewards (`StatehelmRenown` etc.) were
+dropped entirely — 698 quests lost their Rewards section; now render
+camel-split ("+25 Statehelm Renown"). NPC **gift preferences** (CDN
+`Preferences`) were never rendered — 241 NPC docs now carry them
+("Like: Battle Chemistry Equipment"). Contract tests in
+`test_wiki_builder.py` (3 new) + `test_documents.py` (extended quest/NPC
+shape tests). `golden-one strom-farblood-favor` PASS (pipeline + agentic).
+
+`astounding-ink-acquisition` (new golden) exposed a resolver gap: sources
+data references **summonable/event NPCs absent from `npcs.json`** (138 keys
+total; `NPC_VendorFox` alone appears in 26 entries). These rendered as
+"Vendor from Unknown NPC (NPC_VendorFox)". Fix (`resolver.py`): verified
+alias table (`_NPC_KEY_ALIASES`) for the keys with wiki-verified display
+names (Vendor Fox, Pennoc, Khyrulek, Raim, Moxie, Grasuul, Riger, seasonal
+Velkort) — tested in `test_resolve.py`; truly unknown keys keep the Unknown
+fallback. `DOCUMENTS_VERSION` bumped again.
+
+`royal-jelly-gathering` (new golden) exposed a routing gap: "How do I
+gather/get X?" matched `ENTITY_PATTERNS` (`how do i get`) and built the item
+dossier — which is spend-side (uses/recipes/gifting). Acquisition facts live
+in NPC barter pages and `sources_items` docs; the dossier structurally cannot
+contain them (Royal Jelly's egg row lives on the *Midge* NPC page, linked to
+`item_1337` only through that NPC). `_gap_fill` doesn't rescue it: it fires
+only on explicit "I don't know", and the dossier answer is confident.
+
+Fix (classifier, `AGGREGATION_PATTERNS`): acquisition-of-an-item phrasing —
+`how/where do/can i get|gather|obtain|collect|farm` — routes **general**
+(hybrid recall + wiki expansion), mirroring the existing grow-planting rule
+("entity is the filter, not the answer"). Travel phrasing ("How do I get to
+Gazluk Keep?") keeps its route via a `get(?!\s+to)` lookahead. Asserted by
+`test_acquisition_of_item_routes_general` /
+`test_acquisition_does_not_hijack_travel_or_describe` (L4). Full L3+L4+L5
+regression set green; `golden-one royal-jelly-gathering` PASS.

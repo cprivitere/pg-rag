@@ -1,3 +1,18 @@
+# NPC keys referenced by sources data but missing a npcs.json record
+# (summonable/event NPCs, seasonal variants). Names verified against wiki
+# page titles; keys with no wiki page stay in the Unknown fallback.
+_NPC_KEY_ALIASES = {
+    "NPC_VendorFox": "Vendor Fox",
+    "NPC_Pennoc": "Pennoc",
+    "NPC_Khyrulek": "Khyrulek",
+    "NPC_Raim": "Raim",
+    "NPC_Moxie": "Moxie",
+    "NPC_Grasuul": "Grasuul",
+    "NPC_Riger": "Riger",
+    "NPC_Velkort_Halloween": "Velkort",
+}
+
+
 class GameResolver:
     def __init__(self, db):
         self.db = db
@@ -24,6 +39,12 @@ class GameResolver:
         npc = self.db.tables.get("npcs", {}).get(npc_key)
         if npc and npc.get("Name"):
             return npc["Name"]
+        # Summonable/event NPCs referenced by sources data but absent from
+        # the npcs table. Names verified against their wiki pages (regression
+        # origin: astounding-ink-acquisition golden — Astounding Ink is sold
+        # by the summonable Vendor Fox, which rendered as "Unknown NPC").
+        if npc_key in _NPC_KEY_ALIASES:
+            return _NPC_KEY_ALIASES[npc_key]
         return f"Unknown NPC ({npc_key})"
 
     def ability(self, ability_code):

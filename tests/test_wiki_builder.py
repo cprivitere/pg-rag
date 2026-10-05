@@ -8,6 +8,7 @@ build_wiki_documents emitting row, coverage, and narrative records.
 from pgrag.documents.wiki_builder import (
     _preserve_template_names,
     _rewrite_mob_templates,
+    _rewrite_shell_templates,
     build_wiki_documents,
 )
 
@@ -510,3 +511,53 @@ def test_mob_page_locations_doc_emits_from_location_template():
     assert base and "Creature type: Rodent." in base[0]["text"]
     # metadata linkage intact
     assert loc["metadata"]["parent_id"] == "wiki_Test Beast"
+
+
+def test_spoiler_body_preserved():
+    """contract: {{Spoiler|label|body}} content survives stripping. Prior to
+    this, strip_code deleted the whole shell — favor rewards (175 NPC pages),
+    quest reward spoilers (763 pages) and preference reveals were silently
+    dropped from the corpus (regression origin: strom-farblood-favor golden,
+    2026-10-04)."""
+    docs = build_wiki_documents(
+        FakeDB(
+            {
+                "Test NPC": """__NOTOC__
+== Favor ==
+At {{Favor|Comfortable}}, the NPC will reveal preferences.
+{{Spoiler|Reward at {{Favor|Friends}}:|
+{{Quote|source=[[Test NPC]]|Here, take this.}}
+:{{Item|Uncrossing Oil}} x8
+}}
+"""
+            }
+        )
+    )
+    fav = next(d for d in docs if d["id"].endswith("_Favor"))
+    assert "favor tier Comfortable" in fav["text"]
+    assert "Reward at favor tier Friends" in fav["text"]
+    assert "Here, take this." in fav["text"]
+    assert "Uncrossing Oil x8" in fav["text"]
+
+
+def test_quote_pairs_render_with_sources():
+    """contract: 2-arg {{Quote|source|body}} renders '<source> says: <body>';
+    4-arg renders both pairs; 1-arg renders the bare body. All were deleted
+    by strip_code before the shell rewrite existed."""
+    assert "[[Strom]] says: hi there" in _rewrite_shell_templates(
+        "{{Quote|source=[[Strom]]|hi there}}"
+    )
+    two = _rewrite_shell_templates("{{Quote|source=[[A]]|one|source=[[B]]|two}}")
+    assert "[[A]] says: one" in two and "[[B]] says: two" in two
+    assert _rewrite_shell_templates("{{Quote|just text}}") == "just text"
+
+
+def test_favor_template_renders_tier():
+    """contract: {{Favor|X}}/{{favor|X}} renders 'favor tier X' inline instead
+    of vanishing (which left 'At , Strom will reveal…' with a blank)."""
+    assert "favor tier Comfortable" in _rewrite_shell_templates(
+        "At {{Favor|Comfortable}}, he reveals."
+    )
+    assert "favor tier Neutral" in _rewrite_shell_templates(
+        "at '''{{favor|Neutral}}''' favor."
+    )

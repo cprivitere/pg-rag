@@ -384,6 +384,7 @@ def test_quest_document_includes_objectives_and_rewards():
             ],
             "Rewards": [
                 {"Skill": "Sword", "T": "SkillXp", "Xp": 100},
+                {"T": "Currency", "Currency": "StatehelmRenown", "Amount": 25},
             ],
             "Rewards_Items": [
                 {"Item": "Potato", "StackSize": 5},
@@ -397,6 +398,11 @@ def test_quest_document_includes_objectives_and_rewards():
     assert "Kill Skeletons" in doc["text"]
     assert "Sword" in doc["text"]
     assert "Potato" in doc["text"]
+    # contract: currency rewards render with a camel-split name ("Statehelm
+    # Renown"); they were previously dropped entirely, leaving 698 quests
+    # without a Rewards section (regression origin: strom-farblood-favor).
+    assert "Rewards:" in doc["text"]
+    assert "+25 Statehelm Renown" in doc["text"]
 
 
 def test_build_documents_includes_skills_and_quests():
@@ -472,6 +478,9 @@ def test_npc_document_shape():
             "Services": [
                 {"Type": "Training", "Favor": "Neutral", "Skills": ["Healing"]},
             ],
+            "Preferences": [
+                {"Desire": "Like", "Name": "Healing Equipment", "Pref": 1},
+            ],
         }
     }
     db = _make_db(npcs=npcs)
@@ -483,6 +492,12 @@ def test_npc_document_shape():
     assert "Rita" in doc["text"]
     assert "Serbule" in doc["text"]
     assert "Healing" in doc["text"]
+    # contract: gift preferences render into the NPC doc ("who likes X as a
+    # gift" had no doc-side facts before; regression origin:
+    # strom-farblood-favor golden — Strom's only preference is Battle
+    # Chemistry Equipment, living solely in CDN npcs.json Preferences).
+    assert "Gift preferences:" in doc["text"]
+    assert "Like: Healing Equipment" in doc["text"]
 
 
 def test_effect_document_shape():
