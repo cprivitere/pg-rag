@@ -8,5 +8,3 @@
 # Second model reviews each completed turn against .omp/WATCHDOG.md's
 # RAG-architecture checklist and can flag regressions (duplicate retrieval
 # paths, full-corpus rebuilds, metadata drift, missing regression tests).
-advisor:
-  enabled: true

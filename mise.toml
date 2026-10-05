@@ -3,9 +3,6 @@
 WEBUI_DIR = "F:/ProjectGorgon/mywebui"
 # Logs directory
 LOGS_DIR = "{{ config_root }}/logs"
-# Point PATH to your uv virtual environment's ROCm libraries
-_PATH = "F:/AI/amd-utils/.venv/Lib/site-packages/_rocm_sdk_libraries/bin"
-HSA_OVERRIDE_GFX_VERSION = "11.0.0"
 # Model identities — SINGLE SOURCE of truth. Every consumer reads these:
 #   - `mise debug-embed` / `debug-llm` (via {{ env.X }})
 #   - `.mise/tasks/*-start.ps1` (via $env:X)
