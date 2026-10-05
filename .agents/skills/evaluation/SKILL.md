@@ -26,13 +26,13 @@ Each file:
 
 - `facts` is a list of variant groups: the answer PASSES if ANY variant in
   each group appears (normalized substring) in the LLM answer.
-- 52 files exist today (21 entity / 19 general / 7 recipe / 5 comparison),
+- 59 files exist today (23 entity / 22 general / 7 recipe / 6 comparison),
   spanning recipes-by-ingredient, level-gated crafting, item acquisition/drops,
   ability lookups, comparisons, quest requirements, wiki lore, wiki how-to
-  assembly, and player-state audits. 6 store-only cases (player facts,
+  assembly, and player-state audits. 7 store-only cases (player facts,
   `"store": true`) count in this total but are excluded from the pipeline
   harnesses — they run via the agentic eval. Future additions should favor the
-  balanced categories (comparison is 5/52 today — the thinnest bucket).
+  balanced categories (comparison is 6/59 today — the thinnest bucket).
 
 ## Live-session goldens (answer-then-validate workflow)
 
@@ -83,6 +83,17 @@ documentation; it is the acceptance gate.
   produced the stall classifier. If you needed manual SQL gymnastics to answer
   a question the model will get again, that gymnastics belongs in a tool or
   doc-builder, not in the golden alone.
+- **Pricing questions have two layers; name both or the model answers the wrong one.**
+ `items.value` is the CDN base value; `stall_events` holds realized prices —
+ but only from the player's OWN stall (the store has no other players'
+ stalls, so no market sample exists). A bare "pricing" question answered
+ only from `items.value` is a routing miss: the loop's schema summary now
+ routes pricing/pricing-trend questions to stall_events and
+ `player_state section=stall` (added for the fat-woe-cutting-circuit
+ session) lists each realized sale individually — averages erase the price
+ spread and truncated windows must point aggregates back at sql_query. An
+ item with zero stall history (Woe Coin) is currency: fall back to
+ `sources`→`npcs`/`quests` for where it's spent (Sven the Bleeder barters).
 
 ## Running it
 
@@ -175,9 +186,9 @@ documentation; it is the acceptance gate.
 
 ## Planned direction
 
-- Golden set is **at 52 and growing** via live-session goldens (see the
+- Golden set is **at 59 and growing** via live-session goldens (see the
   workflow above) — new questions from play sessions are the primary intake;
-  comparison is the thinnest bucket (5/52). Beyond session intake, capture a
+  comparison is the thinnest bucket (6/59). Beyond session intake, capture a
   *named regression case*,
   e.g.:
   - `grow-field-mushrooms` ("How do I grow Field Mushrooms?") — fails before
