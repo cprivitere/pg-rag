@@ -309,7 +309,8 @@ test (prove the source is fine) or recording a deliberate contract change
   `test_glogger_ingest.py`, `test_preflight_sync.py`
 - **Source**: `src/pgrag/agentic/` (`store.py`, `session.py`, `tools.py`,
   `loop.py`, `glogger.py`), `scripts/build_sqlstore.py`,
-  `scripts/agentic_chat.py`, `scripts/agentic_tune.py`
+  `scripts/agentic_chat.py`, `scripts/agentic_tune.py`,
+  `scripts/publish_store.py`
 - **Contracts**: `build_store` is idempotent (INSERT OR REPLACE + per-file
   manifest mtimes in `data/sqlite_state.json`) and builds from tmp fixture
   sources in tests (never real `data/`); ingredients without `ItemCode`
@@ -339,6 +340,23 @@ test (prove the source is fine) or recording a deliberate contract change
   caps each tool-result payload at 12000 chars, and forces a final no-tools
   answer (`tools=None`) once the round budget is exhausted. Tests
   monkeypatch `loop._post` — never a live LLM.
+  `loop._post` reads its transport config at CALL time (import-time constants
+  would be unreachable for the molab sandbox): `PGRAG_LLM_URL` overrides the
+  local `:8080` endpoint, `PGRAG_LLM_MODEL` adds the `model` field (vLLM
+  requires it; llama.cpp does not), and `PGRAG_LLM_NATIVE_TOOLS=0` drops the
+  `tools=` array for a sidecar started without
+  `--enable-auto-tool-choice` (vLLM rejects the payload otherwise); the
+  fenced ```` ```tool ```` text protocol then carries the loop.
+  `scripts/publish_store.py` (`mise upload-store`) publishes the store to the
+  PRIVATE bucket `Nubula/paddock-private` as `VACUUM INTO` snapshot +
+  manifest (sizes, sha256, row counts) + a reproducible `git archive` of
+  `src/`+`scripts/` from the WORKING TREE (temp index + fixed-identity temp
+  commit) — it refuses to run against the public bucket and asserts
+  `bucket_info(...).private` before the first byte. The molab notebook
+  consumes it (cells `store_access`/`store_snapshot`/`pgrag_src`/
+  `sidecar_tools_probe`, mode selector in `chat`); that source ships into a
+  Python 3.13 sandbox, so `src/pgrag/**` must stay 3.13-parseable — PEP 758
+  `except A, B:` (3.14-only) breaks the loop's import closure.
   `scripts/agentic_tune.py` sweeps (model, temperature, seed, reasoning
   budget, max-rounds) into `data/agentic_tune/<run-id>.json`
   (skip-if-exists, `--force` re-runs; `--compare` tabulates). Parity: the

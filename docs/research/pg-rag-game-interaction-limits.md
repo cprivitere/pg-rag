@@ -43,7 +43,7 @@ third-party tools. Everything else about the game is off-limits.
 | §5 bullet 6 | "Use multiple accounts simultaneously to gain an unfair gameplay advantage" | Multi-client **observation** is fine (session ingestion may read several own-client logs); multi-**play** coordination never. |
 | §5 bullet 5 | "Circumvent, disable, or interfere with technical protection measures, access controls, or security features" | Never patch/bypass/avoid ACTk, never write game files, never block the client's own telemetry or updates, never probe game servers outside the running client. |
 | TOS §8 | "unauthorized overlays that affect gameplay … any tool intended to alter, automate, manipulate, intercept, or gain unfair advantage" | pg-rag renders only in its own windows/pages. Never an in-game HUD, never input automation. Features stay informational: only data the user's own client already rendered or logged. |
-| TOS §11 + Conduct §4.B | privacy: "sharing another person's private or personally identifying information"; "attempting to obtain private information through … technical abuse, or unauthorized access" | The agentic store keeps only what the user's own client displayed publicly (owner names, prices, chat the user saw). Never de-anonymize cross-character identities, never export other players' activity beyond what the user's own session rendered, never aggregate other players' data across users. Store-only goldens ship as *questions only* — the play-history facts stay local to `data/sqlite_gorgon.db`. |
+| TOS §11 + Conduct §4.B | privacy: "sharing another person's private or personally identifying information"; "attempting to obtain private information through … technical abuse, or unauthorized access" | The agentic store keeps only what the user's own client displayed publicly (owner names, prices, chat the user saw). Never de-anonymize cross-character identities, never export other players' activity beyond what the user's own session rendered, never aggregate other players' data across users. Store-only goldens ship as *questions only*; the play-history facts stay on the user's own machines, except inside the user's own **private** HF bucket (`Nubula/paddock-private` — never public, never aggregated across users, never shared), which only the user's own molab sandbox reads with the user's own token (`mise upload-store`). |
 | Conduct §4.E | "facilitate fraud, scams, deceptive practices" | Play-history observations are timestamped "as seen at" — never presented as authoritative/verified market truth. |
 | TOS §9 | live service, anything can change anytime | Shipped features tolerate schema changes overnight; never assume old-version CDN files exist (only 3–4 versions persist). |
 | CDN terms | attribution + restriction rights | Attribution required wherever CDN-derived data ships publicly (About/help surfaces). Elder Game may restrict usage by individual/purpose; comply immediately if asked. |
@@ -103,7 +103,10 @@ purpose.
 3. **Curated doc expansion** — deterministic template docs over CDN+wiki
    (existing curator pattern).
 4. **Chat surfaces for the tool loop** — Gradio tab, glogger tab, molab
-   notebook pairing: all read the same store/CDN sources.
+   notebook pairing: all read the same store/CDN sources. (The molab
+   notebook now ships this: its mode selector runs `run_loop` against a
+   snapshot of the store published to the owner's private bucket —
+   `mise upload-store`; corpus chat remains the other mode.)
 
 Explicitly off this list (rejected, do not propose): packet-level anything,
 protocol analysis of the game's network traffic, binary/memory analysis of

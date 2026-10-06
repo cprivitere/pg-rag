@@ -59,7 +59,7 @@ notice as a user-role message.
 - `data/` (gitignored) — `cdn/`, `wiki/` (+`curated/`, `.meta.json`), `derived/` (`documents_version.json`), `documents.json`, `chroma/`, `golden/`, `retrieval_traces/`, eval records (`embed_eval_*.log`, `embed_vram.json`, `bakeoff_*.json`). Service logs live at project-root `logs/` (`embed.log`, `llm.log`, `rerank.log`, `chat.log`, and `webui.log` when run).
 - `.omp/` — oh-my-pi config: `RULES.md`, `config.yml`, `WATCHDOG.md`.
 - `.agents/skills/` — all agent skills, discoverable by any agent harness: `pg-rag`, `pg-data`, `retrieval`, `evaluation`, `testing` (pipeline/workflow skills) + `molab-notebook` (pairing on the molab-hosted marimo chat notebook). Skills live here only — commit changes here, never re-create `.omp/skills/` copies.
-- `notebooks/molab-mirror/` — the marimo notebook that runs the PG-RAG chat on molab (marimo's hosted notebook service). Platform mechanics (sandbox lifecycle, GPU attach, torch repair, HF bucket, auto-start limits): `docs/MOLAB_OPS.md`. Pairing/protocol: the `molab-notebook` skill.
+- `notebooks/molab-mirror/` — the marimo notebook that runs the PG-RAG chat on molab (marimo's hosted notebook service). Two modes: single-shot **corpus chat** over the public `hf://buckets/Nubula/paddock` corpus, and the production **agentic tool loop** (`pgrag.agentic.loop.run_loop`) against a snapshot of `data/sqlite_gorgon.db` published to the private `hf://buckets/Nubula/paddock-private` by `mise upload-store` (store + manifest + `src/scripts` tarball; the sandbox kernel is Python 3.13, so the loop source must stay 3.13-parseable — no PEP 758 `except A, B:`). Platform mechanics (sandbox lifecycle, GPU attach, torch repair, HF bucket, auto-start limits): `docs/MOLAB_OPS.md`. Pairing/protocol: the `molab-notebook` skill.
 
 ## Development Commands
 
@@ -75,6 +75,7 @@ uv run pgrag build-index --source cdn|wiki|computed|curated   # partial rebuild 
 mise sync-wiki / sync-cdn / sync   # build-documents + build-index in one shot (aliases syw/syc/sy)
 mise generate-docs                 # bare idempotent documents rebuild (alias docs)
 mise upload-docs                   # publish data/documents.json -> hf://buckets/Nubula/paddock (HF_TOKEN write; verifies remote size; alias up)
+mise upload-store                  # publish data/sqlite_gorgon.db -> the PRIVATE hf://buckets/Nubula/paddock-private for the molab tool loop (VACUUM INTO snapshot + manifest + src/scripts tarball; asserts privacy before upload; alias us)
 mise golden                        # golden eval (needs :8080 + :8081)
 mise golden-short                  # quick tier (~3-5 min; alias gds)
 mise golden-one -- fireball-ability   # rerun named golden case(s) fast (alias go; comma-separate ids)

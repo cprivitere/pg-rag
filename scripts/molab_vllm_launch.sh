@@ -26,11 +26,42 @@ export CUDA_HOME=/tmp/vllm-venv/lib/python3.13/site-packages/nvidia/cu13
 export PATH="$CUDA_HOME/bin:/tmp/vllm-venv/bin:/usr/local/bin:/usr/bin:/bin"
 export NVCC_PREPEND_FLAGS="-DCCCL_DISABLE_CTK_COMPATIBILITY_CHECK=1"
 
+# 4) Tool-call support for the agentic tool loop. vLLM rejects a `tools=`
+#    payload unless it was started with --enable-auto-tool-choice AND a
+#    matching --tool-call-parser, so the parser name is discovered from the
+#    installed vLLM build instead of guessed (0.30.0's parser roster moves
+#    between releases). Preference: qwen3* -> qwen* -> hermes. No parser found
+#    => serve without tool flags; the loop then uses its fenced ```tool text
+#    protocol (PGRAG_LLM_NATIVE_TOOLS=0, set by the notebook's probe cell).
+TOOL_ARGS=()
+PARSER=$(/tmp/vllm-venv/bin/python - <<'PY' 2>/tmp/vllm-parsers.err
+from vllm.entrypoints.openai.tool_parsers import ToolParserManager as T
+
+names = sorted(T.tool_parsers)
+for prefix in ("qwen3", "qwen", "hermes"):
+    for name in names:
+        if prefix in name:
+            print(name)
+            raise SystemExit
+PY
+)
+if [ -n "$PARSER" ]; then
+  TOOL_ARGS=(--enable-auto-tool-choice --tool-call-parser "$PARSER")
+  echo "TOOL_PARSER $PARSER"
+else
+  echo "NO_TOOL_PARSER: serving without tool flags; tool loop must use the fenced text protocol"
+fi
+
+# --max-model-len 24576 (was 8192): the loop's system prompt (rules + schema
+# summary + tool contract + BM25 seed) plus up to 12k chars of tool results
+# overflows 8192 tokens. At --gpu-memory-utilization 0.40 the KV pool is
+# ~38k tokens, so 24576 fits a single session.
 nohup /tmp/vllm-venv/bin/vllm serve Qwen/Qwen3.8-27B-FP8 \
   --served-model-name pg-assistant \
-  --max-model-len 8192 \
+  --max-model-len 24576 \
   --max-num-seqs 8 \
   --gpu-memory-utilization 0.40 \
+  "${TOOL_ARGS[@]}" \
   --port 8000 \
   --speculative-config '{"method":"mtp","num_speculative_tokens":3}' > /tmp/vllm.log 2>&1 &
 echo "LAUNCHED $!"

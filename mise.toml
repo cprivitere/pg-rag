@@ -137,6 +137,11 @@ description = "Build data/sqlite_gorgon.db (CDN + wiki + session + glogger prima
 run = "uv run python scripts/build_sqlstore.py"
 alias = "sq"
 
+[tasks."upload-store"]
+description = "Publish data/sqlite_gorgon.db to the PRIVATE HF bucket (Nubula/paddock-private) for the molab tool loop; run `mise sql-store` first to refresh it"
+run = "uv run python scripts/publish_store.py"
+alias = "us"
+
 [tasks."agentic-chat"]
 description = "Agentic CLI chat over the SQLite store (tool loop; needs only LLM :8080)"
 run = "uv run python scripts/agentic_chat.py"

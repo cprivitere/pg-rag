@@ -263,9 +263,12 @@ def _corpus_search(store_path: str, args: dict, corpus: str = "full") -> str:
     query = (args.get("query") or "").strip()
     if not query:
         return "corpus_search error: missing required argument 'query'."
+    # Parenthesized except on purpose: this module ships as source into the molab
+    # sandbox (Python 3.13), where bare `except A, B:` (PEP 758, 3.14-only) is a
+    # syntax error and the whole agentic loop becomes unimportable.
     try:
         k = int(args.get("k") or 10)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         k = 10
     k = max(1, min(k, 20))
     if corpus == "tool":
@@ -617,7 +620,7 @@ def execute_tool(
     """Run one tool call and return LLM-facing markdown (errors are strings)."""
     try:
         args = dict(args or {})
-    except TypeError, ValueError:
+    except (TypeError, ValueError):  # parenthesized for the 3.13 sandbox (see _corpus_search)
         return f"Tool '{name}' error: args must be an object."
     if name == "sql_query":
         return _sql_query(store_path, args)

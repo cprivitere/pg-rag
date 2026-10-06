@@ -3,7 +3,9 @@
 Operational knowledge for `notebooks/molab-mirror/notebook.py` (the
 PG-RAG chat on molab) that doesn't fit the pairing protocol in the
 `molab-notebook` skill. Read this before touching the notebook's
-platform-coupled parts: `setup`, `rag_index` cache paths, model identity.
+platform-coupled parts: `setup`, `rag_index` cache paths, the
+`store_access`/`store_snapshot`/`pgrag_src` private-bucket cells,
+`model_load` / model identity.
 
 ## What molab is
 
@@ -84,10 +86,15 @@ override it (security policy). Consequences:
 - Historical: `Nubula/paddock/training/` holds unsloth JSONLs from the
   retired distillation route (removed in `4f95adc`). Untouched, but
   nothing in the current pipeline reads them.
-- Access from the sandbox is anonymous (no HF_TOKEN in molab sandboxes);
-  the bucket is public-read. Writes come only from a repo checkout via
-  `mise upload-docs` (needs `HF_TOKEN` with write scope). The corpus is
-  published from this repo — see the corpus-variant note below.
+- Access from the sandbox is **token-based, not anonymous-only**: molab
+  injects the account's `HF_TOKEN` into `/marimo/.env` (the same token
+  `scripts/molab_vllm_launch.sh` reads to download the FP8 checkpoint),
+  and `huggingface_hub` picks it up for reads. The corpus bucket is
+  public-read, so an anonymous client can still read it; the private
+  store bucket (below) needs that token. Writes come only from a repo
+  checkout via `mise upload-docs` / `mise upload-store` (needs
+  `HF_TOKEN` with write scope). The corpus is published from this repo
+  — see the corpus-variant note below.
 
 ## The notebook ↔ repo contract
 
@@ -305,9 +312,10 @@ molab-specific pitfalls baked into the script (all hit live):
 Serving `Qwen/Qwen3.8-27B-FP8` (30.9 GB, official, verified ungated).
 First boot after sandbox recreation takes ~3–4 min (weights 4 s, compile
 ~70 s, CUDA-graph capture ~90 s); subsequent boots reuse
-`/home/marimo/.cache/vllm` and are ~40 s. `--max-model-len 8192` matches
-the notebook's 4,096-char retrieval budget with headroom; raise it only
-with a real need (KV pool is sized from it at 0.85 util).
+`/home/marimo/.cache/vllm` and are ~40 s. `--max-model-len` is now **24576**
+(raised from the original 8192, which was sized for the single-shot
+4096-char retrieval budget): the agentic tool loop's prompt + tool results
+need the headroom — see "Tool-loop sidecar config" below.
 
 The notebook keeps the bf16 fallback: if the sidecar is down (fresh
 sandbox before the script runs, or a crash), chat still works at the old
@@ -321,6 +329,77 @@ full blocking decode. The local bf16 fallback still yields one chunk
 unchanged. Cleanup detail: the server path never produces the
 `answer:`/`response:` prefix, so no post-strip there; `_local_generate`
 keeps its regex strip.
+
+## Private store bucket (agentic tool loop)
+
+`hf://buckets/Nubula/paddock-private/` holds the agentic store: the CDN
+tables + wiki pages **plus the owner's own play history** (chat logs,
+stall sales, kills, gifts/favor, recipe completions). It is a separate
+bucket from the corpus precisely because it is not shareable — the
+notebook's `store_access` cell asserts the manifest's bucket id, and
+`scripts/publish_store.py` refuses to run at all if the bucket constant
+equals the public corpus bucket.
+
+Three objects under `store/`:
+
+| object | what | size |
+|---|---|---|
+| `sqlite_gorgon.db` | `VACUUM INTO` snapshot of `data/sqlite_gorgon.db` (the live db is WAL; a plain copy can serve a pre-checkpoint state) | ~938 MiB |
+| `manifest.json` | `published_at`, `source_mtime`, snapshot `bytes` + `sha256`, tarball `bytes` + `sha256` + `git_head` + `worktree_dirty`, and per-table row counts | ~1.8 KB |
+| `pgrag-src.tar.gz` | `git archive` of `src/` + `scripts/` (via a throwaway index, so it carries **uncommitted** work — the sandbox must import the source that was verified locally; the diff that made the loop 3.13-importable was uncommitted when first published) | ~0.4 MB |
+
+Publishing (`mise upload-store`, alias `us`; run `mise sql-store` first):
+
+1. Auth probe (`HfApi.whoami`; `no HF write auth: …` if the token is bad).
+2. Snapshot + row counts + worktree tarball.
+3. `create_bucket(..., private=True, exist_ok=True)` → `bucket_info` → if
+   still public, `update_bucket_settings(private=True)` → re-read; uploads
+   nothing unless `private is True` (printed as `bucket private: True`).
+4. Upload, then verify each object's **remote size == local size** and
+   print the pair; temps are deleted only after all three verify.
+
+Sandbox side (`store_snapshot` cell): download to `data/sqlite_gorgon.db.part`
+while hashing → assert size **and** sha256 against the manifest → `os.replace`
+→ `PRAGMA quick_check` + row-count parity (`wiki_pages`, `chat_events`,
+`stall_events`). A mismatch deletes the partial file instead of leaving it
+where `tools.py` would read it. Size-cached: a re-run skips the download.
+
+Disk: snapshot + tarball + the corpus and tool-corpus files coexist in the
+sandbox workspace (~80 MB tool corpus). If the workspace reports out of space,
+point `STORE_PATH` in the `store_snapshot` cell at `/tmp/…` — `run_loop`
+takes an explicit `store_path`.
+
+Verifying privacy from outside: an anonymous client must fail
+(`HfFileSystem(token=False).info('hf://buckets/Nubula/paddock-private/store/manifest.json')`
+→ 401) while the public bucket still reads. Note the `hf://buckets/<org>/<name>/…`
+form is required — bare `hf://<org>/<name>/…` resolves as a *model repo* and
+404s.
+
+### Tool-loop sidecar config (2026-10-06)
+
+The serve line in `scripts/molab_vllm_launch.sh` changed for tool-loop mode:
+
+- `--max-model-len 24576` (was 8192): the loop's system prompt (rules +
+  `_SCHEMA_SUMMARY` + tool contract + BM25 seed ~9k chars) plus up to
+  `_RESULT_CAP=12_000` chars of tool results overflows 8192. KV pool at
+  `--gpu-memory-utilization 0.40` is ~38k tokens, so 24576 fits one session.
+- `--enable-auto-tool-choice --tool-call-parser <name>`: vLLM **rejects** a
+  `tools=` payload without both. The script discovers `<name>` in-sandbox from
+  `ToolParserManager.tool_parsers` (preference `qwen3*` → `qwen*` → `hermes`) and
+  prints `TOOL_PARSER <name>` / `NO_TOOL_PARSER`; nothing is guessed. If no
+  parser matches, the notebook's `sidecar_tools_probe` cell falls back to the
+  loop's fenced ```` ```tool ```` text protocol (`PGRAG_LLM_NATIVE_TOOLS=0`).
+- The loop reaches the sidecar through `PGRAG_LLM_URL` / `PGRAG_LLM_MODEL` /
+  `PGRAG_LLM_NATIVE_TOOLS` (read at `loop._post` call time); the chat cell sets
+  them, so the local llama.cpp default at `:8080` is untouched.
+- **Status**: the flags above are exercised locally (loop against the published
+  snapshot on Python 3.13, 2 tool rounds, real `sql_query`/`player_state`
+  calls). Sandbox-side numbers — which parser name the 0.30.0 sidecar reports
+  (`TOOL_PARSER …`) and the tool-loop round count/latency at 24576 context —
+  are **not yet measured**: they land on the first fresh-sandbox run-all
+  (notebook cells `sidecar_tools_probe` → `chat`, mode `tool loop`). Record
+  them here, including a fenced-protocol fallback trace if that is what the
+  probe reports.
 
 ## Accessing the notebook from an agent
 

@@ -36,8 +36,17 @@
   make a custom build of glogger that has this as a tab inside of it
   - first class access to glogger's data
 
-- Figure out a way to publish the sqlite data privately (or do the same trick we do
-  with the private version of the full corpus) and do the inference/tool loops on a
-  molab notebook
-  - `docs/MOLAB_OPS.md` covers only the public `documents.json` bucket today, and
-    `notebooks/molab-mirror/notebook.py` ships no sqlite/tool-loop code.
+- Publish the sqlite store privately and run the tool loop on a molab notebook
+  - Done: `mise upload-store` (`scripts/publish_store.py`) publishes a `VACUUM INTO`
+    snapshot + manifest (sizes, sha256, row counts) + a reproducible `src`/`scripts`
+    tarball of the worktree to the **private** `hf://buckets/Nubula/paddock-private`;
+    it refuses the public corpus bucket and asserts `bucket_info(...).private` before
+    the first byte. The notebook gained `store_access` / `store_snapshot` / `pgrag_src`
+    / `sidecar_tools_probe` cells plus a `corpus chat` / `tool loop` mode selector, and
+    `loop._post` reads `PGRAG_LLM_URL` / `PGRAG_LLM_MODEL` / `PGRAG_LLM_NATIVE_TOOLS`
+    at call time; the sidecar now boots with `--max-model-len 24576` and a
+    discovered tool-call parser. See `docs/MOLAB_OPS.md` → "Private store bucket".
+  - Remaining: the first fresh-sandbox run-all — record the parser the sidecar
+    reports (`TOOL_PARSER …`) and the tool-loop round count/latency there. The path
+    itself is verified locally (published tarball + snapshot run under Python 3.13,
+    2 tool rounds), but the sandbox numbers are still unmeasured.

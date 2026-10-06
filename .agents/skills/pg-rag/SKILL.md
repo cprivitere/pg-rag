@@ -62,7 +62,9 @@ re-retrieves (`_AGENTIC_MAX_ROUNDS = 1`, bounded sibling expansion via
 wiki pages, live play-session data) + an LLM tool loop that queries it
 (`sql_query`, `find_entities`, `get_page`, `corpus_search`, `player_state`),
 CLI-only via `scripts/agentic_chat.py` (`mise sql-store` / `agentic-chat` /
-`agentic-eval`). Needs only the LLM (:8080); never touches documents.json,
-Chroma, or the golden pipeline. `--corpus tool` swaps corpus_search's BM25
-source to the Phase B trimmed variant. Contracts: `docs/TEST_CONTRACTS.md`
-layer "L-agentic".
+`agentic-eval`) — plus the molab notebook's tool-loop mode, which downloads a
+snapshot the private bucket published by `mise upload-store` and imports the
+loop source from the same bucket. Needs only the LLM (:8080); never touches
+documents.json, Chroma, or the golden pipeline. `--corpus tool` swaps
+corpus_search's BM25 source to the Phase B trimmed variant. Contracts:
+`docs/TEST_CONTRACTS.md` layer "L-agentic".

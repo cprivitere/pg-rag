@@ -1,7 +1,9 @@
 """Contracts pgrag.agentic.loop.run_loop round protocol (monkeypatched
 _post — never a live LLM): no-tool single generation, native tool_calls
 round, fenced ```tool text-protocol round, and the max_rounds cap forcing
-a final no-tools answer."""
+a final no-tools answer. Also contracts the HTTP payload shape of _post
+itself: PGRAG_LLM_URL / PGRAG_LLM_MODEL / PGRAG_LLM_NATIVE_TOOLS are read
+at call time (the molab sandbox points the loop at its vLLM sidecar)."""
 
 import json
 
@@ -247,3 +249,71 @@ def test_seed_context_embedded_in_system(tiny_store, monkeypatch):
 
     monkeypatch.setattr(loop, "_post", fake)
     loop.run_loop("Empty Bottle?", store_path=str(tiny_store))
+
+
+class _FakeResponse:
+    """Minimal requests.Response stand-in: _post only calls these two."""
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"choices": [{"message": {"role": "assistant", "content": "final answer"}}]}
+
+
+def _capture_posts(monkeypatch):
+    """Patch the HTTP call itself (not _post) and record (url, payload)."""
+    captured = []
+
+    def fake_post(url, json=None, timeout=None):
+        captured.append((url, json))
+        return _FakeResponse()
+
+    monkeypatch.setattr("pgrag.agentic.loop.requests.post", fake_post)
+    return captured
+
+
+def _clear_llm_env(monkeypatch):
+    for name in ("PGRAG_LLM_URL", "PGRAG_LLM_MODEL", "PGRAG_LLM_NATIVE_TOOLS"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_post_default_payload_sends_tools_and_no_model(tiny_store, monkeypatch):
+    """Default: local llama.cpp endpoint, no model field, native tools sent."""
+    _clear_llm_env(monkeypatch)
+    captured = _capture_posts(monkeypatch)
+    result = loop.run_loop("Empty Bottle?", store_path=str(tiny_store))
+    assert result["answer"] == "final answer"
+    url, payload = captured[0]
+    assert url == loop.LLM_URL
+    assert "model" not in payload
+    assert payload["tools"], "first turn must carry the tools= array"
+
+
+def test_post_model_env_adds_model_field(tiny_store, monkeypatch):
+    _clear_llm_env(monkeypatch)
+    monkeypatch.setenv("PGRAG_LLM_MODEL", "pg-assistant")
+    captured = _capture_posts(monkeypatch)
+    loop.run_loop("Empty Bottle?", store_path=str(tiny_store))
+    assert captured[0][1]["model"] == "pg-assistant"
+
+
+def test_post_native_tools_env_zero_omits_tools(tiny_store, monkeypatch):
+    """A vLLM sidecar without --enable-auto-tool-choice rejects a tools
+    payload, so PGRAG_LLM_NATIVE_TOOLS=0 must drop it from every request."""
+    _clear_llm_env(monkeypatch)
+    monkeypatch.setenv("PGRAG_LLM_NATIVE_TOOLS", "0")
+    captured = _capture_posts(monkeypatch)
+    result = loop.run_loop("Empty Bottle?", store_path=str(tiny_store))
+    assert result["answer"] == "final answer"
+    assert captured
+    assert all("tools" not in payload for _, payload in captured)
+
+
+def test_post_url_env_overrides_endpoint(tiny_store, monkeypatch):
+    _clear_llm_env(monkeypatch)
+    sidecar = "http://127.0.0.1:8000/v1/chat/completions"
+    monkeypatch.setenv("PGRAG_LLM_URL", sidecar)
+    captured = _capture_posts(monkeypatch)
+    loop.run_loop("Empty Bottle?", store_path=str(tiny_store))
+    assert captured[0][0] == sidecar

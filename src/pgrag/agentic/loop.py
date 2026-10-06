@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import time
 
@@ -436,6 +437,13 @@ def _tools_api() -> list[dict]:
 def _post(
     messages: list[dict], tools: list[dict] | None, generation: dict, max_tokens: int
 ) -> dict:
+    # Endpoint/model/protocol are read at call time (not import time) so the
+    # molab sandbox can point the loop at its vLLM sidecar and turn the native
+    # tools= parameter off when the server was not started with
+    # --enable-auto-tool-choice (vLLM rejects a tools payload otherwise).
+    url = os.environ.get("PGRAG_LLM_URL") or LLM_URL
+    model = os.environ.get("PGRAG_LLM_MODEL")
+    native_tools = os.environ.get("PGRAG_LLM_NATIVE_TOOLS", "1") != "0"
     payload = {
         "messages": messages,
         "temperature": generation.get("temperature", 0),
@@ -444,17 +452,17 @@ def _post(
     }
     if generation.get("seed") is not None:
         payload["seed"] = generation["seed"]
-    if tools:
+    if model:
+        payload["model"] = model
+    if tools and native_tools:
         payload["tools"] = tools
     try:
-        response = requests.post(LLM_URL, json=payload, timeout=_TIMEOUT)
+        response = requests.post(url, json=payload, timeout=_TIMEOUT)
         response.raise_for_status()
     except requests.exceptions.ConnectionError as exc:
-        raise LLMServerError(
-            f"Cannot connect to LLM server at {LLM_URL}. Ensure llama.cpp is running on port 8080."
-        ) from exc
+        raise LLMServerError(f"Cannot connect to LLM server at {url}.") from exc
     except requests.exceptions.Timeout as exc:
-        raise LLMServerError(f"LLM server at {LLM_URL} timed out after {_TIMEOUT}s.") from exc
+        raise LLMServerError(f"LLM server at {url} timed out after {_TIMEOUT}s.") from exc
     return response.json()
 
 
