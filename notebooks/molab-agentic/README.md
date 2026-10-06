@@ -23,7 +23,8 @@ Two things make it much smaller than `notebooks/molab-mirror`:
 | cell | does |
 |---|---|
 | `imports` | stdlib + `HfFileSystem` only |
-| `store_access` | resolves an HF token (sandbox account token → password widget) and validates the private store manifest |
+| `store_token` | resolves an HF token for the private bucket (sandbox `/marimo/.env` token first, password widget overrides) and owns that widget — its own cell because marimo forbids reading a UIElement's value in the cell that created it |
+| `store_access` | reads the typed token (or the sandbox one) and validates the private store manifest |
 | `store_snapshot` | downloads `data/sqlite_gorgon.db` (938 MiB) from `hf://buckets/Nubula/paddock-private`, verifies size + sha256 from the manifest before promoting it, then `PRAGMA quick_check` + row-count parity; cache keyed on size + last-verified sha |
 | `corpus_docs` | fetches the public `documents.json` (185 MB) — `corpus_search`'s tool corpus is built from it |
 | `pgrag_src` | downloads + sha256-checks `pgrag-src.tar.gz`, extracts it, imports `pgrag.agentic.loop` off `pg-rag-src/src`, builds `data/tool_documents.json` + `tool_bm25.pkl` with the tarball's own `scripts/build_tool_corpus.py` |

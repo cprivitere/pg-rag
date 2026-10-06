@@ -22,26 +22,32 @@ there, so `src/` + `scripts/` arrive as a tarball (see `mise upload-store`).
 3. `rag_index` — downloads `documents.json` (~185 MB) from
    `hf://buckets/Nubula/paddock`, caches it to `data/documents.json`, builds a
    lexical (BM25-style, type-prior-weighted) index.
-4. `store_access` — resolves an HF token (sandbox account token first, password
-   widget as fallback), reads and checks the private store manifest.
-5. `store_snapshot` — downloads `data/sqlite_gorgon.db` from
+4. `store_token` — resolves an HF token for the private bucket (sandbox account
+   token from `/marimo/.env` first, password widget as override) and owns that
+   widget. Its own cell because marimo forbids reading a UIElement's value in the
+   cell that created it.
+5. `store_access` — reads the typed token (or the sandbox one), reads and checks
+   the private store manifest.
+6. `store_snapshot` — downloads `data/sqlite_gorgon.db` from
    `hf://buckets/Nubula/paddock-private` (~938 MiB), verifies size + sha256 from
    the manifest before promoting it, then `PRAGMA quick_check` plus row-count
    parity against `manifest["tables"]`. Size-cached: re-runs skip the download.
-6. `pgrag_src` — downloads + sha256-checks `pgrag-src.tar.gz`, extracts it to
+7. `pgrag_src` — downloads + sha256-checks `pgrag-src.tar.gz`, extracts it to
    `pg-rag-src/`, imports `pgrag.agentic.loop` off `pg-rag-src/src`, and builds
    the tool-corpus BM25 (`data/tool_documents.json` + `tool_bm25.pkl`) by running
    the tarball's own `scripts/build_tool_corpus.py`.
-7. `model_load` — probes the vLLM sidecar at `:8000`; if it is not running,
+8. `model_load` — probes the vLLM sidecar at `:8000`; if it is not running,
    loads `unsloth/Qwen3.8-27B-unsloth-bnb-4bit` (NF4) in-process.
-8. `sidecar_tools_probe` — sends one minimal `tools=` request. vLLM accepts it
+9. `sidecar_tools_probe` — sends one minimal `tools=` request. vLLM accepts it
    only when started with `--enable-auto-tool-choice` + `--tool-call-parser`;
    the probe's answer picks the protocol (`PGRAG_LLM_NATIVE_TOOLS=1` for native
    `tool_calls`, `0` for the fenced ```` ```tool ```` text protocol).
-9. `chat` — `mo.ui.radio` mode selector + `mo.ui.chat`. Tool-loop mode sets
-   `PGRAG_LLM_URL` / `PGRAG_LLM_MODEL` / `PGRAG_LLM_NATIVE_TOOLS` from the
-   cells above (read at call time by `loop._post`) and calls `run_loop` with
-   `corpus="tool"`.
+10. `mode_select` — the `corpus chat` / `tool loop` radio, in its own cell for the
+    same UIElement rule (the chat callback reads its value).
+11. `chat` — `mo.ui.chat` wired to the selected mode. Tool-loop mode sets
+    `PGRAG_LLM_URL` / `PGRAG_LLM_MODEL` / `PGRAG_LLM_NATIVE_TOOLS` from the
+    cells above (read at call time by `loop._post`) and calls `run_loop` with
+    `corpus="tool"`.
 
 Store cells degrade instead of failing: no token/private-bucket access → they
 print `[store] unavailable` / `[src] skipped`, tool-loop mode says what is

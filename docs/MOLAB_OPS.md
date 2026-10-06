@@ -112,16 +112,24 @@ override it (security policy). Consequences:
   to the repo. Never assume an edited cell survives a sandbox recreate.
 - molab adds `marimo[mcp]>=0.24.0` + its own pinned deps to the PEP 723
   deps block on save; don't hand-craft the header, let the sandbox write it.
+- **Widget values must be read in a DIFFERENT cell than the one that created
+  them.** marimo raises `RuntimeError: Accessing the value of a UIElement in the
+  cell that created it is not allowed` (seen live on `store_access` in both
+  notebooks). So each widget gets its own cell: `store_token` owns the password
+  field, `store_access` reads it; `mode_select` owns the mode radio, `chat`'s
+  callback reads it. A typed token takes precedence over the sandbox one
+  (`TOKEN_FORM.value or AUTO_TOKEN`) precisely so pasting a better token works —
+  typing into the widget re-runs the reading cell.
 
 ## The tool-loop notebook (`notebooks/molab-agentic`)
 
 Store-only companion to the mirror notebook: `run_loop(..., corpus="tool")` and
-nothing else. Eight cells — `imports`, `store_access`, `store_snapshot`,
-`corpus_docs`, `pgrag_src`, `sidecar_llm`, `tools_protocol`, `chat` — ~470
-lines, and importantly **no torch in the kernel**: inference is the sidecar's, so
-there is no env-repair cell, no session-restart step, no `transformers` and no
-22 GB NF4 fallback. PEP 723 deps are just `marimo[mcp]`, `huggingface-hub`,
-`requests`.
+nothing else. Nine cells — `imports`, `store_token`, `store_access`,
+`store_snapshot`, `corpus_docs`, `pgrag_src`, `sidecar_llm`, `tools_protocol`,
+`chat` — ~495 lines, and importantly **no torch in the kernel**: inference is the
+sidecar's, so there is no env-repair cell, no session-restart step, no
+`transformers` and no 22 GB NF4 fallback. PEP 723 deps are just `marimo[mcp]`,
+`huggingface-hub`, `requests`.
 
 - `sidecar_llm` makes the sidecar mandatory and self-starting: it probes
   `:8000`, and when nothing answers it runs the launcher **from the extracted

@@ -250,21 +250,20 @@ def rag_index(HfFileSystem, collections, json, math, re):
 
 
 @app.cell
-def store_access(json):
-    # --- Private store bucket: auth + manifest probe (tool-loop mode) ---
-    # The agentic tool-loop store (the user's own chat logs / session history)
-    # lives in a PRIVATE HF bucket, never the public corpus bucket. The
-    # sandbox's own molab account token is tried first (/marimo/.env holds
-    # HF_TOKEN — the same token molab uses to download the FP8 checkpoint);
-    # a password widget is the fallback. No token literal is ever written into
-    # a cell: notebook cells are exported to the public GitHub repo.
-    import marimo as _mo
+def store_token():
+    # --- HF auth for the private store bucket (tool-loop mode) ---
+    # The sandbox's own molab account token is tried first (/marimo/.env holds
+    # HF_TOKEN — the same token molab uses to download the FP8 checkpoint); the
+    # password widget below overrides it. No token literal is ever written into a
+    # cell: notebook cells are exported to the public GitHub repo.
+    #
+    # The widget lives in its OWN cell because marimo forbids reading a
+    # UIElement's value in the cell that created it (RuntimeError: "Accessing the
+    # value of a UIElement in the cell that created it is not allowed"). The next
+    # cell reads it.
     import os as _os
 
-    from huggingface_hub import HfApi as _HfApi, HfFileSystem as _HfFS
-
-    STORE_BUCKET = "Nubula/paddock-private"
-    STORE_MANIFEST_JSON = "store/manifest.json"
+    import marimo as _mo
 
     def _sandbox_token():
         _tok = (_os.environ.get("HF_TOKEN") or "").strip()
@@ -279,8 +278,30 @@ def store_access(json):
             pass
         return ""
 
-    _tok_form = _mo.ui.text(kind="password", label="HF read token (private store bucket)")
-    STORE_TOKEN = _sandbox_token() or _tok_form.value
+    TOKEN_FORM = _mo.ui.text(kind="password", label="HF read token (private store bucket)")
+    AUTO_TOKEN = _sandbox_token()
+    _note = (
+        "using the sandbox's `/marimo/.env` token — paste one below to override it "
+        "if that token cannot read the private bucket."
+        if AUTO_TOKEN
+        else "no sandbox token found — paste a read token for the private bucket."
+    )
+    _mo.vstack([_mo.md(f"**HF auth** {_note}"), TOKEN_FORM])  # noqa: B018 -- display
+    return AUTO_TOKEN, TOKEN_FORM
+
+
+@app.cell
+def store_access(AUTO_TOKEN, TOKEN_FORM, json):
+    # --- Private store bucket: manifest probe (tool-loop mode) ---
+    # A typed token wins over the sandbox one, so pasting a better token actually
+    # takes effect (typing into the widget re-runs this cell).
+    import marimo as _mo
+
+    from huggingface_hub import HfApi as _HfApi, HfFileSystem as _HfFS
+
+    STORE_BUCKET = "Nubula/paddock-private"
+    STORE_MANIFEST_JSON = "store/manifest.json"
+    STORE_TOKEN = TOKEN_FORM.value or AUTO_TOKEN
 
     def _probe(_token):
         """(ok, message | (summary, manifest)) for this token."""
@@ -299,24 +320,15 @@ def store_access(json):
         except Exception as _exc:
             return False, f"{type(_exc).__name__}: {_exc}"
 
-    _ok, _res = _probe(STORE_TOKEN)
-    if not _ok:
-        STORE_TOKEN = _tok_form.value
-        _ok, _res = _probe(STORE_TOKEN)
-    STORE_OK = _ok
+    STORE_OK, _res = _probe(STORE_TOKEN)
     _out = (
         _mo.md(f"**[store] ok** {_res[0]}")
-        if _ok
-        else _mo.vstack(
-            [
-                _mo.md(
-                    f"**[store] unavailable** {_res}\n\n"
-                    "Publish with `mise upload-store`; paste an HF read token above if the "
-                    "sandbox token is not enough. Tool-loop mode stays disabled, corpus "
-                    "chat keeps working."
-                ),
-                _tok_form,
-            ]
+        if STORE_OK
+        else _mo.md(
+            f"**[store] unavailable** {_res}\n\n"
+            "Publish with `mise upload-store`; paste an HF read token in the cell above "
+            "if the sandbox token is not enough. Tool-loop mode stays disabled, corpus "
+            "chat keeps working."
         )
     )
     _out  # noqa: B018 -- cell must return the widget for display
@@ -625,7 +637,21 @@ def sidecar_tools_probe(_LLM_URL, json, server_model):
 
 
 @app.cell
-def chat(_LLM_URL, NATIVE_TOOLS, run_loop, STORE_OK, STORE_PATH, model, re, retrieve, server_model, tokenizer, torch):
+def mode_select():
+    # --- corpus chat vs tool loop ---
+    # Its own cell on purpose: marimo forbids reading a UIElement's value in the
+    # cell that created it, and `chat`'s generate() reads MODE.value.
+    import marimo as _mo
+
+    MODE = _mo.ui.radio(
+        options=["corpus chat", "tool loop"], value="corpus chat", label="Mode"
+    )
+    MODE  # noqa: B018 -- cell must return the widget for display
+    return (MODE,)
+
+
+@app.cell
+def chat(MODE, _LLM_URL, NATIVE_TOOLS, run_loop, STORE_OK, STORE_PATH, model, re, retrieve, server_model, tokenizer, torch):
     # --- Chat: RAG over the corpus, answered by the vLLM sidecar (or local model) ---
     import json as _json
     import urllib.request as _urlreq
@@ -709,7 +735,7 @@ def chat(_LLM_URL, NATIVE_TOOLS, run_loop, STORE_OK, STORE_PATH, model, re, retr
 
     def generate(messages, config):
         question = messages[-1].content
-        if _mode.value == "tool loop":
+        if MODE.value == "tool loop":
             if not (STORE_OK and server_model and run_loop):
                 yield (
                     "Tool-loop mode needs the private store snapshot and the vLLM sidecar. "
@@ -756,13 +782,10 @@ def chat(_LLM_URL, NATIVE_TOOLS, run_loop, STORE_OK, STORE_PATH, model, re, retr
             # local fallback: one chunk, same cleanup as before
             yield _local_generate(prompt)
 
-    _mode = mo.ui.radio(
-        options=["corpus chat", "tool loop"], value="corpus chat", label="Mode"
-    )
     chat = mo.ui.chat(
         generate, show_configuration_controls=False, max_height=600
     )
-    mo.vstack([_mode, chat])  # noqa: B018 -- cell must return the widgets for display
+    chat  # noqa: B018 -- cell must return the widget for display
     return
 
 
