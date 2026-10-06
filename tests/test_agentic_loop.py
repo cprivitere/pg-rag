@@ -130,6 +130,42 @@ def test_fenced_tool_block_round(tiny_store, monkeypatch):
     assert result["trace_rounds"][0]["tool"] == "find_entities"
 
 
+def test_native_qwen_function_block_round(tiny_store, monkeypatch):
+    """Contract: the served checkpoint's own tool syntax is parsed and executed.
+
+    Qwen/Qwen3.8-27B-FP8's chat_template.jinja emits
+    <tool_call><function=NAME><parameter=KEY>value</parameter></function> — the
+    path the loop takes whenever the sidecar has no --tool-call-parser, so the
+    text protocol must understand it (not just the fenced ```tool JSON form)."""
+
+    def fake(messages, tools, generation, max_tokens):
+        if len(messages) == 2:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": (
+                                "<tool_call>\n<function=find_entities>\n"
+                                "<parameter=query>Empty Bottle</parameter>\n"
+                                "</function>\n</tool_call>"
+                            ),
+                        }
+                    }
+                ]
+            }
+        users = [m for m in messages if m.get("role") == "user"]
+        assert "Tool results:" in users[-1]["content"]
+        assert "Empty Bottle" in users[-1]["content"]
+        return {"choices": [{"message": {"role": "assistant", "content": "Found it."}}]}
+
+    monkeypatch.setattr(loop, "_post", fake)
+    result = loop.run_loop("bottle?", store_path=str(tiny_store))
+    assert result["answer"] == "Found it."
+    assert result["rounds"] == 1
+    assert result["trace_rounds"][0]["tool"] == "find_entities"
+
+
 def test_invalid_tool_json_returns_parse_error_as_tool_result(tiny_store, monkeypatch):
     def fake(messages, tools, generation, max_tokens):
         if len(messages) == 2:

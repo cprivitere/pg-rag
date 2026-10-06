@@ -29,27 +29,71 @@ export NVCC_PREPEND_FLAGS="-DCCCL_DISABLE_CTK_COMPATIBILITY_CHECK=1"
 # 4) Tool-call support for the agentic tool loop. vLLM rejects a `tools=`
 #    payload unless it was started with --enable-auto-tool-choice AND a
 #    matching --tool-call-parser, so the parser name is discovered from the
-#    installed vLLM build instead of guessed (0.30.0's parser roster moves
-#    between releases). Preference: qwen3* -> qwen* -> hermes. No parser found
-#    => serve without tool flags; the loop then uses its fenced ```tool text
-#    protocol (PGRAG_LLM_NATIVE_TOOLS=0, set by the notebook's probe cell).
+#    installed vLLM build instead of guessed. Two traps this probe handles:
+#      * vLLM 0.30.0 moved the registry to `vllm.tool_parsers` (it used to be
+#        `vllm.entrypoints.openai.tool_parsers`) — the old path now raises
+#        ImportError, which silently produced NO_TOOL_PARSER;
+#      * every parser there is registered LAZILY, so
+#        `ToolParserManager.tool_parsers` is EMPTY and the names live in
+#        `ToolParserManager.lazy_parsers`. The probe unions both and then
+#        actually loads the pick via `get_tool_parser()` so the CLI only ever
+#        receives a name this build can instantiate.
+#    Preference follows the served checkpoint's own chat template
+#    (Qwen/Qwen3.8-27B-FP8 emits <tool_call><function=NAME>...): qwen3_xml ->
+#    qwen3_coder -> hermes -> any qwen/hermes name. Diagnostics go to stderr
+#    (/tmp/vllm-parsers.err); stdout carries only the chosen name.
 TOOL_ARGS=()
 PARSER=$(/tmp/vllm-venv/bin/python - <<'PY' 2>/tmp/vllm-parsers.err
-from vllm.entrypoints.openai.tool_parsers import ToolParserManager as T
+import importlib
+import sys
 
-names = sorted(T.tool_parsers)
-for prefix in ("qwen3", "qwen", "hermes"):
-    for name in names:
-        if prefix in name:
-            print(name)
-            raise SystemExit
+for _mod in ("vllm.tool_parsers", "vllm.entrypoints.openai.tool_parsers"):
+    try:
+        _m = importlib.import_module(_mod)
+    except Exception as _exc:
+        print(f"# {_mod}: {type(_exc).__name__}: {_exc}", file=sys.stderr)
+        continue
+    _mgr = getattr(_m, "ToolParserManager", None)
+    if _mgr is None:
+        try:
+            _mgr = importlib.import_module(
+                _mod + ".abstract_tool_parser"
+            ).ToolParserManager
+        except Exception as _exc:
+            print(f"# {_mod}.abstract_tool_parser: {type(_exc).__name__}: {_exc}", file=sys.stderr)
+            continue
+    _names = sorted(
+        set(getattr(_mgr, "tool_parsers", None) or {})
+        | set(getattr(_mgr, "lazy_parsers", None) or {})
+    )
+    if not _names:
+        print(f"# {_mod}: registry empty", file=sys.stderr)
+        continue
+    print(f"# {_mod}: {len(_names)} parsers registered", file=sys.stderr)
+    _ordered = [n for n in ("qwen3_xml", "qwen3_coder", "hermes") if n in _names]
+    _ordered += [
+        n for n in _names if n not in _ordered and any(p in n for p in ("qwen3", "qwen", "hermes"))
+    ]
+    for _name in _ordered:
+        try:
+            _mgr.get_tool_parser(_name)  # real import, not a name guess
+        except Exception as _exc:
+            print(f"# {_name}: exists but failed to load ({type(_exc).__name__}: {_exc})", file=sys.stderr)
+            continue
+        print(_name)
+        raise SystemExit
+    print(f"# no loadable qwen/hermes parser among {_names}", file=sys.stderr)
 PY
 )
 if [ -n "$PARSER" ]; then
   TOOL_ARGS=(--enable-auto-tool-choice --tool-call-parser "$PARSER")
   echo "TOOL_PARSER $PARSER"
 else
-  echo "NO_TOOL_PARSER: serving without tool flags; tool loop must use the fenced text protocol"
+  echo "NO_TOOL_PARSER: serving without tool flags; the loop uses its text protocol"
+  if [ -s /tmp/vllm-parsers.err ]; then
+    echo "  parser probe diagnostics:"
+    tail -n 6 /tmp/vllm-parsers.err | sed 's/^/  /'
+  fi
 fi
 
 # --max-model-len 24576 (was 8192): the loop's system prompt (rules + schema
@@ -64,4 +108,16 @@ nohup /tmp/vllm-venv/bin/vllm serve Qwen/Qwen3.8-27B-FP8 \
   "${TOOL_ARGS[@]}" \
   --port 8000 \
   --speculative-config '{"method":"mtp","num_speculative_tokens":3}' > /tmp/vllm.log 2>&1 &
-echo "LAUNCHED $!"
+VLLM_PID=$!
+echo "LAUNCHED $VLLM_PID"
+
+# 5) Show the first seconds of the server log here, so a dead or misconfigured
+#    serve is visible immediately instead of only after the notebook's readiness
+#    wait expires. `kill -0` is a shell builtin (no pgrep/ps dependency).
+sleep 5
+if kill -0 "$VLLM_PID" 2>/dev/null; then
+  echo "VLLM_PROCESS alive (pid $VLLM_PID); startup log tail:"
+else
+  echo "VLLM_PROCESS gone (pid $VLLM_PID) — the serve command failed:"
+fi
+tail -n 25 /tmp/vllm.log 2>/dev/null | sed 's/^/  /' || echo "  (no /tmp/vllm.log yet)"

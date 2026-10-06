@@ -28,7 +28,7 @@ Two things make it much smaller than `notebooks/molab-mirror`:
 | `store_snapshot` | downloads `data/sqlite_gorgon.db` (938 MiB) from `hf://buckets/Nubula/paddock-private`, verifies size + sha256 from the manifest before promoting it, then `PRAGMA quick_check` + row-count parity; cache keyed on size + last-verified sha |
 | `corpus_docs` | fetches the public `documents.json` (185 MB) — `corpus_search`'s tool corpus is built from it |
 | `pgrag_src` | downloads + sha256-checks `pgrag-src.tar.gz`, extracts it, imports `pgrag.agentic.loop` off `pg-rag-src/src`, builds `data/tool_documents.json` + `tool_bm25.pkl` with the tarball's own `scripts/build_tool_corpus.py` |
-| `sidecar_llm` | probes `http://127.0.0.1:8000/v1`; if down, launches `pg-rag-src/scripts/molab_vllm_launch.sh` and waits (≤15 min) for the model. On a CPU-only sandbox it **refuses to launch** and says to attach the GPU first (that recreates the sandbox at a new URL) instead of burning the wait |
+| `sidecar_llm` | probes `http://127.0.0.1:8000/v1`; if down, launches `pg-rag-src/scripts/molab_vllm_launch.sh` and waits (≤15 min) for the model, dumping the last 25 lines of `/tmp/vllm.log` if the wait expires. On a CPU-only sandbox it **refuses to launch** and says to attach the GPU first (that recreates the sandbox at a new URL) instead of burning the wait |
 | `tools_protocol` | one minimal `tools=` request decides native `tool_calls` vs the fenced ```` ```tool ```` text protocol (`PGRAG_LLM_NATIVE_TOOLS`) |
 | `chat` | `mo.ui.chat` wired straight to `run_loop(..., corpus="tool")`; prints the per-round trace, yields the answer with a `(tool loop: N round(s))` footer |
 

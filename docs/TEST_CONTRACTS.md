@@ -336,7 +336,11 @@ test (prove the source is fine) or recording a deliberate contract change
   only single read-only SELECTs (write/PRAGMA rejected, LIMIT 200 injected,
   2M-op progress-handler budget), and caps rows/cells/pages. `run_loop`
   mirrors pipeline.ask()'s 5-key return shape, executes at most
-  `max_rounds` tool rounds (native tool_calls OR fenced ```tool blocks),
+  `max_rounds` tool rounds (native tool_calls OR three text forms: fenced
+  ```` ```tool ```` JSON, and the Qwen template's
+  `<tool_call><function=…><parameter=…>` XML — the form
+  `Qwen/Qwen3.8-27B-FP8`'s own chat template emits, so the loop still works
+  when the sidecar has no `--tool-call-parser`),
   caps each tool-result payload at 12000 chars, and forces a final no-tools
   answer (`tools=None`) once the round budget is exhausted. Tests
   monkeypatch `loop._post` — never a live LLM.

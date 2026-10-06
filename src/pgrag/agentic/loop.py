@@ -316,7 +316,12 @@ How to call tools:
   {{"name": "sql_query", "args": {{"sql": "SELECT ..."}}}}
   ```
   on its own, possibly several blocks in one reply.
-- Alternate text form: <function=NAME><parameter=KEY>value</parameter>...</function>
+- Alternate text form (what the Qwen3 chat template itself emits):
+  <tool_call>
+  <function=NAME>
+  <parameter=KEY>value</parameter>
+  </function>
+  </tool_call>
 - When you don't need more data, answer normally with NO tool blocks.
 """
 

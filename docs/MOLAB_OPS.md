@@ -424,11 +424,35 @@ The serve line in `scripts/molab_vllm_launch.sh` changed for tool-loop mode:
   `_RESULT_CAP=12_000` chars of tool results overflows 8192. KV pool at
   `--gpu-memory-utilization 0.40` is ~38k tokens, so 24576 fits one session.
 - `--enable-auto-tool-choice --tool-call-parser <name>`: vLLM **rejects** a
-  `tools=` payload without both. The script discovers `<name>` in-sandbox from
-  `ToolParserManager.tool_parsers` (preference `qwen3*` → `qwen*` → `hermes`) and
-  prints `TOOL_PARSER <name>` / `NO_TOOL_PARSER`; nothing is guessed. If no
-  parser matches, the notebook's `sidecar_tools_probe` cell falls back to the
-  loop's fenced ```` ```tool ```` text protocol (`PGRAG_LLM_NATIVE_TOOLS=0`).
+  `tools=` payload without both. The script discovers `<name>` in-sandbox; the
+  pick is load-validated (`ToolParserManager.get_tool_parser(name)`) so the CLI
+  never receives a name this build cannot instantiate.
+  Two facts about vLLM 0.30.0's registry, both confirmed against the wheel
+  (`vllm-0.30.0-cp38-abi3-manylinux_2_28_x86_64.whl`):
+  - the module moved to **`vllm.tool_parsers`** (was
+    `vllm.entrypoints.openai.tool_parsers`). Importing the old path raises
+    ImportError, which is exactly how a first sandbox run ended up with
+    `NO_TOOL_PARSER` and no explanation — the probe now tries both paths and
+    prints its diagnostics (`/tmp/vllm-parsers.err` tail) on failure.
+  - registration is **lazy** (`register_lazy_module` for all 51 names), so
+    `ToolParserManager.tool_parsers` is *empty*; the names live in
+    `ToolParserManager.lazy_parsers`. The probe unions both dicts. 0.30.0 ships
+    `qwen3_xml`, `qwen3_coder` (both → `Qwen3EngineToolParser`,
+    `structural_tag_model = "qwen_3_coder"`), `hermes`, `llama3_json`, … —
+    there is no plain `qwen3`.
+  Preference is `qwen3_xml` → `qwen3_coder` → `hermes` → any `qwen*`/`hermes`,
+  chosen to match the served checkpoint's own template: `Qwen/Qwen3.8-27B-FP8`
+  `chat_template.jinja` instructs
+  `<tool_call><function=NAME><parameter=KEY>value</parameter></function></tool_call>`.
+  That same form is one of the loop's text protocols, so `NO_TOOL_PARSER` is a
+  degraded-but-working path, not a dead end.
+- **Observability (added after that silent failure)**: the launcher prints
+  `TOOL_PARSER <name>` / `NO_TOOL_PARSER` plus the probe's stderr tail, then —
+  5 s after `LAUNCHED <pid>` — a `kill -0` liveness line (`VLLM_PROCESS alive`
+  / `gone`) and the first 25 lines of `/tmp/vllm.log`. The notebook's
+  `sidecar_llm` cell dumps the last 25 lines of `/tmp/vllm.log` (plus the
+  16384/MTP contingency) when its 900 s readiness wait expires, so a failed
+  boot explains itself instead of just "still not answering".
 - The loop reaches the sidecar through `PGRAG_LLM_URL` / `PGRAG_LLM_MODEL` /
   `PGRAG_LLM_NATIVE_TOOLS` (read at `loop._post` call time); the chat cell sets
   them, so the local llama.cpp default at `:8080` is untouched.
@@ -442,12 +466,14 @@ The serve line in `scripts/molab_vllm_launch.sh` changed for tool-loop mode:
   `/tmp/vllm.log` (sidecar).
 - **Status**: the flags above are exercised locally (loop against the published
   snapshot on Python 3.13, 2 tool rounds, real `sql_query`/`player_state`
-  calls). Sandbox-side numbers — which parser name the 0.30.0 sidecar reports
-  (`TOOL_PARSER …`) and the tool-loop round count/latency at 24576 context —
-  are **not yet measured**: they land on the first fresh-sandbox run-all
-  (notebook cells `sidecar_tools_probe` → `chat`, mode `tool loop`). Record
-  them here, including a fenced-protocol fallback trace if that is what the
-  probe reports.
+  calls), and the parser probe is tested against the real 0.30.0 registry code
+  (lazy registry → `qwen3_xml`; historical eager layout → `qwen3_xml`; nothing
+  installed → empty stdout + diagnostics; unloadable qwen → `hermes`).
+  Sandbox-side numbers still pending from the first **successful** boot: which
+  parser the sidecar reports (`TOOL_PARSER …`) and the tool-loop round
+  count/latency at 24576 context. The first sandbox attempt reached
+  `NO_TOOL_PARSER` + a serve that never answered — see the two sub-bullets above
+  for what that exposed; record the real numbers here once a boot completes.
 
 ## Accessing the notebook from an agent
 

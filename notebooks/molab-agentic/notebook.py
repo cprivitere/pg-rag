@@ -365,11 +365,24 @@ def sidecar_llm(SRC_DIR, STORE_OK, json, os, run_loop, shutil, subprocess, time)
             SERVER_MODEL = _server_model()
             if not SERVER_MODEL:
                 time.sleep(_POLL_S)
-        print(
-            f"[sidecar] model: {SERVER_MODEL}"
-            if SERVER_MODEL
-            else "[sidecar] still not answering — check /tmp/vllm.log and /tmp/launch.log"
-        )
+        if SERVER_MODEL:
+            print(f"[sidecar] model: {SERVER_MODEL}")
+        else:
+            # The launcher already tails the first seconds of /tmp/vllm.log; if the
+            # server never came up, THIS is where the reason shows up (OOM during
+            # graph capture, flashinfer JIT failure, port already in use, ...).
+            print(f"[sidecar] still not answering after {_WAIT_S}s — last lines of /tmp/vllm.log:")
+            try:
+                with open("/tmp/vllm.log", encoding="utf-8", errors="replace") as _f:
+                    for _line in _f.read().splitlines()[-25:]:
+                        print(f"  {_line}")
+            except OSError as _exc:
+                print(f"  (no /tmp/vllm.log: {_exc})")
+            print(
+                "  Contingencies (docs/MOLAB_OPS.md): lower --max-model-len to 16384 in "
+                "pg-rag-src/scripts/molab_vllm_launch.sh and/or drop MTP "
+                '(--speculative-config) if the log shows OOM, then re-run this cell.'
+            )
     return LLM_URL, SERVER_MODEL
 
 
