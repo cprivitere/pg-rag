@@ -6,6 +6,7 @@ build_wiki_documents emitting row, coverage, and narrative records.
 """
 
 from pgrag.documents.wiki_builder import (
+    _build_entity_index,
     _preserve_template_names,
     _rewrite_mob_templates,
     _rewrite_shell_templates,
@@ -561,3 +562,39 @@ def test_favor_template_renders_tier():
     assert "favor tier Neutral" in _rewrite_shell_templates(
         "at '''{{favor|Neutral}}''' favor."
     )
+
+
+# --- _build_entity_index name resolution ---
+
+
+class IndexDB:
+    def __init__(self, tables):
+        self.tables = tables
+
+
+def test_entity_index_falls_back_to_key_for_nameless_skills():
+    """contract: the skills table is keyed by the skill's own code, and 40
+    legacy skills ship no `Name` (Meditation, Unarmed, Compassion, …). Their
+    record key resolves as the entity name so the wiki page links in."""
+    index = _build_entity_index(
+        IndexDB({"skills": {"Meditation": {"Description": "calm"}, "Unarmed": {}}})
+    )
+    assert index["meditation"] == ("skill_Meditation", "skill")
+    assert index["unarmed"] == ("skill_Unarmed", "skill")
+
+
+def test_entity_index_ignores_synthetic_keys():
+    """contract: key-derived tables whose ids are synthetic (`item_123`,
+    `effect_1018`) must NOT be indexed as names — only tables listed in
+    `_KEY_IS_NAME_TABLES` fall back to the key."""
+    index = _build_entity_index(
+        IndexDB(
+            {
+                "items": {"item_100": {"Description": "no name field"}},
+                "effects": {"effect_1018": {"Name": ""}},
+            }
+        )
+    )
+    assert "item_100" not in index
+    assert "effect_1018" not in index
+

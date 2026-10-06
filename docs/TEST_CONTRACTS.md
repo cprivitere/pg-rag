@@ -79,6 +79,16 @@ test (prove the source is fine) or recording a deliberate contract change
   categories, deduped; lead description stripped of all `{{`/`}}` wiki
   residue (hygiene guard — multi-line MOB templates must not leak into the
   description). `build_leveling_documents` emits `type="leveling"`.
+  `_prepend_barter_options` (`builder.py`): item docs whose CDN
+  `sources_items` entry is `type=Barter` get the NPC page's barter-table trade
+  lines PREPENDED — to the item's wiki `How to Obtain`/`Uses` docs (entity_id,
+  section match), else the CDN `source_items_<key>` doc. A table qualifies only
+  on reward-cell evidence (last row cell word-boundary-matches the item name;
+  single-cell rowspan rows prove nothing) — a table that merely lists the item
+  as an ingredient is NOT appended, and items with no qualifying table are left
+  untouched. The prepend (not append) keeps the explicit trade in the first
+  chunk; chunk_tail placement let retrieval rank it low (royal-jelly-gathering,
+  2026-10-06).
 - **Change ⇒** `uv run pytest tests/test_documents.py tests/test_chunking.py
   tests/test_metadata.py tests/test_creature_zones.py tests/test_doc_quality.py`
   (+ the file you edited).

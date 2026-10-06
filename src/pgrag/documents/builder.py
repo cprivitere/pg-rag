@@ -1330,6 +1330,113 @@ def build_abilitykeyword_documents(db):
     return documents
 
 
+def _prepend_barter_options(documents, db):
+    """Prepend concrete barter options to item docs whose CDN source is 'Barter from <NPC>'.
+
+    The item's wiki `How to Obtain` section deflects ("items needed for barter
+    vary randomly. See <NPC>'s page"), so the LLM never enumerates the actual
+    trade items (royal-jelly-gathering golden, 2026-10-06). The options live in
+    the NPC page's barter table; prepend that table's trade lines to the item's
+    How-to-Obtain and Uses docs (fallback: its CDN `source_items_*` doc), so the
+    concrete trade leads the doc and survives chunking into the first chunk.
+    """
+    sources = db.tables.get("sources_items", {})
+    if not sources:
+        return
+
+    by_id = {}
+    rows_by_name = {}       # NPC display name -> [(table_id, row text)]
+    coverage_by_table = {}  # table_id -> coverage text
+    entity_docs = {}        # item entity id (== sources_items key) -> [doc, ...]
+    for doc in documents:
+        by_id.setdefault(doc.get("id"), doc)
+        meta = doc.get("metadata") or {}
+        if meta.get("source") != "wiki":
+            continue
+        record = meta.get("table_record")
+        if record == "row":
+            rows_by_name.setdefault(meta.get("name"), []).append(
+                (meta.get("table_id"), doc.get("text") or "")
+            )
+        elif record == "coverage":
+            coverage_by_table[meta.get("table_id")] = doc.get("text") or ""
+        elif meta.get("entity_id") and meta.get("section") in ("How to Obtain", "Uses"):
+            # Both the answer-bearing Obtain section and the item's Uses doc:
+            # for "how do I gather X?" the entity's Uses doc is what retrieval
+            # actually surfaces (the Obtain chunk can rank outside TOP_K).
+            entity_docs.setdefault(meta["entity_id"], []).append(doc)
+
+    resolver = GameResolver(db)
+    items = db.tables.get("items", {})
+    for item_key, source_data in sources.items():
+        if not isinstance(source_data, dict):
+            continue
+        targets = list(entity_docs.get(item_key, ()))
+        if not targets:
+            fallback = by_id.get(f"source_items_{item_key}")
+            if fallback is not None:
+                targets = [fallback]
+        if not targets:
+            continue
+        item_name = (items.get(item_key) or {}).get("Name")
+        if not item_name:
+            continue
+        pattern = re.compile(r"\b" + re.escape(item_name.lower()) + r"\b")
+        groups = []          # one line-group per qualifying NPC barter table
+        seen_tables = set()
+        for entry in source_data.get("entries") or []:
+            if not isinstance(entry, dict):
+                continue
+            if (entry.get("type") or entry.get("Type")) != "Barter":
+                continue
+            npc_name = resolver.npc_name(entry.get("npc") or entry.get("Npc") or "")
+            for table_id, _text in rows_by_name.get(npc_name, []):
+                if table_id in seen_tables:
+                    continue
+                coverage = coverage_by_table.get(table_id)
+                if not coverage:
+                    continue
+                requested = []
+                for tid, text in rows_by_name.get(npc_name, []):
+                    if tid != table_id:
+                        continue
+                    cells = [
+                        c.strip() for c in text.split("table row:", 1)[-1].split("|")
+                    ]
+                    # Reward-cell evidence: the table qualifies only when this
+                    # item is what the NPC GIVES (last cell) — a table that
+                    # merely lists it as an ingredient must not be appended.
+                    # Single-cell rows prove nothing (rowspan continuation).
+                    if len(cells) > 1 and pattern.search(cells[-1].lower()):
+                        requested.append(" | ".join(cells[:-1]))
+                if not requested:
+                    continue
+                seen_tables.add(table_id)
+                options = coverage.split("table covers:", 1)[-1].strip()
+                requested = list(dict.fromkeys(requested))[:3]
+                groups.append(
+                    [
+                        # Concrete, quotable trade; the full options list alone
+                        # reads as noise and got summarized away (2026-10-06).
+                        (
+                            f"Barter: {npc_name} gives {item_name} in exchange for "
+                            f"{', '.join(requested)}."
+                        ),
+                        f"Barter options at {npc_name}: {options}",
+                    ]
+                )
+        if not groups:
+            continue
+        lines = [line for group in groups[:2] for line in group]
+        block = "\n".join(lines)
+        for target in targets:
+            # PREPEND, not append: the target doc is chunked once it grows past
+            # the budget, and an appended block lands in the TAIL chunk which
+            # retrieval ranks low. Leading the doc keeps the explicit trade in
+            # the first chunk — the one actually fetched and read (2026-10-06).
+            target["text"] = block + "\n\n" + (target.get("text") or "").lstrip()
+
+
 def _assemble_documents(db):
     """Combine all per-table builders plus summaries, and normalize each doc's metadata (type, inferred name)."""
     documents = []
@@ -1359,6 +1466,7 @@ def _assemble_documents(db):
     documents.extend(build_xptable_documents(db))
     documents.extend(build_abilitykeyword_documents(db))
     documents.extend(build_wiki_documents(db))
+    _prepend_barter_options(documents, db)
     documents.extend(build_creature_zones_documents(db))
     documents.extend(build_curated_documents())
 

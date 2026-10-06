@@ -12,7 +12,7 @@ CACHE_FILE = WIKI_PARSED_CACHE
 # Bump when the cached doc shape OR generated text changes, so stale cache
 # entries are rebuilt instead of served with old content (a mtime-equal page
 # with a changed section-cleanup step would otherwise keep residue forever).
-CACHE_VERSION = 9
+CACHE_VERSION = 10
 
 # CDN tables whose entity names wiki pages can link to.
 _ENTITY_TABLES = {
@@ -26,6 +26,14 @@ _ENTITY_TABLES = {
     "effects": "effect",
 }
 
+# Tables where the record key IS the entity's display name when `Name` is
+# absent. The skills table is keyed by the skill's own code (`Meditation`,
+# `Unarmed`, `AnimalHandling`), and 40 legacy skills ship no `Name` field —
+# without this fallback their wiki page (incl. the wiki's own Synergy Levels
+# table) never linked into any entity dossier. Key-derived tables whose ids
+# are synthetic (`item_123`, `effect_1018`) must NOT be indexed as names.
+_KEY_IS_NAME_TABLES = {"skills"}
+
 
 def _norm_name(value):
     return " ".join(str(value).lower().split())
@@ -35,7 +43,8 @@ def _build_entity_index(db):
     """name -> (entity doc id, entity type) over CDN entity tables.
 
     Matches wiki page names against entity Names (underscores count as
-    spaces). Misses are fine — not every page is an entity page.
+    spaces), falling back to the record key for `_KEY_IS_NAME_TABLES`.
+    Misses are fine — not every page is an entity page.
     """
     index = {}
     for table, etype in _ENTITY_TABLES.items():
@@ -43,6 +52,8 @@ def _build_entity_index(db):
             if not isinstance(record, dict):
                 continue
             name = record.get("Name")
+            if not name and table in _KEY_IS_NAME_TABLES:
+                name = key
             if not name:
                 continue
             entity_id = key if table in ("items", "recipes") else f"{etype}_{key}"

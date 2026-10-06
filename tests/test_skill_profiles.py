@@ -219,6 +219,43 @@ def test_empty_sections_omitted():
     assert "Description:\nA synthetic skill for tests." in text
 
 
+def test_received_synergy_section_is_the_inverse_of_rewards():
+    """The profile must state which skills grant bonus levels TO this skill.
+
+    The CDN records synergy one way only (Rewards[level].BonusToSkill), so the
+    incoming sources are the inverse over every other skill's Rewards; a
+    profile that only echoes its own outgoing BonusToSkill is the bug where
+    "what gives synergy to X" gets answered backwards.
+    """
+    db = _make_db(
+        skill_entries={
+            "Testcraft": _base_skill(),
+            "Helper": {
+                "Name": "Helper",
+                "Rewards": {
+                    "10": {"BonusToSkill": "Testcraft"},
+                    "50": {"BonusToSkill": "Testcraft"},
+                },
+            },
+            "Sibling": {
+                # No Name field (as 40 CDN skills, incl. Meditation): the
+                # display name falls back to the internal key.
+                "Rewards": {"20": {"BonusToSkill": "Testcraft"}},
+            },
+        }
+    )
+    texts = {d["id"]: d["text"] for d in build_skill_profile_documents(db)}
+
+    text = texts["skillprofile_Testcraft"]
+    assert "Synergy Levels (bonus levels received from other skills):" in text
+    assert "- Helper: level 10, 50" in text
+    assert "- Sibling: level 20" in text
+    # The outgoing direction keeps its own Rewards section (Testcraft -> Cow at 20).
+    assert "BonusToSkill = Cow" in text
+    # A skill that receives nothing must not emit an empty section.
+    assert "bonus levels received" not in texts["skillprofile_Helper"]
+
+
 def test_deterministic_two_builds():
     db = _make_db(
         skill_entries={"Testcraft": _base_skill(), "Other": _base_skill()},

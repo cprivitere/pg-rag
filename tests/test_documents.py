@@ -251,6 +251,80 @@ def test_gift_summary_skips_unresolvable_npc_keys():
     assert not [d for d in docs if "Gift Preferences" in d["metadata"].get("name", "")]
 
 
+def test_barter_options_appended_to_item_how_to_obtain():
+    """Item docs whose CDN source is 'Barter from <NPC>' must carry the NPC's
+    concrete barter options, so a deflecting wiki 'How to Obtain' section
+    ("items vary randomly, see <NPC>'s page") cannot hide the trade items
+    (regression origin: royal-jelly-gathering golden, 2026-10-06)."""
+    from pgrag.documents.builder import build_documents
+
+    db = _make_db(
+        items={"item_1337": {"Name": "Royal Jelly"}},
+        npcs={"NPC_Midge": {"Name": "Midge the Apothecary"}},
+    )
+    db.tables["sources_items"] = {
+        "item_1337": {"entries": [{"type": "Barter", "npc": "NPC_Midge"}]}
+    }
+    db.wiki = {
+        "Midge the Apothecary": (
+            "== Bartering ==\n"
+            "Midge will give one Royal Jelly in exchange for various items.\n\n"
+            '{| class="wikitable"\n!Requested !! Reward\n|-\n'
+            "| Fae Honeycomb x 5-8 || Royal Jelly\n|-\n"
+            "| Phoenix Egg x 1 || Royal Jelly x 6\n|}\n"
+        ),
+        "Royal Jelly": (
+            "== How to Obtain ==\n"
+            "Bartering with Midge the Apothecary. (Items needed for barter "
+            "vary randomly. See Midge's page for more details.)\n"
+            "== Uses ==\n"
+            "Royal Jelly is used to purchase training from Midge the Apothecary.\n"
+        ),
+    }
+    docs = build_documents(db)
+    obtain = next(d for d in docs if d["id"].startswith("wiki_Royal Jelly_How_to_Obtain"))
+    uses = next(d for d in docs if d["id"].startswith("wiki_Royal Jelly_Uses"))
+    assert "Barter options at Midge the Apothecary" in obtain["text"]
+    assert "Phoenix Egg x 1" in obtain["text"]
+    # Concrete trade named explicitly — the raw options list alone is
+    # summarized away instead of quoted (2026-10-06 golden observation).
+    assert "Barter: Midge the Apothecary gives Royal Jelly in exchange for" in obtain["text"]
+    # The entity's Uses doc is what retrieval surfaces for "how do I gather X?",
+    # so it must carry the options too (not only the Obtain section).
+    assert "Barter options at Midge the Apothecary" in uses["text"]
+    assert "Phoenix Egg x 1" in uses["text"]
+
+
+def test_barter_options_skipped_when_reward_cell_does_not_name_item():
+    """A Barter source alone is not enough: the NPC table must actually reward
+    the item (reward-cell word-boundary match) or nothing is appended."""
+    from pgrag.documents.builder import build_documents
+
+    db = _make_db(
+        items={"item_1337": {"Name": "Royal Jelly"}},
+        npcs={"NPC_Midge": {"Name": "Midge the Apothecary"}},
+    )
+    db.tables["sources_items"] = {
+        "item_1337": {"entries": [{"type": "Barter", "npc": "NPC_Midge"}]}
+    }
+    db.wiki = {
+        "Midge the Apothecary": (
+            "== Bartering ==\nMidge barters occasionally with adventurers.\n\n"
+            '{| class="wikitable"\n!Requested !! Reward\n|-\n'
+            "| Phoenix Egg x 1 || Tasty Morsel\n|}\n"
+        ),
+        "Royal Jelly": (
+            "== How to Obtain ==\n"
+            "Bartering with Midge the Apothecary. (Items needed for barter "
+            "vary randomly. See Midge's page for more details.)\n"
+        ),
+    }
+    doc = next(
+        d for d in build_documents(db) if d["id"].startswith("wiki_Royal Jelly_How_to_Obtain")
+    )
+    assert "Barter options at" not in doc["text"]
+
+
 def test_item_document_includes_wiki_gather_requirement():
     items = {
         "item_11022": {"Name": "Mortaferus Mushroom", "Description": "A large mushroom"},

@@ -188,6 +188,53 @@ def _ability_lines(abilities, skill_key):
     return lines
 
 
+def _skill_display_name(skill, key):
+    if isinstance(skill, dict) and skill.get("Name"):
+        return skill["Name"]
+    return key
+
+
+def _received_synergy_map(skills):
+    """target skill key -> {source skill key -> set of source levels}.
+
+    The CDN records synergy one way only: a skill's `Rewards[level]` may carry
+    `BonusToSkill = <other skill>`, meaning that skill GAINS a bonus level.
+    A skill's *incoming* sources (who grants bonus levels to it) are therefore
+    the inverse over every other skill's Rewards table.
+    """
+    received = {}
+    for source_key, record in skills.items():
+        if not isinstance(record, dict):
+            continue
+        rewards = record.get("Rewards")
+        if not isinstance(rewards, dict):
+            continue
+        for level, benefit in rewards.items():
+            if not isinstance(benefit, dict):
+                continue
+            target = benefit.get("BonusToSkill")
+            if not target:
+                continue
+            head = str(level).split("_")[0]
+            if not head.isdigit():
+                continue
+            received.setdefault(target, {}).setdefault(source_key, set()).add(int(head))
+    return received
+
+
+def _received_synergy_lines(received, skills, skill_id):
+    sources = received.get(skill_id)
+    if not sources:
+        return []
+    lines = []
+    for source_key in sorted(
+        sources, key=lambda k: _skill_display_name(skills.get(k), k).lower()
+    ):
+        levels = ", ".join(str(level) for level in sorted(sources[source_key]))
+        lines.append(f"- {_skill_display_name(skills.get(source_key), source_key)}: level {levels}")
+    return ["Synergy Levels (bonus levels received from other skills):", *lines]
+
+
 def build_skill_profile_documents(db):
     documents = []
 
@@ -201,6 +248,7 @@ def build_skill_profile_documents(db):
     npcs = db.tables.get("npcs", {})
     xptables = db.tables.get("xptables", {})
     advtables = db.tables.get("advancementtables", {})
+    received_synergy = _received_synergy_map(skills)
 
     for skill_id, skill in skills.items():
         if not isinstance(skill, dict):
@@ -271,6 +319,10 @@ def build_skill_profile_documents(db):
         trainer_lines = _trainer_lines(npcs, skill_id)
         if trainer_lines:
             sections.append("Trainers:\n" + "\n".join(trainer_lines))
+
+        synergy_lines = _received_synergy_lines(received_synergy, skills, skill_id)
+        if synergy_lines:
+            sections.append("\n".join(synergy_lines))
 
         documents.append(
             {

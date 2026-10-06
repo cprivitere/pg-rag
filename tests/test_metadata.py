@@ -270,6 +270,28 @@ def test_wiki_page_without_entity_match_omits_entity_metadata():
     assert "entity_type" not in serbule["metadata"]
 
 
+def test_wiki_page_for_nameless_skill_gets_entity_metadata():
+    """contract: a skill record with no `Name` (40 legacy skills: Meditation,
+    Unarmed, Compassion, …) resolves via its table key, so its wiki page links
+    into the `skill_<key>` dossier instead of orphaning the whole page."""
+    db = FakeDB(
+        skills={"Meditation": {"Description": "Quiet the mind.", "Id": 25}},
+        wiki={
+            "Meditation": (
+                "== Overview ==\nMeditation lets you regenerate Power in "
+                "the field. Higher levels unlock deeper focus."
+            )
+        },
+    )
+    docs = build_wiki_documents(db)
+    meditation = [d for d in docs if d["metadata"]["name"] == "Meditation"]
+    assert meditation
+    for doc in meditation:
+        assert doc["metadata"]["entity_id"] == "skill_Meditation"
+        assert doc["metadata"]["entity_type"] == "skill"
+
+
+
 # --- Invariants ---
 
 
