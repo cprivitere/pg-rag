@@ -96,6 +96,47 @@ else
   fi
 fi
 
+# 4b) FlashInfer JIT pre-flight. vLLM's engine init runs a dummy sampling step,
+#     flashinfer builds its "sampling" op on first use, and a failed build kills
+#     the whole engine ("Engine core initialization failed", with only a ninja
+#     CalledProcessError in the log — flashinfer swallows the compiler output
+#     inside the exception). Seen live on molab (2026-10-06).
+#     So: build that op *here*, with FLASHINFER_JIT_VERBOSE=1 (prints the real
+#     compiler errors) and FLASHINFER_NVCC pinned, since flashinfer resolves
+#     nvcc as os.environ.get("FLASHINFER_NVCC", f"{cuda_home}/bin/nvcc") —
+#     explicit beats guessed. A successful pre-flight also warms
+#     ~/.cache/flashinfer/<ver>/<hash>/cached_ops/sampling, so engine init
+#     reuses it; a failed one disables flashinfer's sampler
+#     (VLLM_USE_FLASHINFER_SAMPLER=0 -> vLLM's own forward_native sampler),
+#     which is a supported opt-out, not a degraded hack.
+#     Override with PGRAG_VLLM_FLASHINFER_SAMPLER=0 (skip pre-flight, force torch
+#     sampler) or =1 (force flashinfer sampler, fail loudly if unavailable).
+export FLASHINFER_NVCC="${FLASHINFER_NVCC:-$CUDA_HOME/bin/nvcc}"
+FLASHINFER_JIT_LOG=/tmp/flashinfer-jit.log
+case "${PGRAG_VLLM_FLASHINFER_SAMPLER:-auto}" in
+  0)
+    echo "FLASHINFER_JIT pre-flight skipped; forcing VLLM_USE_FLASHINFER_SAMPLER=0"
+    export VLLM_USE_FLASHINFER_SAMPLER=0
+    ;;
+  1)
+    echo "FLASHINFER_JIT pre-flight skipped; forcing VLLM_USE_FLASHINFER_SAMPLER=1"
+    export VLLM_USE_FLASHINFER_SAMPLER=1
+    ;;
+  *)
+    echo "FLASHINFER_JIT building the sampling op (nvcc=$FLASHINFER_NVCC, log $FLASHINFER_JIT_LOG)"
+    if FLASHINFER_JIT_VERBOSE=1 /tmp/vllm-venv/bin/python -c \
+        "import flashinfer.sampling as s; s.get_sampling_module()" > "$FLASHINFER_JIT_LOG" 2>&1; then
+      echo "FLASHINFER_JIT ok (sampling op built/loaded; cached for the serve below)"
+    else
+      echo "FLASHINFER_JIT failed -> serving with torch's sampler (VLLM_USE_FLASHINFER_SAMPLER=0)"
+      echo "  compiler output tail ($FLASHINFER_JIT_LOG):"
+      tail -n 40 "$FLASHINFER_JIT_LOG" | sed 's/^/  /'
+      export VLLM_USE_FLASHINFER_SAMPLER=0
+    fi
+    ;;
+esac
+
+
 # --max-model-len 24576 (was 8192): the loop's system prompt (rules + schema
 # summary + tool contract + BM25 seed) plus up to 12k chars of tool results
 # overflows 8192 tokens. At --gpu-memory-utilization 0.40 the KV pool is
@@ -113,7 +154,7 @@ if [ "$MTP" = "0" ]; then
 else
   SPEC_ARGS=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":${MTP}}")
 fi
-echo "EFFECTIVE_CONFIG max_model_len=$MAXLEN gpu_memory_utilization=$UTIL mtp=$MTP parser=${PARSER:-none}"
+echo "EFFECTIVE_CONFIG max_model_len=$MAXLEN gpu_memory_utilization=$UTIL mtp=$MTP parser=${PARSER:-none} flashinfer_sampler=${VLLM_USE_FLASHINFER_SAMPLER:-default}"
 
 nohup /tmp/vllm-venv/bin/vllm serve Qwen/Qwen3.8-27B-FP8 \
   --served-model-name pg-assistant \

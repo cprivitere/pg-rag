@@ -456,11 +456,41 @@ The serve line in `scripts/molab_vllm_launch.sh` changed for tool-loop mode:
   `RuntimeError: Engine core initialization failed. See root cause above.` while
   the cause sits in an *earlier* block, which is exactly how the first sandbox
   boot's log read.
+- **FlashInfer JIT failure (observed live, 2026-10-06)** — the second sandbox
+  boot died as `RuntimeError: Engine core initialization failed. See root cause
+  above. Failed core proc(s): {}`, whose real cause was
+  `subprocess.CalledProcessError: Command '['ninja', '-v', '-C',
+  '~/.cache/flashinfer/0.6.18.post1/<hash>/cached_ops/sampling', …]`:
+  vLLM's engine init runs a dummy sampling step, flashinfer builds its
+  `sampling` op on first use, and a failed build kills the engine. The compiler
+  output is **not** in the log — flashinfer passes it to `CalledProcessError`
+  (`flashinfer/jit/cpp_ext.py`) instead of printing it, which is why only a bare
+  ninja command line appeared.
+  The launcher now pre-builds that exact op before serving:
+  `python -c "import flashinfer.sampling as s; s.get_sampling_module()"`
+  (`get_sampling_module()` == `gen_sampling_module().build_and_load()`, i.e. the
+  same `cached_ops/sampling` artifact) with `FLASHINFER_JIT_VERBOSE=1` so a
+  failure prints the real compiler errors, and with **`FLASHINFER_NVCC` pinned**
+  to the wheel's nvcc — flashinfer resolves it as
+  `os.environ.get("FLASHINFER_NVCC", f"{cuda_home}/bin/nvcc")`
+  (`flashinfer/jit/core.py`), so an explicit path beats guessed discovery. A
+  successful pre-flight warms the cache dir and engine init reuses it; a failed
+  one exports `VLLM_USE_FLASHINFER_SAMPLER=0`, which is a supported opt-out
+  (`TopKTopPSampler` falls back to `forward_native`; the only raise path is the
+  var being explicitly `1` *and* the compute capability unsupported). At
+  temperature 0 the loop is greedy anyway, so flashinfer's sampler buys nothing
+  here.
+  Knob: `PGRAG_VLLM_FLASHINFER_SAMPLER=0` (skip pre-flight, force torch sampler)
+  or `=1` (skip pre-flight, force flashinfer, fail loudly). Verified branch by
+  branch: JIT ok → env left at vLLM's default; JIT fail → compiler tail printed
+  and `=0` inherited by the serve process; `FLASHINFER_NVCC` exported in both.
 - **Retry knobs** (env vars, so no editing of the tarball copy — a re-publish
   replaces it): `PGRAG_VLLM_MAXLEN` (default 24576), `PGRAG_VLLM_UTIL` (0.40),
-  `PGRAG_VLLM_MTP` (`0` removes `--speculative-config` entirely). The launcher
-  echoes `EFFECTIVE_CONFIG max_model_len=… gpu_memory_utilization=… mtp=… parser=…`
-  and the argv was verified for all three settings, e.g. after an OOM:
+  `PGRAG_VLLM_MTP` (`0` removes `--speculative-config` entirely),
+  `PGRAG_VLLM_FLASHINFER_SAMPLER` (`auto`/`0`/`1`). The launcher echoes
+  `EFFECTIVE_CONFIG max_model_len=… gpu_memory_utilization=… mtp=… parser=…
+  flashinfer_sampler=…` and the argv was verified for all settings, e.g. after an
+  OOM:
   `PGRAG_VLLM_MAXLEN=16384 PGRAG_VLLM_MTP=0 bash pg-rag-src/scripts/molab_vllm_launch.sh`
   (or `os.environ[...] = ...` in the kernel before re-running `sidecar_llm`).
 - The loop reaches the sidecar through `PGRAG_LLM_URL` / `PGRAG_LLM_MODEL` /
