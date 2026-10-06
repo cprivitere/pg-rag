@@ -7,15 +7,22 @@ questions with a local LLM.
 
 ## Chat on molab
 
-[![Open in molab](https://marimo.io/molab-shield.svg)](https://molab.marimo.io/github/cprivitere/pg-rag/blob/main/notebooks/molab-mirror/notebook.py)
+Two marimo notebooks run on [molab](https://molab.marimo.io) (marimo's free cloud
+notebooks) on an RTX PRO 6000 (96 GB VRAM): click a badge to open one from
+GitHub, attach the GPU from the notebook specs button, and ask questions. Model
+weights and data are cached per-sandbox afterwards.
 
-`notebooks/molab-mirror/notebook.py` is a marimo notebook that runs the chat
-pipeline on [molab](https://molab.marimo.io) (marimo's free cloud notebooks) on
-an RTX PRO 6000 (96 GB VRAM): click the badge to open it from GitHub, attach
-the GPU from the notebook specs button, and ask questions. The first run
-downloads the model weights and corpus; both are cached per-sandbox afterwards.
-Details in the
-[notebook README](https://github.com/cprivitere/pg-rag/blob/main/notebooks/molab-mirror/README.md);
+- **corpus chat** — single-shot retrieval over the public corpus, answered by the
+  vLLM sidecar or an in-process 4-bit model; first run downloads weights + corpus:
+  [![Open in molab](https://marimo.io/molab-shield.svg)](https://molab.marimo.io/github/cprivitere/pg-rag/blob/main/notebooks/molab-mirror/notebook.py)
+- **agentic tool loop** — the production `run_loop` answering from a snapshot of
+  the local SQLite store (CDN tables, wiki, and the owner's own play history),
+  published privately by `mise upload-store`; no torch in its kernel, it starts
+  the vLLM sidecar itself and needs no repo checkout:
+  [![Open in molab](https://marimo.io/molab-shield.svg)](https://molab.marimo.io/github/cprivitere/pg-rag/blob/main/notebooks/molab-agentic/notebook.py)
+
+Details: [mirror README](https://github.com/cprivitere/pg-rag/blob/main/notebooks/molab-mirror/README.md),
+[agentic README](https://github.com/cprivitere/pg-rag/blob/main/notebooks/molab-agentic/README.md);
 platform mechanics in `docs/MOLAB_OPS.md`.
 
 ## Pipeline
