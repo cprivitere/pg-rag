@@ -1,0 +1,23 @@
+{
+  "id": "mastery-spark-orbs-price",
+  "question": "What price should I list a Mastery Spark: Orbs for in my stall?",
+  "type": "general",
+  "facts": [
+    [
+      "15000",
+      "15,000",
+      "15k"
+    ],
+    [
+      "20000",
+      "20,000",
+      "20k"
+    ],
+    [
+      "stall",
+      "shop"
+    ]
+  ],
+  "store": true,
+  "notes": "Store-only: pricing lives in the agentic SQLite store, not the RAG corpus. Routing trap (evaluation skill): a price answer must come from the player's own stall_events ledger (TwinkleofToes, action='bought'), not from CDN items.value. Mastery Spark: Orbs (SparkOrb, code 4032, stack 20) has CDN base value 1000 \u2014 a base-value-only answer ('it's worth 1,000') fails both price facts. Realized stall sales: 15000 (2026-07-09, GorgonoidNeurodivergente) and 20000 (2026-08-01, GorgonoidNeurodivergente; sold 2 min after listing) -> avg 17500. Asking prices seen in ledger: 25000 (never sold), 15000, 20000. Comparables in the same ledger: magic/weapon-tier sparks (Staves, Instruments, Wands) last cleared at 10000, Clubs at 5000 (2026-09-29), while armor/jewelry-tier sparks clear 15000-25000 (Leather Armor 20000-25000, Cloth Armor 15000-22222, Subtle Jewelry 20000, Elegant Jewelry 10000). Run via the agentic loop (`mise agentic-eval`), not pipeline golden checks. Validated 2026-10-05: PASS at temp 0/seed 0 (1 round; tools player_state + sql_query)."
+}

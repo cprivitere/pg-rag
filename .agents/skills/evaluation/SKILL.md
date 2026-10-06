@@ -26,13 +26,13 @@ Each file:
 
 - `facts` is a list of variant groups: the answer PASSES if ANY variant in
   each group appears (normalized substring) in the LLM answer.
-- 59 files exist today (23 entity / 23 general / 7 recipe / 6 comparison),
+- 61 files exist today (23 entity / 25 general / 7 recipe / 6 comparison),
   spanning recipes-by-ingredient, level-gated crafting, item acquisition/drops,
   ability lookups, comparisons, quest requirements, wiki lore, wiki how-to
-  assembly, and player-state audits. 8 store-only cases (player facts,
+  assembly, and player-state audits. 9 store-only cases (player facts,
   `"store": true`) count in this total but are excluded from the pipeline
   harnesses — they run via the agentic eval. Future additions should favor the
-  balanced categories (comparison is 6/59 today — the thinnest bucket).
+  balanced categories (comparison is 6/61 today — the thinnest bucket).
 
 ## Live-session goldens (answer-then-validate workflow)
 
@@ -94,6 +94,23 @@ documentation; it is the acceptance gate.
  spread and truncated windows must point aggregates back at sql_query. An
  item with zero stall history (Woe Coin) is currency: fall back to
  `sources`→`npcs`/`quests` for where it's spent (Sven the Bleeder barters).
+- **Synergy is directional, and the CDN stores it one way only.** A skill's
+  `Rewards[level].BonusToSkill = X` means that skill grants a bonus level TO
+  `X` — the *outgoing* direction. Ask "what gives synergy to Meditation?" and
+  a dossier carrying only the outgoing lines makes the model answer backwards
+  (it listed Psychology/Archery/… — skills Meditation *feeds*). Fix: the skill
+  profile now carries a computed `Synergy Levels (bonus levels received from
+  other skills):` section (inverse over every skill's `Rewards`), so the
+  incoming sources (Unarmed 43, Compassion 10/50, Phrenology 15, each racial
+  Phrenology 20) sit in the entity context. Sibling bug found while
+  diagnosing (fixed 2026-10-05): `wiki_builder._build_entity_index` skipped
+  any CDN record with no `Name` — 40 skills (Meditation, Unarmed, Compassion,
+  …) — so their entire wiki page (incl. the wiki's own Synergy Levels table)
+  never linked into the dossier. The index now falls back to the record key
+  for the `skills` table (`_KEY_IS_NAME_TABLES`; 39/39 skill pages with a
+  wiki page relink), and `CACHE_VERSION`/`DOCUMENTS_VERSION` were bumped so
+  the change is actually emitted — regenerate with `mise generate-docs` +
+  `mise build-index --source wiki`.
 
 ## Running it
 
@@ -186,9 +203,9 @@ documentation; it is the acceptance gate.
 
 ## Planned direction
 
-- Golden set is **at 59 and growing** via live-session goldens (see the
+- Golden set is **at 61 and growing** via live-session goldens (see the
   workflow above) — new questions from play sessions are the primary intake;
-  comparison is the thinnest bucket (6/59). Beyond session intake, capture a
+  comparison is the thinnest bucket (6/61). Beyond session intake, capture a
   *named regression case*,
   e.g.:
   - `grow-field-mushrooms` ("How do I grow Field Mushrooms?") — fails before

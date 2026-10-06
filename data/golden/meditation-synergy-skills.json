@@ -1,0 +1,64 @@
+{
+  "id": "meditation-synergy-skills",
+  "question": "What skills provide synergy bonus levels to Meditation?",
+  "type": "general",
+  "facts": [
+    [
+      "Unarmed"
+    ],
+    [
+      "Compassion"
+    ],
+    [
+      "Phrenology"
+    ],
+    [
+      "Human Phrenology"
+    ],
+    [
+      "Elf Phrenology"
+    ],
+    [
+      "Rakshasa Phrenology"
+    ],
+    [
+      "Fae Phrenology"
+    ],
+    [
+      "Goblin Phrenology"
+    ],
+    [
+      "Orc Phrenology"
+    ],
+    [
+      "Giant Phrenology"
+    ],
+    [
+      "Demon Phrenology"
+    ],
+    [
+      "Aberration Phrenology"
+    ],
+    [
+      "Crone-Kin Phrenology"
+    ],
+    [
+      "Dwarf Phrenology"
+    ],
+    [
+      "level 43"
+    ],
+    [
+      "level 15"
+    ],
+    [
+      "level 10"
+    ],
+    [
+      "level 50",
+      "10, 50",
+      "10 and 50"
+    ]
+  ],
+  "notes": "Corpus golden (wiki): the answer is the Synergy Levels table on the Meditation wiki page (data/wiki/Meditation_5f2d6f60.txt -> doc wiki_Meditation_Connected_Skills, metadata.source=wiki; linked into the skill dossier via skill_Meditation after the nameless-skill _build_entity_index fix, 2026-10-05). Sources + levels: Unarmed 43; Compassion 10 and 50; Phrenology 15; each racial Phrenology (Human, Elf, Rakshasa, Fae, Goblin, Orc, Giant, Demon, Aberration, Crone-Kin, Dwarf) 20. Facts assert every source skill is named and the three non-20 levels (43 / 15 / 10+50) are stated, so a truncated or hallucinated level list fails. The Compassion '50' group accepts the model's list-compression phrasings ('level 10, 50' / 'levels 10 and 50') as well as 'level 50' — the fact is knowledge presence, not the model's list punctuation."
+}
