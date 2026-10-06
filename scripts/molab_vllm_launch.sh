@@ -100,14 +100,29 @@ fi
 # summary + tool contract + BM25 seed) plus up to 12k chars of tool results
 # overflows 8192 tokens. At --gpu-memory-utilization 0.40 the KV pool is
 # ~38k tokens, so 24576 fits a single session.
+#
+# Retry knobs (no need to edit this file inside the sandbox — the tarball copy is
+# replaced on every publish): PGRAG_VLLM_MAXLEN, PGRAG_VLLM_UTIL, PGRAG_VLLM_MTP
+# (0 disables MTP speculative decoding entirely). e.g. after an OOM:
+#   PGRAG_VLLM_MAXLEN=16384 PGRAG_VLLM_MTP=0 bash pg-rag-src/scripts/molab_vllm_launch.sh
+MAXLEN="${PGRAG_VLLM_MAXLEN:-24576}"
+UTIL="${PGRAG_VLLM_UTIL:-0.40}"
+MTP="${PGRAG_VLLM_MTP:-3}"
+if [ "$MTP" = "0" ]; then
+  SPEC_ARGS=()
+else
+  SPEC_ARGS=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":${MTP}}")
+fi
+echo "EFFECTIVE_CONFIG max_model_len=$MAXLEN gpu_memory_utilization=$UTIL mtp=$MTP parser=${PARSER:-none}"
+
 nohup /tmp/vllm-venv/bin/vllm serve Qwen/Qwen3.8-27B-FP8 \
   --served-model-name pg-assistant \
-  --max-model-len 24576 \
+  --max-model-len "$MAXLEN" \
   --max-num-seqs 8 \
-  --gpu-memory-utilization 0.40 \
+  --gpu-memory-utilization "$UTIL" \
+  "${SPEC_ARGS[@]}" \
   "${TOOL_ARGS[@]}" \
-  --port 8000 \
-  --speculative-config '{"method":"mtp","num_speculative_tokens":3}' > /tmp/vllm.log 2>&1 &
+  --port 8000 > /tmp/vllm.log 2>&1 &
 VLLM_PID=$!
 echo "LAUNCHED $VLLM_PID"
 

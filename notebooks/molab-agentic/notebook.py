@@ -317,6 +317,7 @@ def sidecar_llm(SRC_DIR, STORE_OK, json, os, run_loop, shutil, subprocess, time)
     # molab requires). It also passes --max-model-len 24576 and
     # --enable-auto-tool-choice with a tool-call parser discovered in-sandbox —
     # see docs/MOLAB_OPS.md "Tool-loop sidecar config".
+    import re as _re
     import urllib.request as _urlreq
 
     LLM_URL = "http://127.0.0.1:8000/v1"
@@ -368,20 +369,37 @@ def sidecar_llm(SRC_DIR, STORE_OK, json, os, run_loop, shutil, subprocess, time)
         if SERVER_MODEL:
             print(f"[sidecar] model: {SERVER_MODEL}")
         else:
-            # The launcher already tails the first seconds of /tmp/vllm.log; if the
-            # server never came up, THIS is where the reason shows up (OOM during
-            # graph capture, flashinfer JIT failure, port already in use, ...).
-            print(f"[sidecar] still not answering after {_WAIT_S}s — last lines of /tmp/vllm.log:")
+            # A bare tail is not enough: vLLM's fatal line is usually
+            # "Engine core initialization failed ... See root cause above", and the
+            # root cause is an EARLIER block in the same file. So print the first
+            # traceback region, every error-ish line, and only then the tail.
+            print(f"[sidecar] still not answering after {_WAIT_S}s — digesting /tmp/vllm.log:")
             try:
                 with open("/tmp/vllm.log", encoding="utf-8", errors="replace") as _f:
-                    for _line in _f.read().splitlines()[-25:]:
-                        print(f"  {_line}")
+                    _lines = _f.read().splitlines()
+                _pat = _re.compile(
+                    r"(?i)error|exception|traceback|out of memory|\boom\b|no available memory|"
+                    r"failed|refused|invalid|unsupported|not enough|too large|assert"
+                )
+                print(f"  log: {len(_lines)} lines")
+                _start = next((i for i, _l in enumerate(_lines) if "Traceback" in _l), None)
+                if _start is not None:
+                    print(f"  first traceback (line {_start + 1}) — the cause is usually in this block:")
+                    for _line in _lines[_start : _start + 18]:
+                        print(f"    {_line[:200]}")
+                _hits = [_l for _l in _lines if _pat.search(_l)]
+                print(f"  error-ish lines ({len(_hits)}):")
+                for _line in _hits[:20]:
+                    print(f"    {_line[:200]}")
+                print("  tail:")
+                for _line in _lines[-12:]:
+                    print(f"    {_line[:200]}")
             except OSError as _exc:
                 print(f"  (no /tmp/vllm.log: {_exc})")
             print(
-                "  Contingencies (docs/MOLAB_OPS.md): lower --max-model-len to 16384 in "
-                "pg-rag-src/scripts/molab_vllm_launch.sh and/or drop MTP "
-                '(--speculative-config) if the log shows OOM, then re-run this cell.'
+                "  Retry knobs (env vars, no file edit needed): PGRAG_VLLM_MAXLEN=16384 "
+                "and/or PGRAG_VLLM_MTP=0 for OOM; set them in this kernel (os.environ) or "
+                "prefix the launcher call, then re-run this cell. Full log: /tmp/vllm.log"
             )
     return LLM_URL, SERVER_MODEL
 

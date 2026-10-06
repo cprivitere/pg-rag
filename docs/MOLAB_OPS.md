@@ -450,9 +450,19 @@ The serve line in `scripts/molab_vllm_launch.sh` changed for tool-loop mode:
   `TOOL_PARSER <name>` / `NO_TOOL_PARSER` plus the probe's stderr tail, then —
   5 s after `LAUNCHED <pid>` — a `kill -0` liveness line (`VLLM_PROCESS alive`
   / `gone`) and the first 25 lines of `/tmp/vllm.log`. The notebook's
-  `sidecar_llm` cell dumps the last 25 lines of `/tmp/vllm.log` (plus the
-  16384/MTP contingency) when its 900 s readiness wait expires, so a failed
-  boot explains itself instead of just "still not answering".
+  `sidecar_llm` cell digs through `/tmp/vllm.log` when its 900 s wait expires:
+  **first traceback block + every error-ish line + the tail**. A bare tail is
+  not enough — the fatal line is usually
+  `RuntimeError: Engine core initialization failed. See root cause above.` while
+  the cause sits in an *earlier* block, which is exactly how the first sandbox
+  boot's log read.
+- **Retry knobs** (env vars, so no editing of the tarball copy — a re-publish
+  replaces it): `PGRAG_VLLM_MAXLEN` (default 24576), `PGRAG_VLLM_UTIL` (0.40),
+  `PGRAG_VLLM_MTP` (`0` removes `--speculative-config` entirely). The launcher
+  echoes `EFFECTIVE_CONFIG max_model_len=… gpu_memory_utilization=… mtp=… parser=…`
+  and the argv was verified for all three settings, e.g. after an OOM:
+  `PGRAG_VLLM_MAXLEN=16384 PGRAG_VLLM_MTP=0 bash pg-rag-src/scripts/molab_vllm_launch.sh`
+  (or `os.environ[...] = ...` in the kernel before re-running `sidecar_llm`).
 - The loop reaches the sidecar through `PGRAG_LLM_URL` / `PGRAG_LLM_MODEL` /
   `PGRAG_LLM_NATIVE_TOOLS` (read at `loop._post` call time); the chat cell sets
   them, so the local llama.cpp default at `:8080` is untouched.
