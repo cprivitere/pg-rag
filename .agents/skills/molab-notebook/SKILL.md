@@ -114,10 +114,12 @@ button in the UI. After attach, the sandbox is recreated:
   the **session must be restarted in the UI** so the kernel re-imports torch.
 - `nvidia-smi -L` and `/tmp/uv-venv/bin/python -c "import torch;
   torch.cuda.is_available()"` are the probes to run after any sandbox change.
-- The notebook's tool-loop mode also needs the vLLM sidecar
-  (`scripts/molab_vllm_launch.sh`) and the private store snapshot — see
-  `docs/MOLAB_OPS.md` "Private store bucket" / "Tool-loop sidecar config"
-  before pairing on it.
+- The notebook's tool-loop mode also needs the vLLM sidecar and the private store
+  snapshot — see `docs/MOLAB_OPS.md` "Private store bucket" / "Tool-loop sidecar
+  config" before pairing on it. Remember the sandbox has **no repo checkout**
+  (molab imports only the notebook file): pushing
+  `scripts/molab_vllm_launch.sh` is the agent's job, or point the user at the
+  copy inside the extracted `pg-rag-src/` tarball.
 
 ## Reference
 - `scripts/execute-code.ps1` — the execution client (plain PowerShell +

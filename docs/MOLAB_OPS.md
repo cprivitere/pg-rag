@@ -392,6 +392,14 @@ The serve line in `scripts/molab_vllm_launch.sh` changed for tool-loop mode:
 - The loop reaches the sidecar through `PGRAG_LLM_URL` / `PGRAG_LLM_MODEL` /
   `PGRAG_LLM_NATIVE_TOOLS` (read at `loop._post` call time); the chat cell sets
   them, so the local llama.cpp default at `:8080` is untouched.
+- **Getting the launcher into the sandbox**: molab imports only
+  `notebooks/molab-mirror/notebook.py` from GitHub — no repo checkout, so a
+  `scripts/…` path never exists inside the container. Either push the file's
+  content through the pairing agent (`bash -lc "$(cat scripts/molab_vllm_launch.sh)"`,
+  host-side `cat`), or run the copy that ships inside the published source
+  tarball after run-all: `bash pg-rag-src/scripts/molab_vllm_launch.sh` from a
+  cell with `subprocess.run(...)`. Logs: `/tmp/launch.log` (launcher),
+  `/tmp/vllm.log` (sidecar).
 - **Status**: the flags above are exercised locally (loop against the published
   snapshot on Python 3.13, 2 tool rounds, real `sql_query`/`player_state`
   calls). Sandbox-side numbers — which parser name the 0.30.0 sidecar reports

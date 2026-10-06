@@ -529,6 +529,11 @@ def model_load():
         print(
             f"[Engine] no vLLM sidecar at {_LLM_URL} - loading {_FALLBACK_MODEL_NAME} (NF4) in-process"
         )
+        print(
+            "[Engine] tool-loop mode needs the sidecar: run "
+            "pg-rag-src/scripts/molab_vllm_launch.sh from a cell (ships in the source "
+            "tarball; no repo checkout in the sandbox), then re-run model_load."
+        )
         _free0, _tot = _torch.cuda.mem_get_info()
         print(f"[Model Load] free before: {_free0 / 2**30:.1f} GiB")
         model = _AutoModel.from_pretrained(
@@ -577,7 +582,12 @@ def sidecar_tools_probe(_LLM_URL, json, server_model):
     ]
     NATIVE_TOOLS = "0"
     if not server_model:
-        print("[loop] no vLLM sidecar: start it (scripts/molab_vllm_launch.sh) for tool-loop mode")
+        print(
+            "[loop] no vLLM sidecar at "
+            f"{_LLM_URL} — launch pg-rag-src/scripts/molab_vllm_launch.sh from a cell "
+            "(the source tarball ships it; there is no repo checkout in the sandbox), "
+            "then re-run this cell. Tool-loop mode needs the sidecar; corpus chat does not."
+        )
     else:
         _payload = json.dumps(
             {
@@ -702,9 +712,12 @@ def chat(_LLM_URL, NATIVE_TOOLS, run_loop, STORE_OK, STORE_PATH, model, re, retr
         if _mode.value == "tool loop":
             if not (STORE_OK and server_model and run_loop):
                 yield (
-                    "Tool-loop mode needs the private store snapshot and the vLLM sidecar "
-                    "(scripts/molab_vllm_launch.sh); see the [store]/[src] cell output above. "
-                    "Switch back to 'corpus chat' for the single-shot path."
+                    "Tool-loop mode needs the private store snapshot and the vLLM sidecar. "
+                    "Launch the sidecar from a cell with "
+                    "`pg-rag-src/scripts/molab_vllm_launch.sh` (shipped in the source "
+                    "tarball — the sandbox has no repo checkout), then re-run "
+                    "`model_load` → `sidecar_tools_probe`. Switch back to 'corpus chat' "
+                    "for the single-shot path."
                 )
                 return
             import os as _os

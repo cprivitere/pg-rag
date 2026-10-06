@@ -56,11 +56,33 @@ Open from GitHub via [molab](https://molab.marimo.io/github):
 (Public repo: no GitHub auth needed on molab.)
 
 - Attach the GPU via the notebook specs button (RTX PRO 6000 Blackwell).
-- The vLLM sidecar is optional but is the fast path and the only path with
-  native tool calls: run `bash -lc "$(cat scripts/molab_vllm_launch.sh)"` in a
-  terminal first (it installs `/tmp/vllm-venv`, downloads
-  `Qwen/Qwen3.8-27B-FP8`, discovers the tool-call parser, and serves
-  `pg-assistant` on `:8000`). See `docs/MOLAB_OPS.md`.
+- **There is no repo checkout in the sandbox**: molab imports only this notebook
+  file from GitHub, so `scripts/…` paths do not exist in the container. The vLLM
+  sidecar is optional (corpus chat works without it) but it is the fast path and
+  the only path with native tool calls. Two ways to get it running:
+  1. **From a notebook cell, no other tools needed** — `pgrag_src` extracts the
+     published source tarball, which contains the launcher. Run-all first (gives
+     you `pg-rag-src/`), then paste into a cell:
+
+     ```python
+     import subprocess
+     subprocess.run(
+         ["bash", "-lc", "bash pg-rag-src/scripts/molab_vllm_launch.sh > /tmp/launch.log 2>&1"],
+         check=False,
+     )
+     ```
+
+     ~6 min (isolated venv + 30.9 GB FP8 checkpoint + serve); it prints
+     `TOOL_PARSER <name>` or `NO_TOOL_PARSER`. Then re-run `model_load` and
+     `sidecar_tools_probe`.
+  2. **Pairing agent** (the `molab-notebook` skill) — the checkout on your
+     machine has `scripts/molab_vllm_launch.sh`, and the agent pushes its content
+     into the sandbox kernel: `bash -lc "$(cat scripts/molab_vllm_launch.sh)"`
+     (the `cat` runs host-side, which is why it reads that way).
+
+  Either way the log lives at `/tmp/vllm.log` (sidecar) and `/tmp/launch.log`
+  (launcher) — check them before assuming a silent failure. See
+  `docs/MOLAB_OPS.md` → "Tool-loop sidecar config".
 - Keep the store download + tool-corpus build inside one run-all block — molab
   has historically killed sandboxes during long idle loads.
 
