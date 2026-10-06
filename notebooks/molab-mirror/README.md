@@ -55,6 +55,11 @@ Open from GitHub via [molab](https://molab.marimo.io/github):
 
 (Public repo: no GitHub auth needed on molab.)
 
+> Whichever mode you pick here, this notebook is the corpus-chat one: it keeps
+> the in-process fallback and the lexical index. If you only want the agentic
+> tool loop (store-backed, torch-free kernel, auto-launched sidecar), use
+> `notebooks/molab-agentic/notebook.py` instead.
+
 - Attach the GPU via the notebook specs button (RTX PRO 6000 Blackwell).
 - **There is no repo checkout in the sandbox**: molab imports only this notebook
   file from GitHub, so `scripts/…` paths do not exist in the container. The vLLM

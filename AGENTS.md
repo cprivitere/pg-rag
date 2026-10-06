@@ -3,7 +3,7 @@
 Oh My Pi agent guide for **pg-rag** — the unified repo for the Project
 Gorgon knowledge base: corpus build, retrieval pipeline, agentic SQLite
 store, and tooling in one place.
-The marimo notebook lives in `notebooks/` (molab-mirror).
+The marimo notebooks live in `notebooks/` (molab-mirror = corpus chat, molab-agentic = tool loop).
 
 ---
 
@@ -59,7 +59,8 @@ notice as a user-role message.
 - `data/` (gitignored) — `cdn/`, `wiki/` (+`curated/`, `.meta.json`), `derived/` (`documents_version.json`), `documents.json`, `chroma/`, `golden/`, `retrieval_traces/`, eval records (`embed_eval_*.log`, `embed_vram.json`, `bakeoff_*.json`). Service logs live at project-root `logs/` (`embed.log`, `llm.log`, `rerank.log`, `chat.log`, and `webui.log` when run).
 - `.omp/` — oh-my-pi config: `RULES.md`, `config.yml`, `WATCHDOG.md`.
 - `.agents/skills/` — all agent skills, discoverable by any agent harness: `pg-rag`, `pg-data`, `retrieval`, `evaluation`, `testing` (pipeline/workflow skills) + `molab-notebook` (pairing on the molab-hosted marimo chat notebook). Skills live here only — commit changes here, never re-create `.omp/skills/` copies.
-- `notebooks/molab-mirror/` — the marimo notebook that runs the PG-RAG chat on molab (marimo's hosted notebook service). Two modes: single-shot **corpus chat** over the public `hf://buckets/Nubula/paddock` corpus, and the production **agentic tool loop** (`pgrag.agentic.loop.run_loop`) against a snapshot of `data/sqlite_gorgon.db` published to the private `hf://buckets/Nubula/paddock-private` by `mise upload-store` (store + manifest + `src/scripts` tarball; the sandbox kernel is Python 3.13, so the loop source must stay 3.13-parseable — no PEP 758 `except A, B:`). Platform mechanics (sandbox lifecycle, GPU attach, torch repair, HF bucket, auto-start limits): `docs/MOLAB_OPS.md`. Pairing/protocol: the `molab-notebook` skill.
+- `notebooks/molab-agentic/` — the **tool-loop-only** molab notebook (agentic): `pgrag.agentic.loop.run_loop` against a snapshot of `data/sqlite_gorgon.db` published to the private `hf://buckets/Nubula/paddock-private` by `mise upload-store` (store + manifest + `src`/`scripts` tarball). No torch in its kernel (inference is the vLLM sidecar, which the notebook launches from the extracted tarball when `:8000` is down), so no env repair / session restart / in-process fallback. PEP 723 deps: `marimo[mcp]`, `huggingface-hub`, `requests` — the kernel is Python 3.13, so the loop source must stay 3.13-parseable (no PEP 758 `except A, B:`).
+- `notebooks/molab-mirror/` — the **corpus-chat** molab notebook: single-shot lexical RAG over the public `hf://buckets/Nubula/paddock` corpus, answered by the vLLM sidecar or an in-process 4-bit model; keeps a mode switch that can also run the tool loop. Platform mechanics (sandbox lifecycle, GPU attach, torch repair, HF bucket, auto-start limits): `docs/MOLAB_OPS.md`. Pairing/protocol: the `molab-notebook` skill.
 
 ## Development Commands
 

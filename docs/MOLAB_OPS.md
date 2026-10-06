@@ -1,11 +1,12 @@
 # molab platform ops — how the hosted notebook actually works
 
-Operational knowledge for `notebooks/molab-mirror/notebook.py` (the
-PG-RAG chat on molab) that doesn't fit the pairing protocol in the
-`molab-notebook` skill. Read this before touching the notebook's
-platform-coupled parts: `setup`, `rag_index` cache paths, the
-`store_access`/`store_snapshot`/`pgrag_src` private-bucket cells,
-`model_load` / model identity.
+Operational knowledge for the molab notebooks that run PG-RAG
+(`notebooks/molab-mirror/notebook.py` = single-shot corpus chat,
+`notebooks/molab-agentic/notebook.py` = agentic tool loop only) that doesn't
+fit the pairing protocol in the `molab-notebook` skill. Read this before
+touching their platform-coupled parts: `setup` / `rag_index` cache paths
+(mirror), the `store_access`/`store_snapshot`/`pgrag_src` private-bucket cells
+and the auto-launched sidecar (agentic), `model_load` / model identity.
 
 ## What molab is
 
@@ -98,16 +99,44 @@ override it (security policy). Consequences:
 
 ## The notebook ↔ repo contract
 
-- Source of truth for the notebook is the PUBLIC repo
-  (`cprivitere/pg-rag`, notebook at
-  `notebooks/molab-mirror/notebook.py`). molab loads it from GitHub:
-  `https://molab.marimo.io/github/cprivitere/pg-rag/blob/main/notebooks/molab-mirror/notebook.py`
-  (public repo → no GitHub auth needed on molab).
+- Source of truth for the notebooks is the PUBLIC repo (`cprivitere/pg-rag`).
+  molab loads a single **file** from GitHub — never a repo checkout:
+  - corpus chat: `https://molab.marimo.io/github/cprivitere/pg-rag/blob/main/notebooks/molab-mirror/notebook.py`
+  - tool loop: `https://molab.marimo.io/github/cprivitere/pg-rag/blob/main/notebooks/molab-agentic/notebook.py`
+
+  (public repo → no GitHub auth needed on molab). Consequence worth repeating:
+  paths like `scripts/…` do not exist inside the sandbox; anything a cell needs
+  from this repo must arrive through the private bucket's source tarball.
 - Sandbox-local edits via `cm.edit_cell` are LIVE-ONLY. Persist a cell
   edit by exporting the notebook (base64 via scratchpad) and committing
   to the repo. Never assume an edited cell survives a sandbox recreate.
 - molab adds `marimo[mcp]>=0.24.0` + its own pinned deps to the PEP 723
   deps block on save; don't hand-craft the header, let the sandbox write it.
+
+## The tool-loop notebook (`notebooks/molab-agentic`)
+
+Store-only companion to the mirror notebook: `run_loop(..., corpus="tool")` and
+nothing else. Eight cells — `imports`, `store_access`, `store_snapshot`,
+`corpus_docs`, `pgrag_src`, `sidecar_llm`, `tools_protocol`, `chat` — ~470
+lines, and importantly **no torch in the kernel**: inference is the sidecar's, so
+there is no env-repair cell, no session-restart step, no `transformers` and no
+22 GB NF4 fallback. PEP 723 deps are just `marimo[mcp]`, `huggingface-hub`,
+`requests`.
+
+- `sidecar_llm` makes the sidecar mandatory and self-starting: it probes
+  `:8000`, and when nothing answers it runs the launcher **from the extracted
+  source tarball** (`pg-rag-src/scripts/molab_vllm_launch.sh`, ~6 min, one
+  bounded block), tails `/tmp/launch.log`, then waits up to 15 min for the model.
+  That is the sandbox-side answer to "there is no repo checkout": the tarball
+  copy is reachable, a `scripts/…` path is not.
+- `corpus_docs` fetches only the public `documents.json` (185 MB) — the tool
+  corpus comes from it via the tarball's `build_tool_corpus.py`. The mirror's
+  in-kernel lexical index is not built here.
+- Everything else (store snapshot verification, tarball sha, tool protocol
+  probe, the API) behaves exactly as documented above for the mirror notebook.
+
+Failure modes are explicit: a missing store/source/sidecar yields "Tool-loop
+chat needs …" rather than a stack trace.
 
 ## Corpus variant policy
 

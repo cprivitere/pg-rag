@@ -118,8 +118,9 @@ button in the UI. After attach, the sandbox is recreated:
   snapshot — see `docs/MOLAB_OPS.md` "Private store bucket" / "Tool-loop sidecar
   config" before pairing on it. Remember the sandbox has **no repo checkout**
   (molab imports only the notebook file): pushing
-  `scripts/molab_vllm_launch.sh` is the agent's job, or point the user at the
-  copy inside the extracted `pg-rag-src/` tarball.
+  `scripts/molab_vllm_launch.sh` is the agent's job, or point the user at
+  `notebooks/molab-agentic/notebook.py`, which auto-launches the launcher copy
+  inside the extracted `pg-rag-src/` tarball and needs no torch at all.
 
 ## Reference
 - `scripts/execute-code.ps1` — the execution client (plain PowerShell +
