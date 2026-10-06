@@ -398,8 +398,10 @@ def sidecar_llm(SRC_DIR, STORE_OK, json, os, run_loop, shutil, subprocess, time)
                 print(f"  (no /tmp/vllm.log: {_exc})")
             print(
                 "  Retry knobs (env vars, no file edit needed): PGRAG_VLLM_MAXLEN=16384 "
-                "and/or PGRAG_VLLM_MTP=0 for OOM; set them in this kernel (os.environ) or "
-                "prefix the launcher call, then re-run this cell. Full log: /tmp/vllm.log"
+                "and/or PGRAG_VLLM_MTP=0 for OOM; PGRAG_VLLM_EAGER=1 for the shortest "
+                "boot (no torch.compile / no graph capture). Set them in this kernel "
+                "(os.environ) or prefix the launcher call, then re-run this cell. "
+                "Full log: /tmp/vllm.log"
             )
     return LLM_URL, SERVER_MODEL
 

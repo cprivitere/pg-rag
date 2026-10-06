@@ -17,6 +17,14 @@ Two things make it much smaller than `notebooks/molab-mirror`:
   (`pg-rag-src/scripts/molab_vllm_launch.sh`), then waits for the model to come
   up. There is no repo checkout in the sandbox, so that tarball copy is the one
   the notebook can reach.
+- **No JIT compiles.** flashinfer's `sampling` op is JIT-built with ninja/nvcc at
+  engine init, which on molab fails (killing the engine with a bare
+  `CalledProcessError`) and, even when it works, is a long CPU-heavy step during
+  which sandboxes get torn down. The launcher therefore serves with
+  `VLLM_USE_FLASHINFER_SAMPLER=0` (vLLM's torch sampler — this loop is greedy at
+  temperature 0, so nothing is lost). `PGRAG_VLLM_JIT_CACHE=1` installs
+  flashinfer's *prebuilt* kernels if you want it back, and `PGRAG_VLLM_EAGER=1`
+  skips torch.compile + CUDA graph capture for the shortest boot.
 
 ## Cells (run order is derived from the graph)
 

@@ -456,41 +456,46 @@ The serve line in `scripts/molab_vllm_launch.sh` changed for tool-loop mode:
   `RuntimeError: Engine core initialization failed. See root cause above.` while
   the cause sits in an *earlier* block, which is exactly how the first sandbox
   boot's log read.
-- **FlashInfer JIT failure (observed live, 2026-10-06)** — the second sandbox
-  boot died as `RuntimeError: Engine core initialization failed. See root cause
-  above. Failed core proc(s): {}`, whose real cause was
+- **No JIT in the sandbox — policy and why.** flashinfer compiles its `sampling`
+  op with ninja/nvcc on first use, which vLLM triggers during engine init (dummy
+  sampling step). Observed live (2026-10-06): the build **failed**, killing
+  engine init as `RuntimeError: Engine core initialization failed. See root cause
+  above. Failed core proc(s): {}` — with the real cause,
   `subprocess.CalledProcessError: Command '['ninja', '-v', '-C',
-  '~/.cache/flashinfer/0.6.18.post1/<hash>/cached_ops/sampling', …]`:
-  vLLM's engine init runs a dummy sampling step, flashinfer builds its
-  `sampling` op on first use, and a failed build kills the engine. The compiler
-  output is **not** in the log — flashinfer passes it to `CalledProcessError`
-  (`flashinfer/jit/cpp_ext.py`) instead of printing it, which is why only a bare
-  ninja command line appeared.
-  The launcher now pre-builds that exact op before serving:
-  `python -c "import flashinfer.sampling as s; s.get_sampling_module()"`
-  (`get_sampling_module()` == `gen_sampling_module().build_and_load()`, i.e. the
-  same `cached_ops/sampling` artifact) with `FLASHINFER_JIT_VERBOSE=1` so a
-  failure prints the real compiler errors, and with **`FLASHINFER_NVCC` pinned**
-  to the wheel's nvcc — flashinfer resolves it as
-  `os.environ.get("FLASHINFER_NVCC", f"{cuda_home}/bin/nvcc")`
-  (`flashinfer/jit/core.py`), so an explicit path beats guessed discovery. A
-  successful pre-flight warms the cache dir and engine init reuses it; a failed
-  one exports `VLLM_USE_FLASHINFER_SAMPLER=0`, which is a supported opt-out
-  (`TopKTopPSampler` falls back to `forward_native`; the only raise path is the
-  var being explicitly `1` *and* the compute capability unsupported). At
-  temperature 0 the loop is greedy anyway, so flashinfer's sampler buys nothing
-  here.
-  Knob: `PGRAG_VLLM_FLASHINFER_SAMPLER=0` (skip pre-flight, force torch sampler)
-  or `=1` (skip pre-flight, force flashinfer, fail loudly). Verified branch by
-  branch: JIT ok → env left at vLLM's default; JIT fail → compiler tail printed
-  and `=0` inherited by the serve process; `FLASHINFER_NVCC` exported in both.
+  '~/.cache/flashinfer/0.6.18.post1/<hash>/cached_ops/sampling', …]`, and no
+  compiler output anywhere, because flashinfer hands it to the exception
+  (`flashinfer/jit/cpp_ext.py`) instead of printing it. Even when such a build
+  works it is a long CPU-heavy step during which molab tears sandboxes down
+  (the repo's own history: every loss during a load). Operator verdict after
+  repeated crashes: *JIT steps in molab are not viable*.
+  So the launcher's default is **no flashinfer JIT at all**:
+  `VLLM_USE_FLASHINFER_SAMPLER=0` → `TopKTopPSampler` uses `forward_native`
+  (torch). That is a supported opt-out (it returns `False` + logs; the only
+  raise path is the var being explicitly `1` *and* the capability unsupported),
+  and at temperature 0 this loop is greedy, so flashinfer's sampler is worth
+  nothing here.
+- **Getting flashinfer back without JIT**: `PGRAG_VLLM_JIT_CACHE=1` installs
+  `flashinfer-jit-cache==<installed flashinfer version>+cu130` from
+  `https://flashinfer.ai/whl/cu130` (same release tag + CUDA variant as the
+  installed flashinfer; flashinfer picks it up via
+  `flashinfer.jit.env._get_jit_cache_dir()`). The matching wheel for the crashed
+  build is `flashinfer_jit_cache-0.6.18.post1+cu130-cp39-abi3-manylinux_2_28_x86_64.whl`
+  (~1 GB, opt-in for that reason). Then `PGRAG_VLLM_FLASHINFER_SAMPLER=1` can be
+  enabled safely: kernels come prebuilt, nothing is compiled.
+- **`PGRAG_VLLM_EAGER=1`** adds `--enforce-eager`: skips torch.compile and CUDA
+  graph capture. vLLM supports it together with MTP (its own runner gates
+  spec-decode graphs on `... and not self.speculative_config.enforce_eager`), so
+  this is the shortest, most predictable boot when a sandbox keeps dying in the
+  compile/capture phases — the CVaR option, at the cost of decode speed.
 - **Retry knobs** (env vars, so no editing of the tarball copy — a re-publish
   replaces it): `PGRAG_VLLM_MAXLEN` (default 24576), `PGRAG_VLLM_UTIL` (0.40),
   `PGRAG_VLLM_MTP` (`0` removes `--speculative-config` entirely),
-  `PGRAG_VLLM_FLASHINFER_SAMPLER` (`auto`/`0`/`1`). The launcher echoes
-  `EFFECTIVE_CONFIG max_model_len=… gpu_memory_utilization=… mtp=… parser=…
-  flashinfer_sampler=…` and the argv was verified for all settings, e.g. after an
-  OOM:
+  `PGRAG_VLLM_EAGER` (`1` = `--enforce-eager`),
+  `PGRAG_VLLM_FLASHINFER_SAMPLER` (default `0`; `1` opts in),
+  `PGRAG_VLLM_JIT_CACHE` (`1` installs the prebuilt kernels). The launcher echoes
+  `EFFECTIVE_CONFIG max_model_len=… gpu_memory_utilization=… mtp=… eager=…
+  parser=… flashinfer_sampler=…` and the argv/env was verified for every setting,
+  e.g. after an OOM:
   `PGRAG_VLLM_MAXLEN=16384 PGRAG_VLLM_MTP=0 bash pg-rag-src/scripts/molab_vllm_launch.sh`
   (or `os.environ[...] = ...` in the kernel before re-running `sidecar_llm`).
 - The loop reaches the sidecar through `PGRAG_LLM_URL` / `PGRAG_LLM_MODEL` /
