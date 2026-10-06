@@ -26,10 +26,10 @@ Each file:
 
 - `facts` is a list of variant groups: the answer PASSES if ANY variant in
   each group appears (normalized substring) in the LLM answer.
-- 59 files exist today (23 entity / 22 general / 7 recipe / 6 comparison),
+- 59 files exist today (23 entity / 23 general / 7 recipe / 6 comparison),
   spanning recipes-by-ingredient, level-gated crafting, item acquisition/drops,
   ability lookups, comparisons, quest requirements, wiki lore, wiki how-to
-  assembly, and player-state audits. 7 store-only cases (player facts,
+  assembly, and player-state audits. 8 store-only cases (player facts,
   `"store": true`) count in this total but are excluded from the pipeline
   harnesses — they run via the agentic eval. Future additions should favor the
   balanced categories (comparison is 6/59 today — the thinnest bucket).

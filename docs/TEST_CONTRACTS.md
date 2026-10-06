@@ -229,12 +229,12 @@ test (prove the source is fine) or recording a deliberate contract change
 - **Contracts**: golden shape `{id, question, type, facts: [[variants…]], xfail?: bool}` — `xfail: true` marks a known-gap probe: runner+test treat a persistent miss as expected, but a pass (gap just closed) is a FAIL forcing unflagging; offline guard in test_golden_xfail_gate.py. `"store": true` marks a store-only case (facts in the agentic SQLite store, e.g. glogger play history): pipeline harnesses skip it; it runs via `mise agentic-eval` (appended to the short tier).
   (changing it breaks offline auto-collection — RULES/WATCHDOG trap); IR
   metric canonical-unit counting (`_row_`/`_coverage`/`_chunk_` collapse);
-  Tiered split: `test_golden_facts_short` (`-m short`, 8 files, ~3-5 min) and `test_golden_facts_long` (`-m long`, 39 files, ~11-23 min); bare run includes all 47 pipeline files (store-only cases excluded — they run via `mise agentic-eval`, whose short tier is 12 cases).
+  Tiered split: `test_golden_facts_short` (`-m short`, 8 files, ~3-5 min) and `test_golden_facts_long` (`-m long`, 43 files, ~11-23 min); bare run includes all 51 pipeline files (store-only cases excluded — they run via `mise agentic-eval`, whose short tier is 16 cases).
   trace field set + `ask()`-fill no-payload-mutation; bakeoff corpus
   type-stratified queries.
 - **Change ⇒** `uv run pytest tests/test_golden_check.py tests/test_retrieval_eval.py
   tests/test_retrieval_trace.py tests/test_bakeoff_corpus.py`
-  Use `-m short` for the quick tier (8 files, ~3-5 min) or `-m long` for the full tier (39 files).
+  Use `-m short` for the quick tier (8 files, ~3-5 min) or `-m long` for the full tier (43 files).
   Include `tests/test_golden_rerun.py` in the sibling run when the rerun
   tooling shape changes.
   **Golden-rerun tooling** (`scripts/golden_rerun.py`, offline tests in

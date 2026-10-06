@@ -121,17 +121,27 @@ def main() -> int:
     golden_dir = ROOT / "data" / "golden"
     if eval_skill.exists() and golden_dir.is_dir():
         golden_files = sorted(golden_dir.glob("*.json"))
-        types = Counter(
-            (json.loads(f.read_text(encoding="utf-8")) or {}).get("type", "?") for f in golden_files
-        )
+        goldens = [json.loads(f.read_text(encoding="utf-8")) or {} for f in golden_files]
+        types = Counter(g.get("type", "?") for g in goldens)
         text = eval_skill.read_text(encoding="utf-8")
-        expected = {"entity": 23, "general": 22, "recipe": 7, "comparison": 6}
+        known_types = {"entity", "recipe", "comparison", "general"}
         mismatches = []
+        # A `type` outside the harness vocabulary is an unroutable golden: it
+        # slips past the store-only skip (keyed on the `store` flag) AND past
+        # golden_check's `--type` choices, so nothing owns it.
+        unknown = sorted(t for t in types if t not in known_types)
+        if unknown:
+            mismatches.append("unroutable type(s): " + ", ".join(f"{t}={types[t]}" for t in unknown))
         if f"{len(golden_files)} files exist today" not in text:
             mismatches.append(f"count ({len(golden_files)})")
-        for t, n in expected.items():
+        for t, n in sorted(types.items()):
+            if t not in known_types:
+                continue
             if f"{t} {n}" not in text and f"{n} {t}" not in text:
-                mismatches.append(f"{t}={types.get(t, 0)} (doc says {n})")
+                mismatches.append(f"{t}={n} not quoted in skill")
+        store_only = sum(1 for g in goldens if g.get("store"))
+        if f"{store_only} store-only" not in text:
+            mismatches.append(f"store-only={store_only} not quoted in skill")
         if mismatches:
             _drift("evaluation skill golden counts stale", "; ".join(mismatches))
         else:

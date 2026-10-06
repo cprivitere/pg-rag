@@ -3,10 +3,10 @@ GOLDEN_DIR; requires the LLM (:8080), embedding (:8081), and reranker (:8082)
 servers and retries sampled LLM answers to damp nondeterminism.
 
 Tiered by marker: -m short (8 representative queries, ~3-5 min) or
--m long (remaining 39, ~11-23 min). Default (no -m) runs all 47 pipeline
+-m long (remaining 43, ~11-23 min). Default (no -m) runs all 51 pipeline
 files — store-only cases ("store": true in their JSON, glogger play-history
 facts) are excluded here; they run in the agentic eval (`mise agentic-eval`,
-12 cases incl. 8 short-tier ids)."""
+16 cases incl. 8 short-tier ids)."""
 
 import json
 
@@ -112,7 +112,7 @@ def test_golden_facts_short(path, require_servers):
 @pytest.mark.long
 @pytest.mark.parametrize("path", _LONG_FILES, ids=lambda p: p.stem)
 def test_golden_facts_long(path, require_servers):
-    """Long golden tier: remaining 39 queries. ~11-23 min. Filter: -m long.
-    Default (no -m) runs both tiers = all 47 pipeline files exactly once
+    """Long golden tier: remaining 43 queries. ~11-23 min. Filter: -m long.
+    Default (no -m) runs both tiers = all 51 pipeline files exactly once
     (store-only cases excluded; see module docstring)."""
     _check_golden_file(path)
