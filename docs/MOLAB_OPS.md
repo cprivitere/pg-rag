@@ -128,7 +128,10 @@ there is no env-repair cell, no session-restart step, no `transformers` and no
   source tarball** (`pg-rag-src/scripts/molab_vllm_launch.sh`, ~6 min, one
   bounded block), tails `/tmp/launch.log`, then waits up to 15 min for the model.
   That is the sandbox-side answer to "there is no repo checkout": the tarball
-  copy is reachable, a `scripts/…` path is not.
+  copy is reachable, a `scripts/…` path is not. Before launching it checks for a
+  GPU (`nvidia-smi` / `/dev/nvidia0`) and refuses with an actionable message on
+  molab's default CPU-only sandbox — attaching a GPU recreates the sandbox at a
+  new URL, so the launch would otherwise die and eat the 15-min wait.
 - `corpus_docs` fetches only the public `documents.json` (185 MB) — the tool
   corpus comes from it via the tarball's `build_tool_corpus.py`. The mirror's
   in-kernel lexical index is not built here.

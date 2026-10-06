@@ -297,7 +297,7 @@ def pgrag_src(
 
 
 @app.cell
-def sidecar_llm(SRC_DIR, STORE_OK, json, os, run_loop, subprocess, time):
+def sidecar_llm(SRC_DIR, STORE_OK, json, os, run_loop, shutil, subprocess, time):
     # --- vLLM sidecar: mandatory here, auto-started when absent ---
     # This notebook has no torch, so the sidecar is the only engine. When it is
     # not already answering at :8000 the launcher that ships in the extracted
@@ -320,11 +320,23 @@ def sidecar_llm(SRC_DIR, STORE_OK, json, os, run_loop, subprocess, time):
         except Exception:
             return None
 
+    def _gpu_present():
+        # molab's default sandbox is CPU-only (no /dev/nvidia*, no nvidia-smi);
+        # launching the sidecar there would burn the whole 15-min wait before
+        # saying so. Attaching a GPU RECREATES the sandbox at a new URL.
+        return bool(shutil.which("nvidia-smi")) or os.path.exists("/dev/nvidia0")
+
     SERVER_MODEL = _server_model()
     if SERVER_MODEL:
         print(f"[sidecar] already up at {LLM_URL} (model: {SERVER_MODEL})")
     elif not (STORE_OK and run_loop and SRC_DIR):
         print("[sidecar] not started: the store + source tarball must resolve first")
+    elif not _gpu_present():
+        print(
+            "[sidecar] no GPU in this sandbox (no nvidia-smi, no /dev/nvidia0) -> not "
+            "launching. Attach one via the notebook specs button first; that recreates "
+            "the sandbox at a NEW url, so re-open this notebook there and run-all."
+        )
     else:
         _launcher = os.path.join(SRC_DIR, "scripts", "molab_vllm_launch.sh")
         print(f"[sidecar] down -> launching {_launcher} (~6 min)")
