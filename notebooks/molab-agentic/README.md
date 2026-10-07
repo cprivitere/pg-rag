@@ -12,6 +12,15 @@ Two things make it much smaller than `notebooks/molab-mirror`:
   there is no env-repair cell, no `transformers`, no 22 GB in-process fallback,
   and no "restart the session after the repair" step. The only runtime extras are
   `requests` and `huggingface_hub` (PEP 723).
+- **Known platform bug (molab 0.25.1 frontend): the chat widget.** Sending a
+  question can fail with `✖ Invalid input: expected nonoptional, received
+  undefined → at messages[0].metadata` — marimo's chat RPC schema requires a
+  `metadata` key that AI SDK-v7 messages may omit. Upstream
+  [marimo#11090](https://github.com/marimo-team/marimo/issues/11090), fixed by
+  [PR #11096](https://github.com/marimo-team/marimo/pull/11096), waiting on
+  molab to ship it. Until then, drive the loop from a code cell
+  (`pgrag.agentic.loop.run_loop`, snippet in `docs/MOLAB_OPS.md` → "Tool-loop
+  sidecar config") — the loop, the store and the sidecar are unaffected.
 - **The sidecar is auto-started.** When `:8000` is not answering, the notebook
   runs the launcher that ships inside the published source tarball
   (`pg-rag-src/scripts/molab_vllm_launch.sh`), then waits for the model to come

@@ -487,6 +487,51 @@ The serve line in `scripts/molab_vllm_launch.sh` changed for tool-loop mode:
   spec-decode graphs on `... and not self.speculative_config.enforce_eager`), so
   this is the shortest, most predictable boot when a sandbox keeps dying in the
   compile/capture phases — the CVaR option, at the cost of decode speed.
+- **Confirmation the sampler-off default boots clean** (sandbox
+  `sb-1be30014c659c1df`, 2026-10-07): `/tmp/launch.log` shows
+  `FLASHINFER_SAMPLER 0 (vLLM's torch sampler; no flashinfer JIT at boot)` and
+  `EFFECTIVE_CONFIG max_model_len=24576 gpu_memory_utilization=0.40 mtp=3
+  eager=0 parser=qwen3_xml flashinfer_sampler=0`; `/tmp/vllm.log` shows
+  `FlashInfer top-p/top-k sampling disabled via VLLM_USE_FLASHINFER_SAMPLER=0.`
+  followed by `Application startup complete.` — engine init now gets past the
+  point that used to die, with no ninja/nvcc anywhere. The same session then ran
+  the tool loop end-to-end from a code cell: **3 rounds** (`sql_query`,
+  `player_state`, `sql_query`, `sql_query`) in 15.8 s, answer grounded in the
+  stall ledger.
+- **Known molab platform bug: `mo.ui.chat` rejects messages without `metadata`
+  (upstream, not our notebook).** Asking a question in the notebook chat can
+  fail client-side with
+  `✖ Invalid input: expected nonoptional, received undefined → at
+  messages[0].metadata`. Cause, traced through the served bundle
+  (`@marimo-team/frontend@0.25.1`, jsDelivr): marimo's chat RPC schema is
+  `z.array(z.object({id, role, content, parts, metadata: z.any().nullable()}))`
+  (`ChatPlugin.tsx`; `N4` in `dist/assets/index-*.js`), exposed as
+  `get_chat_history.output` and `send_prompt.input`. In Zod 4 a **missing**
+  required key yields exactly `expected: "nonoptional"` (the message text lives
+  in zod's own object-parse, so grepping a bundle for it only finds zod), and
+  AI SDK-v7 messages may omit the key — `metadata: undefined` does not survive
+  `JSON.stringify` on the transport path. Upstream:
+  [marimo#11090](https://github.com/marimo-team/marimo/issues/11090) (same error
+  text, label `molab`) fixed by
+  [PR #11096](https://github.com/marimo-team/marimo/pull/11096)
+  (`z.any().nullable()` → `z.any().nullish()`, `required: [metadata]` dropped
+  from `plugins.openapi.yaml`, with tests asserting *omitted*/null/populated
+  metadata parse on both RPCs). Maintainer on the issue: molab will get the fix
+  "sometime next week". Nothing in this repo can fix it — molab serves the
+  frontend — and no notebook change is warranted; **workaround until molab
+  ships it**: drive the loop from a cell instead of the chat widget:
+  ```python
+  import os
+  os.environ["PGRAG_LLM_URL"] = "http://127.0.0.1:8000/v1/chat/completions"
+  os.environ["PGRAG_LLM_MODEL"] = "pg-assistant"
+  os.environ["PGRAG_LLM_NATIVE_TOOLS"] = "1"
+  from pgrag.agentic.loop import run_loop
+  res = run_loop("…question…", corpus="tool",
+                 store_path="data/sqlite_gorgon.db", trace={})
+  print(res["rounds"], res["trace_rounds"], res["answer"])
+  ```
+  (verified in-sandbox: works with the store snapshot + sidecar this notebook
+  already sets up).
 - **Retry knobs** (env vars, so no editing of the tarball copy — a re-publish
   replaces it): `PGRAG_VLLM_MAXLEN` (default 24576), `PGRAG_VLLM_UTIL` (0.40),
   `PGRAG_VLLM_MTP` (`0` removes `--speculative-config` entirely),
