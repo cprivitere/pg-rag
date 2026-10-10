@@ -290,53 +290,105 @@ def _corpus_search(store_path: str, args: dict, corpus: str = "full") -> str:
     return f"{len(lines)} results:\n" + "\n".join(lines)
 
 
+def _stall_item_base_value(conn: sqlite3.Connection, query: str) -> str | None:
+    """CDN base value (items.value) for a queried item name.
+
+    The fallback when the stall ledger holds no price for the item: dead-ending
+    at "no price" is useless for the zero-stall-history items (Gloamwood,
+    Soulbiter Larva, Orcish N Core, most slabs/sands) — surface the base value
+    instead, clearly labeled as the vendor floor and NOT a realized sale."""
+    try:
+        row = conn.execute(
+            "SELECT name, value FROM items WHERE name = ? COLLATE NOCASE", (query,)
+        ).fetchone()
+        if row is None:
+            row = conn.execute(
+                "SELECT name, value FROM items WHERE name LIKE ?"
+                " ORDER BY LENGTH(name), name LIMIT 1",
+                (f"%{query}%",),
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None or row[1] is None:
+        return None
+    return (
+        f"base value (items.value, the vendor floor — NOT a stall price):"
+        f" {row[0]} {row[1]:g}"
+    )
+
+
+def _stall_source_lines(conn: sqlite3.Connection, query: str) -> list[str]:
+    """Where the item comes from / is spent (sources -> npcs/quests/recipes).
+
+    Woe Coin is barter currency spent at Sven the Bleeder; a crafted gizmo is
+    made from a recipe. Entries with no identifying field at all (raw
+    ``itemTypeId``) are skipped — an unresolvable "source: Item via ?" line
+    carries no information."""
+    try:
+        code = conn.execute(
+            "SELECT code FROM items WHERE name = ? COLLATE NOCASE", (query,)
+        ).fetchone()
+        if code is None:
+            code = conn.execute(
+                "SELECT code FROM items WHERE name LIKE ?"
+                " ORDER BY LENGTH(name), name LIMIT 1",
+                (f"%{query}%",),
+            ).fetchone()
+        if code is None:
+            return []
+        rows = conn.execute(
+            "SELECT entries FROM sources WHERE item_key = ? ORDER BY seq",
+            (f"item_{code[0]}",),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    out: list[str] = []
+    for (entries,) in rows:
+        try:
+            e = json.loads(entries or "{}")
+        except ValueError:
+            e = {}
+        kind = e.get("type") or "source"
+        target = None
+        if e.get("npc"):
+            row = conn.execute(
+                "SELECT name FROM npcs WHERE key = ?", (e["npc"],)
+            ).fetchone()
+            target = (row[0] if row else None) or e["npc"]
+        elif e.get("questId"):
+            row = conn.execute(
+                "SELECT name FROM quests WHERE id = ?", (e["questId"],)
+            ).fetchone()
+            target = (row[0] if row else None) or str(e["questId"])
+        elif e.get("recipeId"):
+            row = conn.execute(
+                "SELECT name FROM recipes WHERE id = ?", (e["recipeId"],)
+            ).fetchone()
+            target = (row[0] if row else None) or str(e["recipeId"])
+        if target:
+            out.append(f"source: {kind} via {target}")
+    return out
+
+
 def _stall_zero_sale_lines(store_path: str, query: str, base: str) -> str:
-    """Zero-sale fallback for section=stall: surface where the item comes
-    from / is spent (sources -> npcs/quests names) instead of dead-ending
-    (e.g. Woe Coin is barter currency spent at Sven the Bleeder, not
-    something the stall ever priced)."""
+    """Zero-pricing fallback for section=stall: surface the CDN base value and
+    where the item comes from / is spent, instead of dead-ending."""
     try:
         conn = _conn(store_path)
     except sqlite3.Error as exc:
         return f"player_state error: {exc}"
-    lines = [f"{base} matching '{query}'."]
     try:
-        codes = [
-            r[0]
-            for r in conn.execute(
-                "SELECT code FROM items WHERE name = ? COLLATE NOCASE", (query,)
-            ).fetchall()
-        ]
-        for code in codes:
-            for _key, entries in conn.execute(
-                "SELECT item_key, entries FROM sources WHERE item_key = ? ORDER BY seq",
-                (f"item_{code}",),
-            ).fetchall():
-                try:
-                    e = json.loads(entries or "{}")
-                except ValueError:
-                    e = {}
-                npc_key = e.get("npc")
-                npc_name = None
-                if npc_key:
-                    row = conn.execute(
-                        "SELECT name FROM npcs WHERE key = ?", (npc_key,)
-                    ).fetchone()
-                    npc_name = row[0] if row else None
-                quest_name = None
-                if e.get("questId"):
-                    row = conn.execute(
-                        "SELECT name FROM quests WHERE id = ?", (e["questId"],)
-                    ).fetchone()
-                    quest_name = row[0] if row else None
-                kind = e.get("type") or "source"
-                target = npc_name or quest_name or npc_key or e.get("questId") or "?"
-                lines.append(f"source: {kind} via {target}")
+        lines: list[str] = []
+        bv = _stall_item_base_value(conn, query)
+        if bv:
+            lines.append(bv)
+        lines.append(f"{base} matching '{query}'.")
+        source_lines = _stall_source_lines(conn, query)
     finally:
         conn.close()
-    if len(lines) == 1:
-        lines.append("No source or barter info found for it in the store either.")
-    return "\n".join(lines)
+    if not source_lines:
+        source_lines.append("No source or barter info found for it in the store either.")
+    return "\n".join(lines + source_lines)
 
 
 def _player_state(store_path: str, args: dict) -> str:
@@ -556,6 +608,8 @@ def _player_state(store_path: str, args: dict) -> str:
                 params.append(item_like)
             sql += " ORDER BY COALESCE(event_at, event_timestamp) DESC LIMIT 120"
             rows = conn2.execute(sql, params).fetchall()
+            base_line = _stall_item_base_value(conn2, query) if query else None
+            source_lines = _stall_source_lines(conn2, query) if query else []
         finally:
             conn2.close()
         if not rows:
@@ -578,6 +632,9 @@ def _player_state(store_path: str, args: dict) -> str:
                 " sales, not a market sample."
             )
         ]
+        if base_line:
+            lines.append(base_line)
+        lines.extend(source_lines)
         if sold:
             lines.append(f"SOLD ({len(sold)} sales, oldest first):")
             for item, ea, _a, buyer, qty, pu, pt in reversed(sold):

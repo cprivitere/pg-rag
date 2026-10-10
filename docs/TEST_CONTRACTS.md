@@ -239,7 +239,7 @@ test (prove the source is fine) or recording a deliberate contract change
 - **Contracts**: golden shape `{id, question, type, facts: [[variants…]], xfail?: bool}` — `xfail: true` marks a known-gap probe: runner+test treat a persistent miss as expected, but a pass (gap just closed) is a FAIL forcing unflagging; offline guard in test_golden_xfail_gate.py. `"store": true` marks a store-only case (facts in the agentic SQLite store, e.g. glogger play history): pipeline harnesses skip it; it runs via `mise agentic-eval` (appended to the short tier).
   (changing it breaks offline auto-collection — RULES/WATCHDOG trap); IR
   metric canonical-unit counting (`_row_`/`_coverage`/`_chunk_` collapse);
-  Tiered split: `test_golden_facts_short` (`-m short`, 8 files, ~3-5 min) and `test_golden_facts_long` (`-m long`, 43 files, ~11-23 min); bare run includes all 51 pipeline files (store-only cases excluded — they run via `mise agentic-eval`, whose short tier is 16 cases).
+  Tiered split: `test_golden_facts_short` (`-m short`, 8 files, ~3-5 min) and `test_golden_facts_long` (`-m long`, 44 files, ~11-23 min); bare run includes all 52 pipeline files (store-only cases excluded — they run via `mise agentic-eval`, whose short tier is 18 cases).
   trace field set + `ask()`-fill no-payload-mutation; bakeoff corpus
   type-stratified queries.
 - **Change ⇒** `uv run pytest tests/test_golden_check.py tests/test_retrieval_eval.py
@@ -334,7 +334,15 @@ test (prove the source is fine) or recording a deliberate contract change
   is absent. Rerun with unchanged sources reports 0 rows for every table
   (idempotent counts). `execute_tool` returns errors as strings (model self-corrects), allows
   only single read-only SELECTs (write/PRAGMA rejected, LIMIT 200 injected,
-  2M-op progress-handler budget), and caps rows/cells/pages. `run_loop`
+  2M-op progress-handler budget), and caps rows/cells/pages.
+  `player_state section=stall` reports the player's OWN stall ledger only:
+  each realized sale individually with buyer and per-unit price (never
+  averaged), sold separated from asking (`visible`/`configured`), plus the
+  queried item's CDN base value (`items.value`) and its `sources` rows
+  (npc/quest/recipe names resolved — unresolved `itemTypeId` entries skipped),
+  so an item with no stall pricing falls back to base value + sources instead
+  of dead-ending (contract: `test_agentic_tools.py::test_player_state_stall_*`).
+  `run_loop`
   mirrors pipeline.ask()'s 5-key return shape, executes at most
   `max_rounds` tool rounds (native tool_calls OR three text forms: fenced
   ```` ```tool ```` JSON, and the Qwen template's

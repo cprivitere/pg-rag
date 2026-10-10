@@ -26,20 +26,22 @@ Each file:
 
 - `facts` is a list of variant groups: the answer PASSES if ANY variant in
   each group appears (normalized substring) in the LLM answer.
-- 61 files exist today (23 entity / 25 general / 7 recipe / 6 comparison),
+- 62 files exist today (23 entity / 26 general / 7 recipe / 6 comparison),
   spanning recipes-by-ingredient, level-gated crafting, item acquisition/drops,
   ability lookups, comparisons, quest requirements, wiki lore, wiki how-to
-  assembly, and player-state audits. 9 store-only cases (player facts,
+  assembly, and player-state audits. 10 store-only cases (player facts,
   `"store": true`) count in this total but are excluded from the pipeline
   harnesses — they run via the agentic eval. Future additions should favor the
-  balanced categories (comparison is 6/61 today — the thinnest bucket).
+  balanced categories (comparison is 6/62 today — the thinnest bucket).
 
 ## Live-session goldens (answer-then-validate workflow)
 
-The standing session workflow: the user asks a gameplay question → research
-the answer against the live store + corpus → give the answer → **pin it as a
-golden so the same question stays answerable**. The golden is not optional
-documentation; it is the acceptance gate.
+Standing session workflow: the user asks a gameplay question → research the
+answer against the live store + corpus → give the answer. **A new golden is
+the exception, not the default.** Pin one ONLY when the pipeline that would
+own it answers materially worse than you can, and only AFTER the user
+confirms. A question the pipeline already handles adds no signal; every
+golden is a permanent acceptance gate that must keep passing.
 
 1. **Research** against the store (`data/sqlite_gorgon.db`) and corpus. Sync
    first when the user just played: `ingest_glogger`/`ingest_session` are
@@ -47,20 +49,33 @@ documentation; it is the acceptance gate.
 2. **Answer the user.** Ground every claim in a store table or corpus doc; if
    a fact needed manual derivation (JOIN, arithmetic, name-mapping), note it
    — that is exactly the part the model may fumble.
-3. **Derive fact groups** from what you verified. Every fact must exist in the
+3. **Measure the pipeline before proposing a golden.** Ask the same question
+   back through the pipeline that would own it — the DB/store tool loop
+   (`mise agentic-chat`) for player-state facts, the corpus pipeline
+   (`mise chat`, or `scripts/rag_chat.py` for a CLI REPL) for CDN/wiki facts
+   — and compare against your oracle answer. A golden is warranted ONLY when
+   that run is lower quality than it should be: a fact missing, an entity
+   misidentified, a routing miss, or an answer that needed manual SQL
+   gymnastics the model will not repeat. If the pipeline answers as well as
+   you did, stop here — no golden, no test.
+4. **Ask the user before writing a golden.** Even when step 3 shows a gap,
+   never pin the user's question as a golden unprompted — state the measured
+   gap plus the proposed id and facts, and get an explicit yes. Only then
+   create the file.
+5. **Derive fact groups** from what you verified. Every fact must exist in the
    data you actually checked (grep the store / documents.json first — an
    un-grounded fact is a permanently-failing test).
-4. **Route the golden:** facts from the player's own state (sheet abilities,
+6. **Route the golden:** facts from the player's own state (sheet abilities,
    stall ledger, kills, favor) → `"store": true` (pipeline tiers skip it;
    `mise agentic-eval` picks it up automatically). Facts from CDN/wiki corpus
    → plain golden, validated with `mise golden-one -- <id>`.
-5. **Validate before committing:** run the golden through its eval path
+7. **Validate before committing:** run the golden through its eval path
    (`mise agentic-eval` for store-only, `golden_rerun.py --id <id>` for
    corpus). A FAIL means the model can't reproduce your answer — diagnose
    (`--diagnose` for pipeline, trace_rounds for agentic) and fix the gap
    (tool, prompt note, doc builder) before committing. A golden that fails on
    commit is a known-gap trap, not a convenience.
-6. **Commit** the golden together with whatever fix it forced.
+8. **Commit** the golden together with whatever fix it forced.
 
 ### Traps learned the hard way (each cost a debug session)
 
@@ -94,6 +109,15 @@ documentation; it is the acceptance gate.
  spread and truncated windows must point aggregates back at sql_query. An
  item with zero stall history (Woe Coin) is currency: fall back to
  `sources`→`npcs`/`quests` for where it's spent (Sven the Bleeder barters).
+ Zero-stall-history *materials* (Gloamwood, Soulbiter Larva, Orcish N Core,
+ most slabs/sands) must instead fall back to the CDN **base value**
+ (`items.value`) plus any `configured`/`visible` asking price, each labeled as
+ base / asking — never as a realized sale. That fallback was added 2026-10-09
+ (golden `stall-price-slabs-sands-gizmos`): `player_state section=stall` now
+ prints the item's base value in every branch (sales / asking / zero-sale) and
+ the schema summary tells the loop to do the same when it writes its own SQL —
+ before this the loop dead-ended at "no price available" for exactly the items
+ a "price of X" question names.
 - **Synergy is directional, and the CDN stores it one way only.** A skill's
   `Rewards[level].BonusToSkill = X` means that skill grants a bonus level TO
   `X` — the *outgoing* direction. Ask "what gives synergy to Meditation?" and
@@ -111,6 +135,11 @@ documentation; it is the acceptance gate.
   wiki page relink), and `CACHE_VERSION`/`DOCUMENTS_VERSION` were bumped so
   the change is actually emitted — regenerate with `mise generate-docs` +
   `mise build-index --source wiki`.
+- **An answered question is not automatically a golden.** Auto-pinning every
+  session question bloats the set with cases the pipeline already passes,
+  slowing `mise golden`/`agentic-eval` for zero regression coverage. Golden
+  intake is gated on a *measured* pipeline gap (step 3) plus explicit user
+  confirmation (step 4); "the user asked it" is not a reason.
 
 ## Running it
 
@@ -203,10 +232,12 @@ documentation; it is the acceptance gate.
 
 ## Planned direction
 
-- Golden set is **at 61 and growing** via live-session goldens (see the
-  workflow above) — new questions from play sessions are the primary intake;
-  comparison is the thinnest bucket (6/61). Beyond session intake, capture a
-  *named regression case*,
+- Golden set is **at 62 and growing** via live-session goldens (see the
+  workflow above), but intake is gated: a session question becomes a golden
+  only when the owning pipeline measurably underperforms on it AND the user
+  confirms. Prefer filling thin buckets (comparison is the thinnest at 6/62)
+  over adding near-duplicates of passing cases. Beyond session intake, capture
+  a *named regression case*,
   e.g.:
   - `grow-field-mushrooms` ("How do I grow Field Mushrooms?") — fails before
     wiki page expansion, passes after (already present).

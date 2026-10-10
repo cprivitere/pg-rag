@@ -243,7 +243,14 @@ Notes:
     reflect your own listings/sales, never a market sample. Report each
     sale's price separately (never average them). Or use
     player_state section=stall (query=item name) for the pre-digested
-    sale list.
+    sale list (it also prints the item's CDN base value).
+    When an asked item has NO stall rows at all, do not dead-end at "no
+    price": fall back to its CDN base value (items.value) and to any
+    'configured'/'visible' asking price, and label each as base value or
+    asking price — never as a realized sale. For an item the ledger barely
+    covers (currency/barter/trophy), also say where it comes from or is
+    spent (sources → npcs/quests) — a price answer without that context is
+    incomplete.
     Revenue = SUM(price_total) WHERE action='bought'; owners' own buys are
     NOT excluded automatically — group by player to separate.
   - game_state_gift_log(id, character_name, npc_key, npc_name, gifted_at,
@@ -307,7 +314,9 @@ Tools (call to gather more data; up to {max_rounds} rounds):
    and diffs the character sheet's known-ability list against the CDN family —
    use it for 'which abilities/skills do I know' questions. stall lists your
    own shop's sales (query=item name filters) — the only price history in the
-   store; each sale is listed individually with buyer and per-unit price.
+   store; each sale is listed individually with buyer and per-unit price,
+   plus the item's CDN base value (with an asking-price fallback when the item
+   has no stall rows).
 
 How to call tools:
 - Preferred: emit a native tool call (the API's tools parameter).

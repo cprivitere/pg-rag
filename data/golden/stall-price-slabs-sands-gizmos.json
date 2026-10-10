@@ -1,0 +1,30 @@
+{
+ "id": "stall-price-slabs-sands-gizmos",
+ "question": "price of all metal slabs, gloamwood, accuracy circuit, soulbiter larva, all sands, mechanized rotor, orcish n core",
+ "type": "general",
+ "facts": [
+  [
+   "3500",
+   "3 500"
+  ],
+  [
+   "12500",
+   "12 500"
+  ],
+  [
+   "2000",
+   "2 000"
+  ],
+  [
+   "225"
+  ],
+  [
+   "125"
+  ],
+  [
+   "200"
+  ]
+ ],
+ "store": true,
+ "notes": "Store-only case (live-session intake, 2026-10-09): pricing lives in the agentic SQLite store, not the RAG corpus. Two layers, both grounded in data/sqlite_gorgon.db: (a) stall_events realized per-unit prices from the player's OWN stall (TwinkleofToes, action='bought'; the store holds no other players' stalls, so these are own listings, never a market sample); (b) items.value = CDN base value (the fallback when an item has NO stall history). Realized: Otherworldly Metal Slab 3500 (1 sale, 2026-07-15); Antimagic Sand 12500 (1 sale, 2026-08-24); Mechanized Rotor 2000 (2026-07-28 and 2026-08-24, plus 2500 on 2026-07-16). Base values: Mechanized Rotor 225 (Rotor, code 1437), Gloamwood 125 (code 13106), Orcish N Core 200 (code 1439). Accuracy Circuit / Magic Sand / Extraordinary Metal Slab realized prices are deliberately NOT pinned here (already covered by stall-price-basics + pricing-fat-woe-cutting-circuit) so this case adds only new signal: the zero-stall-history items (Gloamwood, Soulbiter Larva, Orcish N Core, most slabs/sands) must fall back to base value + asking price instead of dead-ending, which forced the _stall_zero_sale_lines base-value/asking fallback + schema-summary note. Run via the agentic loop (mise agentic-eval), not the pipeline golden harnesses."
+}
