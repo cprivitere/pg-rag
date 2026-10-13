@@ -171,9 +171,9 @@ Python ≥3.15, managed with `uv`. `mise tasks` lists everything. The
 `build-tool-corpus`, `sync-wiki`, `sync-cdn`, `sql-store`, `upload-store`,
 `agentic-chat`, `agentic-tune`, `golden`, `golden-short`, `golden-one`,
 `golden-type`, `golden-flaky`, `golden-flaky-list`, `debug-llm`, `llm-pick`,
-`debug-webui`, `chat`, `start-all`, `stop-all`, `status`, `drift`, `logs`,
-`tail-llm`, `tail-webui`, `lint`, `fmt` — plus the `.mise/tasks/*.ps1` file
-tasks (`llm-start`/`llm-stop`, `chat-start`/`chat-stop`,
+`debug-webui`, `chat`, `start-all`, `stop-all`, `status`, `drift`,
+`compliance`, `logs`, `tail-llm`, `tail-webui`, `lint`, `fmt` — plus the
+`.mise/tasks/*.ps1` file tasks (`llm-start`/`llm-stop`, `chat-start`/`chat-stop`,
 `webui-start`/`webui-stop`, `upload-docs`, `ensure-logs-dir`).
 
 ```sh
@@ -196,6 +196,7 @@ mise lint                           # ruff check src scripts tests (alias li) �
 mise fmt                            # ruff format + safe autofix (alias fo)
 uv run pytest                       # offline test suite
 mise drift                          # check docs/skills against the repo (alias dr)
+mise compliance                     # TOS/CoC hard-line scan (alias comp) — also step 1 of mise test
 ```
 
 **Build/refresh needs no servers**; only Q&A/eval (`golden*`, `chat`,
@@ -302,9 +303,9 @@ lock; to clear a stuck lock, delete `data/.omp-build.lock`.
 
 ## Testing & QA
 
-- **Framework**: pytest via `uv run pytest`; the suite collects **400 tests**,
+- **Framework**: pytest via `uv run pytest`; the suite collects **404 tests**,
   of which **77 are deselected by the default `not slow` marker** (16
-  data-heavy tests + the 61 parametrized golden cases), leaving **323** in the
+  data-heavy tests + the 61 parametrized golden cases), leaving **327** in the
   default offline run — all offline (temp-dir integration, mocked servers). The
   golden gate is the only suite that needs any server.
 - **Golden eval** (`tests/test_golden_check.py`): parametrized over
@@ -345,13 +346,22 @@ lock; to clear a stuck lock, delete `data/.omp-build.lock`.
   `tool_bm25.pkl`, `wiki_parsed.json`) to satisfy a test. If the behavior
   didn't legitimately change, the failure is a source regression: fix the
   source, not the test.
-- **Lint gate** (`tests/test_lint.py`, layer L9 in `docs/TEST_CONTRACTS.md`):
+- **Lint gate** (`tests/test_lint.py`, layer L8 in `docs/TEST_CONTRACTS.md`):
   `uv run ruff check src scripts tests` must be clean — a failing check fails
   `uv run pytest`. Run `mise lint` after editing code (`mise fmt` applies the
   safe autofixes: import sort, unused imports, f-strings, formatting). Rules
   live solely in `ruff.toml`; the per-file-ignores there (scripts: broad
   excepts, unchecked subprocess; tests: broad catches) are deliberate. New rule
   ⇒ fix all findings in the same commit.
+- **Compliance gate** (`tests/test_constraints.py`, layer L9 in
+  `docs/TEST_CONTRACTS.md`; policy doc `docs/research/pg-rag-game-interaction-limits.md`):
+  `scripts/check_constraints.py` must scan
+  the working tree clean, cover every documented tree (including its two
+  self-exclusions), report a planted violation in each family, and warn loudly
+  when skipped. `mise compliance` (alias `comp`) runs it standalone, `mise test`
+  runs it before pytest, and `.githooks/pre-push` runs it on a provisioned
+  checkout (`core.hooksPath=.githooks` is local config — a fresh clone re-sets
+  it). There is no CI.
 - **Key suites** (from `tests/`): `test_documents.py` (doc shape),
   `test_chunking.py`, `test_bm25.py`/`test_bm25_persist.py` (lexical index +
   persistence), `test_llm.py`/`test_connectivity.py` (LLM client SSE + server

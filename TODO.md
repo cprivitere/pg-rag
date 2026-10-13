@@ -36,7 +36,7 @@
   `_SCHEMA_SUMMARY`'s skills + `sources` notes. Acceptance: `mise golden-short`,
   then the trio (`mise golden-one
   gardening-basics,gardening-trainers-and-fertilizer,astounding-ink-acquisition`),
-  then a full `mise golden` (58 cases), in both gate modes (add
+  then a full `mise golden` (61 cases), in both gate modes (add
   `LLM_REASONING=off` for the deterministic dev signal). Do NOT weaken the trio's
   facts — they are correct and source-grounded; the goldens were the wrong
   suspect. (The `corpus_search` 400→1000 snippet fix already landed 2026-10-11:

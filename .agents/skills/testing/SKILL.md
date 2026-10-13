@@ -5,8 +5,8 @@ description: Regression-triage and test discipline for pg-rag — how to decide 
 
 # testing — regression triage & test discipline
 
-The suite collects 399 tests; the default `not slow` marker deselects 76 (16
-data-heavy tests + the 60 parametrized golden cases), leaving 323 in the default
+The suite collects 404 tests; the default `not slow` marker deselects 77 (16
+data-heavy tests + the 61 parametrized golden cases), leaving 327 in the default
 offline run. Everything is offline — the golden gate is the only suite that
 needs a server, and only the LLM (:8080). When a test fails, triage BEFORE
 editing. The full layer→test contract map is `docs/TEST_CONTRACTS.md` — READ IT
@@ -17,7 +17,7 @@ of which file defends which contract).
 
 1. **Identify the layer.** `docs/TEST_CONTRACTS.md` maps every test file to its
    layer (document-gen / bm25 / agentic loop / store / loaders-curation / golden
-   / llm-client / lint) and the source it protects.
+   / llm-client / lint / compliance) and the source it protects.
 2. **Did the source legitimately change?**
    - Yes → update the test to the new contract (a CONTRACT CHANGE — see rules).
    - No → the failure is a real regression: **fix the source, never the test.**
@@ -70,3 +70,7 @@ sweep/compare, `test_golden_check.py` = the offline gate drives it via
   long background job — use `mise golden-one <id>` while iterating.
 - Doc/skill change → run `mise drift` — the docs, skills, AGENTS.md, RULES.md,
   and TEST_CONTRACTS must stay the single-owner-truthful set it checks.
+- Compliance-gate change (`scripts/check_constraints.py`, the TOS/CoC policy
+  doc, or the hook/task wiring) → `tests/test_constraints.py`, then
+  `mise compliance`. §2's patterns and §6's wiring are the contract; §7 forbids
+  relaxing either to make a violation pass.

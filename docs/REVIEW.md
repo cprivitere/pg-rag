@@ -99,7 +99,11 @@ guardrail that keeps it truthful.
 
 ### Open follow-ups (honest, not celebratory)
 
-- **Parity verification** — measured 2026-10-11, full `data/golden` set through
+- **Parity verification** — latest full run (2026-10-12, 61 cases, 2003 s, 0
+  error records): **59 PASS, 2 FAIL, 4 missing facts** — the residual pair is
+  `gardening-basics` + `gardening-trainers-and-fertilizer`, i.e. the loop
+  tool-choice item in `TODO.md`, not a coverage or phrasing gap. The earlier
+  baseline follows. Measured 2026-10-11, full `data/golden` set through
   `run_loop` (`mise golden`, 62 cases, 2121 s, 0 error records): **55 PASS,
   7 FAIL, 16 missing facts**. Every missing fact exists in both
   `data/documents.json` and the store's `wiki_pages`, so none is a coverage
@@ -141,9 +145,11 @@ guardrail that keeps it truthful.
 - **`notebooks/molab-agentic/README.md`** — resolved: the mirror-notebook
   references are gone (only notebook left) and the loop's new return keys are
   documented.
-- **molab first-boot numbers** — the sidecar's reported `TOOL_PARSER` and the
-  tool-loop round count/latency at 24576 context are still unrecorded from a
-  fresh sandbox boot (`docs/MOLAB_OPS.md`).
+- **molab first-boot numbers** — resolved: `docs/MOLAB_OPS.md` records the
+  sidecar's `TOOL_PARSER`/`NO_TOOL_PARSER` reporting, the ~3–4 min first boot
+  (weights 4 s / compile ~70 s / CUDA-graph capture ~90 s, ~40 s warm), MTP-3
+  decode at 60.5/72.5 tok/s, and the live tool-loop run at 24576 context
+  (**3 rounds, 15.8 s**, answer grounded in the stall ledger).
 
 ### Follow-on (2026-10-11)
 

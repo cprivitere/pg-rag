@@ -76,8 +76,10 @@ No push without a green `scripts/check_constraints.py` (§6).
   (`cdn.projectgorgon.com`) — explicitly offered for this purpose, with
   attribution. No other Elder Game endpoints. No authentication, no session
   tokens, no game-server connections of any kind outside the running client.
-- **HTTP to pg-rag's own services** (embed :8081, LLM :8080, reranker :8082,
-  HF model buckets) for pg-rag's own data.
+- **HTTP to pg-rag's own services** (LLM :8080, HF model buckets) for pg-rag's
+  own data. The embed :8081 and reranker :8082 services were retired with the
+  dense-path cutover; the molab sandbox's local vLLM sidecar serves no
+  game-related traffic.
 
 ## 4. History note — the IL2CPP decomp source (removed)
 
@@ -104,9 +106,10 @@ purpose.
    (existing curator pattern).
 4. **Chat surfaces for the tool loop** — Gradio tab, glogger tab, molab
    notebook pairing: all read the same store/CDN sources. (The molab
-   notebook now ships this: its mode selector runs `run_loop` against a
-   snapshot of the store published to the owner's private bucket —
-   `mise upload-store`; corpus chat remains the other mode.)
+   notebook ships this: it runs `run_loop` against a snapshot of the store
+   published to the owner's private bucket — `mise upload-store`. It is
+   tool-loop-only; the corpus-chat mirror notebook was deleted with the
+   dense-path cutover.)
 
 Explicitly off this list (rejected, do not propose): packet-level anything,
 protocol analysis of the game's network traffic, binary/memory analysis of
@@ -114,11 +117,24 @@ the client, any automation of gameplay, decompilation of any kind.
 
 ## 6. Enforcement: `scripts/check_constraints.py`
 
-Runs on every push (`.githooks/pre-push`) and in CI. In full-compliance mode
-the scanner checks §2's five categories across `src/`, `scripts/`, `tests/`,
-`docs/`, `.agents/`, and `mise.toml`/`pyproject.toml`.
+Runs on every push **on a provisioned checkout** via `.githooks/pre-push`
+(`core.hooksPath=.githooks` is *local* git config — a fresh clone must re-set
+it), from `mise compliance`, and inside the offline suite
+(`tests/test_constraints.py`, layer **L9** of `docs/TEST_CONTRACTS.md`);
+`mise test` runs the scan before pytest. The hook's tracked mode was `100644`,
+which made POSIX clones skip it — fixed 2026-10-13 with `git update-index
+--chmod=+x .githooks/pre-push`. There is still **no CI**, so an unprovisioned
+clone with no `mise test` run is the one ungated path.
+In full-compliance mode the scanner's candidate set is exactly `ALL_GLOBS`:
+`src/**/*.py`, `scripts/**/*.py`, `tests/**/*.py` for the code-shaped
+categories, plus `docs/**/*.md`, `.agents/**/*.md`, root `*.md` and root
+`*.toml` (`mise.toml`/`pyproject.toml`/`ruff.toml`) for artifacts and
+wire-protocol names. `notebooks/`, `.omp/`, `.mise/`, and any `*.ps1` file are
+outside the globs by construction.
 
-Verified: green on the compliant repo, red on probe violations. Skippable
+Verified 2026-10-13 on the clean repo: `compliance check: OK (101 files
+scanned, 4 categories clean)`; with a probe file containing `ReadProcessMemory`
+under `scripts/`, it exits 1 naming the file. Skippable
 only with `PG_SKIP_CONSTRAINTS=1` (prints a warning — never silent). The
 checker script excludes itself (it must name the patterns it greps for), as
 does this doc (it quotes the prohibited terms in the table above).

@@ -307,10 +307,32 @@ test (prove the source is fine) or recording a deliberate contract change
 - This layer replaces **none**: it guards hygiene across all layers; the
   functional layers above remain the authority on behavior.
 
+### L9 — Compliance gate (Project Gorgon TOS/CoC hard lines)
+
+- **Tests**: `test_constraints.py`
+- **Source**: `scripts/check_constraints.py` (the scanner + its four pattern
+  categories and glob set); policy owner
+  `docs/research/pg-rag-game-interaction-limits.md` (§2 patterns, §6 wiring, §7
+  change-control); runners `.githooks/pre-push` and `mise compliance` (which
+  `mise test` runs before pytest).
+- **Contracts**: the scanner is a **test gate, not just a push hook**, and four
+  invariants are asserted offline: (1) the working tree scans clean — a
+  prohibited pattern in `src`/`scripts`/`tests`/`docs`/`.agents` or the root
+  manifests fails `uv run pytest`; (2) the candidate set really covers those
+  trees and excludes exactly the two documented self-exclusions (the checker
+  itself, the policy doc); (3) a planted violation in every scanned family is
+  reported with its path; (4) `PG_SKIP_CONSTRAINTS` exits 0 *with* the warning
+  (never silent). The probe fixtures are assembled from fragments, because this
+  file is itself scanned for the patterns it plants.
+- **Change ⇒** `uv run pytest tests/test_constraints.py`, then `mise
+  compliance`. Never weaken the scanner or the policy doc to pass a violation —
+  §7 says a prohibited category is argued to Elder Game, never to this repo.
+- This layer replaces **none**: it enforces the policy across every other layer.
+
 ## Hard rules (no exceptions)
 
 1. A test that **changes an assertion** is a **contract change** — state the
-   new contract in the test and run the layer's sibling suite (L1–L8 above).
+   new contract in the test and run the layer's sibling suite (L1–L9 above).
 2. A test that **fails without a contract change** is a **regression in
    source** — fix the source, not the test.
 3. Never hand-edit a build artifact to satisfy a test (`documents.json`,

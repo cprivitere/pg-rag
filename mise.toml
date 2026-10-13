@@ -26,7 +26,8 @@ dir = "{{ config_root }}"
 cascade = true
 
 [tasks.test]
-description = "Run test suite"
+description = "Run test suite (compliance scan first)"
+depends = ["compliance"]
 run = "uv run -m pytest tests/"
 alias = "te"
 
@@ -205,6 +206,11 @@ alias = "st"
 description = "Check docs/skills against the repo: pointers resolve, contract constants match, TEST_CONTRACTS covers every test, golden counts are real"
 run = "uv run python scripts/check_docs.py"
 alias = "dr"
+
+[tasks.compliance]
+description = "Compliance scan: pg-rag x Project Gorgon TOS/CoC hard lines (scripts/check_constraints.py; policy: docs/research/pg-rag-game-interaction-limits.md)"
+run = "uv run python scripts/check_constraints.py"
+alias = "comp"
 
 
 # --- Log viewing ---
