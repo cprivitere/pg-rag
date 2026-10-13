@@ -110,12 +110,13 @@ corpus_search, player_state`.
 - `src/pgrag/` — importable package (`uv` installs editable).
   - `cli.py` — CLI: `download-cdn`, `download-wiki`, `build-documents`
     (exactly those three).
-  - `config.py` — paths, `DOCUMENTS_VERSION`, `TARGET_CATEGORIES`/
-    `RECURSIVE_CATEGORIES`.
+  - `config.py` — paths, `DOCUMENTS_VERSION`.
   - `build.py` — `generate_documents()` orchestration.
-  - `loaders/` — `cdn_loader` (tables from CDN json), `wiki_loader` (wiki text
-    + `.meta.json` title mapping, orphan cleanup), `database.GameDatabase`
-    (in-memory `tables` + `wiki` bag).
+  - `loaders/` — `download_wiki` (category-driven fetch; owns
+    `TARGET_CATEGORIES`/`RECURSIVE_CATEGORIES`/`WIKI_TITLE_EXTRAS`, batching,
+    retry, atomic `.meta.json`), `cdn_loader` (tables from CDN json),
+    `wiki_loader` (wiki text + `.meta.json` title mapping, orphan cleanup),
+    `database.GameDatabase` (in-memory `tables` + `wiki` bag).
   - `documents/` — `builder.py`, `wiki_builder.py` (mwparserfromhell →
     sections/chunks, `parent_id` links), `chunking.py`, `resolver.py` (internal
     code → display name), `skill_profiles.py`, `summaries.py` (gathering skill
@@ -229,6 +230,8 @@ lock; to clear a stuck lock, delete `data/.omp-build.lock`.
   (Creatures d2, Items d1) — monsters/items only via recursion. Subcats bare
   (no `Category:` prefix). Uncategorized pages (racial-stat pages, badge hub)
   come from `WIKI_TITLE_EXTRAS` — category-driven discovery cannot see them.
+  `Dungeons` is flat: all 52 dungeon pages are direct members, so its region
+  subcats (`Dungeons by Area` → `Serbule Dungeons`, …) add nothing.
   Wiki filenames `{safe_title}_<sha256-8>.txt`; display names come only from
   `.meta.json` (never filenames). Sync ends with `remove_orphan_files`.
 - **Test isolation**: temp dirs for anything touching `data/` (real
@@ -299,9 +302,9 @@ lock; to clear a stuck lock, delete `data/.omp-build.lock`.
 
 ## Testing & QA
 
-- **Framework**: pytest via `uv run pytest`; the suite collects **399 tests**,
-  of which **76 are deselected by the default `not slow` marker** (16
-  data-heavy tests + the 60 parametrized golden cases), leaving **323** in the
+- **Framework**: pytest via `uv run pytest`; the suite collects **400 tests**,
+  of which **77 are deselected by the default `not slow` marker** (16
+  data-heavy tests + the 61 parametrized golden cases), leaving **323** in the
   default offline run — all offline (temp-dir integration, mocked servers). The
   golden gate is the only suite that needs any server.
 - **Golden eval** (`tests/test_golden_check.py`): parametrized over
@@ -315,14 +318,14 @@ lock; to clear a stuck lock, delete `data/.omp-build.lock`.
   is the harness's defense. For a byte-reproducible comparison, launch the
   server with `--reasoning off`. See `docs/LLM_MODEL_WIRING.md` → "Card flags &
   determinism".
-- **Golden CLI**: `mise golden` (all 60 files through the loop, exit 1 on
+- **Golden CLI**: `mise golden` (all 61 files through the loop, exit 1 on
   missing facts), `mise golden-short` (`--tier short`, 8 cases),
   `mise golden-one <id>` (named cases), `mise golden-type <type...>`. `--tier`,
   `--ids`, `--type`, `--max-facts`, `--diagnose`, `--export`, `--corpus`,
   `--max-rounds`, `--store`, `--report` are the `golden_check.py` flags.
   Per-case cost is dominated by the reasoning model's rounds — a store-only
   case with 1-2 rounds answers in tens of seconds, but a 5-6 round wiki case
-  takes minutes, so a full 60-case run is a long background job, not a
+  takes minutes, so a full 61-case run is a long background job, not a
   foreground watch. `--diagnose` labels a miss GEN-side (fact was in the fed
   context, the model dropped it) vs RET-side (never retrieved) from the
   `documents`/`trace_rounds` the loop returns.

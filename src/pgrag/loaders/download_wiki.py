@@ -39,6 +39,7 @@ TARGET_CATEGORIES = [
     "Animal Town Creatures",
     "Augury",
     "Quests",
+    "Dungeons",
 ]
 
 RECURSIVE_CATEGORIES = {

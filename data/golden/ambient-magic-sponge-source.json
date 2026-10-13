@@ -1,0 +1,15 @@
+{
+  "id": "ambient-magic-sponge-source",
+  "question": "Where do you gather or loot Magic Sponges (Ambient Magic Sponges) from?",
+  "type": "general",
+  "facts": [
+    [
+      "Old Jar",
+      "Old Jars"
+    ],
+    [
+      "Carpal Tunnels"
+    ]
+  ],
+  "notes": "Added 2026-10-12 with the Dungeons category: the corpus had the item page line (Carpal Tunnels + Kur Tower 'to a lesser degree') but not the Carpal Tunnels dungeon page, which is what says the sponge-bearing containers are the jars literally named 'Old Jars', found past Zealo's camp. Facts check the jar name and the dungeon; Kur Tower (cells near Glajur) is the secondary source and is not required. Source: wiki_Carpal Tunnels_Points_of_Interest_chunk_1."
+}
