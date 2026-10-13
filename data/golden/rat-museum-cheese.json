@@ -1,0 +1,9 @@
+{
+  "id": "rat-museum-cheese",
+  "question": "What cheese must you give the rat guarding the museum door in the Statehelm Sewers?",
+  "type": "general",
+  "facts": [
+    ["cambozola"]
+  ],
+  "notes": "Access-gate case: the gate is a QUEST, not an ability. Grounding: quest_quest_29681 ('Tethertooth's Museum' — 'In the Statehelm sewers you came upon a rat guarding a door to some sort of museum. The rat won't let you pass without a gift of cheese.', objective 'Obtain Cambozola Cheese (x1)', reward effect 'RaiseEvent(RatMuseumDoor)', favor_npc AreaStatehelmCaves/NPC_MuseumGuard). The pre-fix live run answered 'any piece of cheese works' off the Tame Rat ability doc ('Requires a piece of cheese') and never searched the quest axis; offline, corpus_search 'rat museum cheese' returns quest_quest_29681 as hit #1 and find_entities 'Tethertooth'/'museum' both resolve it, so the miss was routing. The question deliberately names the rat + museum door (not the prodigy altars, which the corpus never links to the door) so every checked dimension is asked for."
+}

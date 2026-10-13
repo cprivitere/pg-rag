@@ -1,9 +1,0 @@
-{
-  "id": "tailoring-practice-leveling",
-  "question": "How can I level Tailoring at low levels?",
-  "type": "entity",
-  "facts": [
-    ["tailoring"],
-    ["practice", "beginner s tailoring practice", "beginners tailoring practice"]
-  ]
-}

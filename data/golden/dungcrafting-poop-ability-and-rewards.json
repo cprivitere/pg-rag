@@ -1,0 +1,13 @@
+{
+  "id": "dungcrafting-poop-ability-and-rewards",
+  "question": "What is the Dungcrafting 'Poop' ability and what does it require, which skills does Dungcrafting grant bonus levels to, and what quest does mastering it unlock?",
+  "type": "entity",
+  "facts": [
+    ["defecate as an animal", "poop ability", "ability poop"],
+    ["requires beast"],
+    ["cow"],
+    ["pig"],
+    ["graffiti", "mastering poop", "mastering poo"]
+  ],
+  "notes": "Split 2026-10-11 out of `dungcrafting`. Grounding: doc skillprofile_Pooping_chunk_0 (\"Abilities (1): - Poop — Defecate as an animal. ... Requires Beast\"; \"Rewards: Level 20: BonusToSkill = Cow / Level 25: BonusToSkill = Pig\") and skillprofile_Pooping_chunk_1 (\"Quests: - Graffiti: Mastering \\\"Poop\\\"\"). This was the RET-side half of the old failure: the bare skill doc (skill_Pooping) carries no ability/reward/quest lines, so 'what is Dungcrafting' never surfaced them. All 5 facts live in the skill-profile doc."
+}

@@ -4,8 +4,8 @@ LLM backends on :8080 and compare.
 
 For each candidate: stop the current LLM → swap mise.toml [env] LLM_MODEL /
 LLM_FLAGS → start → wait for health → run golden_check.py --diagnose →
-capture output. Embed (:8081) + reranker (:8082) stay up the whole sweep so
-retrieval is identical across models — only the LLM answer changes.
+capture output. Only the LLM changes; retrieval (the agentic tool loop) is
+identical across models, so the golden delta isolates the model.
 
 Reasoning OFF (deterministic): each candidate's documented flags are used but
 with `--reasoning off` appended, matching the doc's rigorous re-baseline method
@@ -17,7 +17,7 @@ Usage:
     uv run python scripts/llm_golden_bakeoff.py --dry-run
 
 Restores the original mise.toml LLM_MODEL/LLM_FLAGS at the end (best effort,
-also on Ctrl-C). Does NOT touch embed/rerank/chat.
+also on Ctrl-C). Does NOT touch the chat UIs.
 """
 
 from __future__ import annotations
@@ -237,15 +237,6 @@ def main() -> int:
         print("unknown model key(s): " + ", ".join(bad))
         print("available: " + ", ".join(CANDIDATES))
         return 2
-
-    # require embed + rerank up (golden needs embed; rerank improves retrieval
-    # constancy — both stay up for the whole sweep).
-    print("Pre-flight: embed (:8081) + reranker (:8082) must be up for the sweep.", flush=True)
-    for url in ("http://localhost:8081/health", "http://localhost:8082/health"):
-        if not wait_health(url, timeout=5):
-            print(f"  ! {url} not up — start with `mise se && mise sr` first")
-            return 1
-    print("  embed + rerank OK", flush=True)
 
     original_model_line, original_flags_line = snapshot_mise()
     print(f"Snapshot mise.toml: {original_model_line} / {original_flags_line}", flush=True)

@@ -1,0 +1,12 @@
+{
+  "id": "animal-handling-family-tames",
+  "question": "Which taming abilities appear in my character's Animal Handling ability list?",
+  "type": "general",
+  "facts": [
+    ["TameBear", "Tame Bear"],
+    ["TameBigCat", "Tame Big Cat"],
+    ["TameBee", "Tame Bee"]
+  ],
+  "store": true,
+  "notes": "Split 2026-10-11 out of `animal-handling-ability-audit`. Store-only: player_state(section='abilities', skill='Animal Handling') over data/sqlite_gorgon.db (char_reports). Verified live (sheet ts 2026-10-06, level 96 +9): the audit's 'KNOWN:' family list contains all three by name - 'Sic 'Em ... Tame Bear, Tame Bee, Tame Big Cat, Tame Rat, That'll Do ...' - so the case asserts the audit surfaces the tame family by display name. NOTE (corrects the old case's note): TameBear/TameBee/TameBigCat DO appear in the sheet's Animal Handling ability list; they are gated in-game by shrine/riddle unlocks (level_req=1 in the abilities table is not a known-gate), which is why this case checks the audit's declared list rather than claiming they are unlearned. The old case also accepted 'bear shrine'/'cat shrine'/'crelpin' variants; those strings are NOT in the tool output, so requiring them was an unfair assertion and the variants are dropped."
+}

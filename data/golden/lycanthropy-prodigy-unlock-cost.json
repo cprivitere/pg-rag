@@ -1,0 +1,10 @@
+{
+  "id": "lycanthropy-prodigy-unlock-cost",
+  "question": "Who unlocks Lycanthropy (Werewolf) Prodigy Potential, and how much does it cost?",
+  "type": "general",
+  "facts": [
+    ["jenny foster"],
+    ["126 statehelm renown", "126 sr", "252,000", "252000"]
+  ],
+  "notes": "Unlock-price case: the ONLY source is the trainer NPC page's Training table, which the corpus did not carry until the {{NPC training row}}/{{NPC training unlock row}} render rewrite (wiki_builder._rewrite_training_templates; CACHE_VERSION 10->11, DOCUMENTS_VERSION 22->23). Grounding: wiki_Jenny Foster_Training_chunk_0 now contains 'Unlock: Lycanthropy: Unlock Lycanthropy Prodigy Potential - skill level 100 - cost 126 SR or 252,000', rendered verbatim from the store's wiki_pages row for 'Jenny Foster' (the sibling row is 'Unlock Lycanthropy Skill Levels 91-100 - skill level 90 - cost 420 SR or 1,008,000 - favor Comfortable'). Before the rewrite both attempts of the live run answered 'the specific gold cost ... not stated' after 6 rounds of corpus_search on '<skill> Training' page titles that do not exist; the fact was reachable only via get_page('Jenny Foster'). SR = Statehelm Renown, and the councils alternative is the same price line, so either currency passes."
+}

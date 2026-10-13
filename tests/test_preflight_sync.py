@@ -1,6 +1,7 @@
-"""Contracts scripts.agentic_chat._preflight_sync: the pre-chat refresh runs
-session + glogger ingestion into the store, prints only tables that actually
-changed (row counts), and never raises — a broken source degrades to a note."""
+"""Contracts `pgrag.agentic.store.refresh_store` (the pre-chat refresh shared by
+`scripts/agentic_chat.py` and `scripts/rag_chat.py`): it runs session + glogger
+ingestion into the store, prints only tables that actually changed (row counts),
+and never raises — a broken source degrades to a note."""
 
 import sqlite3
 
@@ -62,10 +63,10 @@ def store(tmp_path, monkeypatch):
 def test_preflight_sync_refreshes_and_prints_changes(store, monkeypatch, capsys):
     db, gsrc = store
     import pgrag.agentic.glogger as glogger
-    from scripts.agentic_chat import _preflight_sync
+    from pgrag.agentic.store import refresh_store
 
     monkeypatch.setattr(glogger, "DEFAULT_GLOGGER_DB", gsrc)
-    _preflight_sync(str(db), skip=False)
+    refresh_store(str(db), skip=False)
     out = capsys.readouterr().out
     assert "[sync] refreshed:" in out
     assert "chat_events" in out and "stall_events" in out
@@ -76,15 +77,15 @@ def test_preflight_sync_refreshes_and_prints_changes(store, monkeypatch, capsys)
     conn.close()
 
     # Second run: no changes -> no print at all
-    _preflight_sync(str(db), skip=False)
+    refresh_store(str(db), skip=False)
     assert "[sync]" not in capsys.readouterr().out
 
 
 def test_preflight_sync_skip_flag_is_noop(store, capsys):
     db, _gsrc = store
-    from scripts.agentic_chat import _preflight_sync
+    from pgrag.agentic.store import refresh_store
 
-    _preflight_sync(str(db), skip=True)
+    refresh_store(str(db), skip=True)
     assert capsys.readouterr().out == ""
     conn = sqlite3.connect(db)
     assert conn.execute("SELECT count(*) FROM chat_events").fetchone()[0] == 0
@@ -94,11 +95,11 @@ def test_preflight_sync_skip_flag_is_noop(store, capsys):
 def test_preflight_sync_broken_source_degrades_to_note(store, monkeypatch, capsys):
     db, gsrc = store
     import pgrag.agentic.glogger as glogger
-    from scripts.agentic_chat import _preflight_sync
+    from pgrag.agentic.store import refresh_store
 
     # A corrupt glogger DB must not raise out of the sync — chat proceeds.
     gsrc.write_bytes(b"not a sqlite file")
     monkeypatch.setattr(glogger, "DEFAULT_GLOGGER_DB", gsrc)
-    _preflight_sync(str(db), skip=False)
+    refresh_store(str(db), skip=False)
     out = capsys.readouterr().out
     assert "[sync]" in out

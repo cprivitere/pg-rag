@@ -1,10 +1,16 @@
 {
   "id": "recipes-using-basic-spider-silk",
-  "question": "What recipes can I make with Basic Spider Silk at Tailoring 4?",
+  "question": "What Tailoring recipe can I make with Basic Spider Silk at level 4?",
   "type": "general",
   "facts": [
-    ["beginner s tailoring practice", "beginners tailoring practice", "beginner tailoring practice"],
+    [
+      "beginner s tailoring practice",
+      "beginners tailoring practice",
+      "beginner tailoring practice",
+      "beginner's tailoring practice (spider silk)"
+    ],
     ["tailoring"],
     ["4"]
-  ]
+  ],
+  "notes": "Refactored 2026-10-11: the question asked 'what recipes' (plural) while the facts pin one — exactly one recipe matches. Grounded: 'Beginner's Tailoring Practice (Spider Silk)', Tailoring 4, 'Practice tailoring with spider silk. The resulting items are junk, but it's good practice.'"
 }

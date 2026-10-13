@@ -1,0 +1,13 @@
+{
+  "id": "gardening-basics",
+  "question": "What is the Gardening skill's description and type, which BonusToSkill rewards does it grant, and what is its Spade Assault ability?",
+  "type": "entity",
+  "facts": [
+    ["growing things in a garden", "herbs food and flowers"],
+    ["non combat", "noncombat"],
+    ["spade assault"],
+    ["foraging"],
+    ["rabbit"]
+  ],
+  "notes": "Split 2026-10-11 out of `gardening` (10 scattered facts failed as one answer). Grounding: skill_Gardening_chunk_0 + skillprofile_Gardening_chunk_0 (\"Growing things in a garden: herbs, food, and flowers.\"; \"Type: Non-Combat\"; \"Level 20: BonusToSkill = Foraging\", \"Level 25: BonusToSkill = Rabbit\") and skillprofile_Gardening_chunk_1 (\"Abilities (10): - Spade Assault — Expertly hack at your foe's legs with your shovel\"). All 5 facts are in the Gardening skill/profile docs. The DROPPED fact: the old case also required 'giant mantises', which has no Gardening-grounded source (the only mantis+garden docs are the separate quest wiki_Kill Giant Mantises_Summary and NPC pages) - it was the RET-side miss, so checking it in a Gardening answer was an incidental-string assertion. STILL FLAKY (in data/golden/FLAKY.txt): the model answers from the CDB skills table (whose advancement_table is empty, so it claims 'no bonus levels') instead of the corpus profile doc that holds the BonusToSkill list - every fact here is reachable (corpus_search \"Gardening skill bonus levels\" ranks skill_Milling/skill_Gardening chunks), the tool choice is not."
+}

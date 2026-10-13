@@ -8,8 +8,8 @@ script is the documentation analogue. It asserts stable, meaningful facts:
 - every test file is covered by docs/TEST_CONTRACTS.md (and nothing it
   references has vanished) — the layer->test map cannot quietly diverge;
 - file paths named in backticks under AGENTS.md / the skills actually exist;
-- contract constants (DOCUMENTS_VERSION, EMBEDDING_DIM) and the golden shape
-  agree across the docs that quote them;
+- contract constants (DOCUMENTS_VERSION) and the golden shape agree across the
+  docs that quote them;
 - the golden-set counts the evaluation skill quotes are real.
 
 Exit 0 = clean; 1 = one or more drifts (printed). Run via `mise drift`
@@ -80,15 +80,15 @@ def main() -> int:
 
     # --- 3. Contract constants agree across the docs that quote them --------
     try:
-        from pgrag.config import DOCUMENTS_VERSION, EMBEDDING_DIM
+        from pgrag.config import DOCUMENTS_VERSION
     except Exception as exc:  # pragma: no cover - environment
         _drift("cannot import pgrag.config", str(exc))
-        DOCUMENTS_VERSION = EMBEDDING_DIM = None
+        DOCUMENTS_VERSION = None
 
     if DOCUMENTS_VERSION is not None:
         # The VALUE lives only in config.py; docs should reference the symbol
         # (asserting the numeric value would force a drift-prone literal on
-        # every version bump). EMBEDDING_DIM (384) is a stable contract.
+        # every version bump).
         for label, path in [
             ("AGENTS.md", ROOT / "AGENTS.md"),
             ("TEST_CONTRACTS", tc),
@@ -99,12 +99,6 @@ def main() -> int:
                 continue
             ok = "DOCUMENTS_VERSION" in path.read_text(encoding="utf-8")
             _report("OK" if ok else "DRIFT", f"DOCUMENTS_VERSION referenced in {label}")
-        for label, path in [
-            ("AGENTS.md", ROOT / "AGENTS.md"),
-            ("pg-rag skill", ROOT / ".agents" / "skills" / "pg-rag" / "SKILL.md"),
-        ]:
-            ok = str(EMBEDDING_DIM) in path.read_text(encoding="utf-8")
-            _report("OK" if ok else "DRIFT", f"EMBEDDING_DIM=={EMBEDDING_DIM} in {label}")
 
     # Golden shape literal: {id, question, type, facts   (owners: TEST_CONTRACTS
     # L6 + WATCHDOG trap; RULES restates nothing)
@@ -147,6 +141,46 @@ def main() -> int:
         else:
             _report("OK", "evaluation skill golden counts match")
 
+    # --- 4b. Golden harness surface (owner: pgrag.agentic.eval) ------------
+    # The classic harness was deleted; golden ownership + tier membership now
+    # live in pgrag.agentic.eval, driven by the loop CLI scripts/golden_check.py.
+    # Assert that binding (not the old pipeline shape) so a re-split is caught.
+    try:
+        from pgrag.agentic import eval as agentic_eval
+    except Exception as exc:  # pragma: no cover - environment
+        _drift("cannot import pgrag.agentic.eval", str(exc))
+    else:
+        gd = ROOT / agentic_eval.GOLDEN_DIR
+        if not gd.is_dir():
+            _drift("agentic eval GOLDEN_DIR missing", str(agentic_eval.GOLDEN_DIR))
+        else:
+            _report("OK", "agentic eval GOLDEN_DIR resolves")
+            missing_tier = [
+                t for t in agentic_eval.SHORT_TIER_IDS if not (gd / f"{t}.json").exists()
+            ]
+            if missing_tier:
+                _drift("SHORT_TIER_IDS name missing goldens", ", ".join(missing_tier))
+            else:
+                _report("OK", "SHORT_TIER_IDS resolve to golden files")
+        gc = (ROOT / "scripts" / "golden_check.py").read_text(encoding="utf-8")
+        wanted_flags = [
+            "--tier",
+            "--type",
+            "--max-facts",
+            "--diagnose",
+            "--export",
+            "--ids",
+            "--corpus",
+            "--max-rounds",
+            "--store",
+            "--report",
+        ]
+        missing_flags = [f for f in wanted_flags if f not in gc]
+        if missing_flags:
+            _drift("golden_check.py missing flags", ", ".join(missing_flags))
+        else:
+            _report("OK", "golden_check.py carries the documented flags")
+
     # --- 5. Expected skills exist and are well-formed -----------------------
     expected_skills = ["pg-data", "pg-rag", "retrieval", "evaluation", "testing"]
     for name in expected_skills:
@@ -175,18 +209,11 @@ def main() -> int:
     model_keys = [
         "LLM_MODEL",
         "LLM_FLAGS",
-        "EMBED_MODEL",
-        "EMBED_FLAGS",
-        "RERANK_MODEL",
-        "RERANK_FLAGS",
     ]
     if all(k in mise_env for k in model_keys):
-        # Files where a literal model ref/flag WOULD be a leftover. vram_sweep
-        # carries deliberate equal fallbacks (reads env first) — excluded.
+        # Files where a literal model ref/flag WOULD be a leftover.
         consumers = {
             "llm-start.ps1": ROOT / ".mise" / "tasks" / "llm-start.ps1",
-            "embed-start.ps1": ROOT / ".mise" / "tasks" / "embed-start.ps1",
-            "rerank-start.ps1": ROOT / ".mise" / "tasks" / "rerank-start.ps1",
             "mise.toml debug-* tasks": ROOT / "mise.toml",
             "AGENTS.md": ROOT / "AGENTS.md",
         }
@@ -195,10 +222,8 @@ def main() -> int:
             if label == "mise.toml debug-* tasks":
                 # mise.toml itself legitimately CONTAINS the values (it is
                 # the source) — only the debug-* task run-strings must
-                # reference {{ env.X }}. Only debug-embed + debug-llm exist
-                # (no debug-rerank), so check just the EMBED/LLM keys.
-                task_keys = [k for k in model_keys if k.startswith(("LLM_", "EMBED_"))]
-                leaks = [k for k in task_keys if f"{{{{ env.{k} }}}}" not in text]
+                # reference {{ env.X }}. Only debug-llm exists.
+                leaks = [k for k in model_keys if f"{{{{ env.{k} }}}}" not in text]
                 if leaks:
                     _drift("mise debug tasks missing env template", ", ".join(leaks))
                 else:
@@ -211,34 +236,8 @@ def main() -> int:
                         ", ".join(f"{k}={mise_env[k]}" for k in leaked),
                     )
                 else:
-                    varref = [
-                        v
-                        for v in (
-                            "LLM_MODEL",
-                            "EMBED_MODEL",
-                            "RERANK_MODEL",
-                            "LLM_FLAGS",
-                            "EMBED_FLAGS",
-                            "RERANK_FLAGS",
-                        )
-                        if v in text
-                    ]
+                    varref = [v for v in model_keys if v in text]
                     _report("OK", f"{label} references env vars: {', '.join(varref) or 'none'}")
-
-        # embed_eval.py's production bake-off candidate must read EMBED_MODEL
-        # from [env] (it legitimately carries OTHER candidates as literals —
-        # only the production row is single-sourced). Assert the env reference
-        # rides along with the manifest, not that literals are absence (which
-        # would false-positive on the comparison models).
-        ee = (ROOT / "scripts" / "embed_eval.py").read_text(encoding="utf-8")
-        if "EMBED_MODEL" in ee and not re.search(
-            r'tomllib\.loads.*EMBED_MODEL|get\("EMBED_MODEL"\)', ee, re.S
-        ):
-            _drift("embed_eval.py references EMBED_MODEL but not from mise.toml [env]")
-        elif "EMBED_MODEL" not in ee:
-            _drift("embed_eval.py no longer references EMBED_MODEL (production bake-off unfixed)")
-        else:
-            _report("OK", "embed_eval.py production candidate sourced from EMBED_MODEL")
 
     else:
         # A missing key silently skips all model checks — fail loudly instead.

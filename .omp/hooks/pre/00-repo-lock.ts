@@ -7,10 +7,11 @@
 // O_EXCL lock file under the gitignored `data/` dir is the only primitive
 // that genuinely coordinates across instances.
 //
-// Scope: block destructive corpus mutations (build-index / build-documents /
-// generate-docs / mise sync / refresh) when another live instance holds the
-// lock. All other commands pass through untouched. Fail-closed only on proven
-// contention — any hook runtime error logs and lets the command through.
+// Scope: block destructive corpus mutations (build-documents / generate-docs /
+// build-bm25 / build-tool-corpus / mise sync / refresh) when another live
+// instance holds the lock. All other commands pass through untouched.
+// Fail-closed only on proven contention — any hook runtime error logs and lets
+// the command through.
 
 import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
 import { openSync, closeSync, unlinkSync, existsSync, readFileSync, writeSync } from "node:fs";
@@ -23,7 +24,11 @@ const TTL_MS = 3 * 60 * 60 * 1000;
 
 // Destructive corpus commands. Match on the token that actually rewrites
 // shared build state; deliberately conservative so reads/greps pass.
-const DESTRUCTIVE = /(?:\b|_)(build-index|build-documents|generate-docs)(?:\b|\s|\s-|$)|mise\s+sync\b|\b(?:uv\s+run\s+)?pgrag\s+build-/;
+// The build-* alternation covers the mise tasks (build-documents, build-bm25,
+// build-tool-corpus) and the `pgrag build-` CLI prefix; the direct
+// `scripts/build_tool_corpus.py` invocation is guarded separately because it
+// is run via `python scripts/...`, not a `pgrag build-*` token.
+const DESTRUCTIVE = /(?:\b|_)(build-documents|build-bm25|build-tool-corpus|generate-docs)(?:\b|\s|\s-|$)|mise\s+sync\b|\b(?:uv\s+run\s+)?pgrag\s+build-|scripts[\\/]build_tool_corpus\.py/;
 
 type Owner = { pid: number; startedAt: number };
 const EMPTY: Owner = { pid: -1, startedAt: 0 };

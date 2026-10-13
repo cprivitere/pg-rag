@@ -12,7 +12,7 @@ CACHE_FILE = WIKI_PARSED_CACHE
 # Bump when the cached doc shape OR generated text changes, so stale cache
 # entries are rebuilt instead of served with old content (a mtime-equal page
 # with a changed section-cleanup step would otherwise keep residue forever).
-CACHE_VERSION = 10
+CACHE_VERSION = 11
 
 # CDN tables whose entity names wiki pages can link to.
 _ENTITY_TABLES = {
@@ -122,6 +122,19 @@ _NPC_STORAGE_RE = re.compile(
     re.S,
 )
 
+# {{NPC training row …}} / {{NPC training unlock row …}}: the ONLY carrier of a
+# trainer's prices (councils / Statehelm Renown), favor tier, level band and
+# taught abilities — 5,367 rows across 209 pages. strip_code() deletes the
+# multi-arg shells, so every one of those pages emitted a Training doc holding
+# nothing but the `{|`/`|}` table shell; the corpus therefore had NO unlock cost
+# anywhere ("how much does it cost to unlock X" was unanswerable — Jenny
+# Foster's "Unlock Lycanthropy Prodigy Potential — 126 SR or 252,000" was
+# unreachable). Rendered as one readable line per row, the same fix shape as
+# the HOLIDAY / NPC STORAGE key=value rewrites. The body can hold a nested
+# {{pipe}} (its whole purpose is escaping a `|` inside an arg), so the scan is
+# balanced-brace aware like _rewrite_shell_templates.
+_TRAINING_TPL_PREFIX = "{{NPC training"
+
 
 def _rewrite_shell_templates(text: str) -> str:
     """Unwrap {{Spoiler|…}}/{{Quote|…}} shells (balanced {{ }} aware).
@@ -208,6 +221,60 @@ def _split_top_args(body: str) -> list[str]:
         i += 1
     args.append(body[last:])
     return args
+
+
+def _render_training_row(name: str, args: list[str]) -> str:
+    """One {{NPC training …row}} -> a readable line.
+
+    Values keep their source wording (`cost 126 SR or 252,000`), the escaped
+    `{{pipe}}` separator becomes ": ", and unset ("?") fields are dropped so
+    the line stays signal. An unlock row names its level band; an ability row
+    names the ability it teaches.
+    """
+    kv: dict[str, str] = {}
+    for arg in args:
+        if "=" in arg:
+            key, value = arg.split("=", 1)
+            kv[key.strip()] = value.strip()
+    kind = "unlock" if "unlock" in name.lower() else "teaches"
+    what = re.sub(r"\s+", " ", (kv.get("item") or kv.get("ability") or "").replace("{{pipe}}", ": ")).strip()
+    bits = [what] if what else []
+    for key, label in (("skilllevel", "skill level"), ("cost", "cost"), ("favor", "favor")):
+        value = kv.get(key, "").strip()
+        if value and value != "?":
+            bits.append(f"{label} {value}")
+    if not bits:
+        return ""
+    return ("Unlock: " if kind == "unlock" else "Teaches: ") + " - ".join(bits)
+
+
+def _rewrite_training_templates(text: str) -> str:
+    """Rewrite every {{NPC training …}} row template to a plain-text line."""
+    while True:
+        start = text.find(_TRAINING_TPL_PREFIX)
+        if start == -1:
+            return text
+        i = start + 2
+        depth = 0
+        end = -1
+        while i < len(text) - 1:
+            if text[i : i + 2] == "{{":
+                depth += 1
+                i += 2
+                continue
+            if text[i : i + 2] == "}}":
+                if depth == 0:
+                    end = i + 2
+                    break
+                depth -= 1
+                i += 2
+                continue
+            i += 1
+        if end == -1:
+            return text  # unbalanced; leave for the hygiene guards
+        name, _, rest = text[start + 2 : end - 2].partition("|")
+        rendered = _render_training_row(re.sub(r"\s+", " ", name).strip(), _split_top_args("|" + rest))
+        text = text[:start] + rendered + text[end:]
 
 
 def _rewrite_event_templates(text: str) -> str:
@@ -442,7 +509,9 @@ def _parse_page_by_headings(page_name, raw_text, metadata, seen_ids):
         # happens in the final strip_code pass).
         text = _rewrite_event_templates(
             _rewrite_shell_templates(
-                _rewrite_mob_templates(_preserve_template_names(str(section_wikicode)))
+                _rewrite_training_templates(
+                    _rewrite_mob_templates(_preserve_template_names(str(section_wikicode)))
+                )
             )
         )
         text = mwparserfromhell.parse(text).strip_code(normalize=False, collapse=True).strip()
@@ -539,7 +608,9 @@ def _parse_page(page_name, raw_text, entity_info=None):
 
         text = _rewrite_event_templates(
             _rewrite_shell_templates(
-                _rewrite_mob_templates(_preserve_template_names(str(section)))
+                _rewrite_training_templates(
+                    _rewrite_mob_templates(_preserve_template_names(str(section)))
+                )
             )
         )
         text = mwparserfromhell.parse(text).strip_code(normalize=False, collapse=True).strip()
@@ -606,7 +677,7 @@ def _load_cache():
     if CACHE_FILE.exists():
         try:
             cache = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
-        except ValueError, OSError:
+        except (ValueError, OSError):
             return {}
         if cache.get("__version") != CACHE_VERSION:
             return {}

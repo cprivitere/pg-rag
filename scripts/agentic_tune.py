@@ -30,10 +30,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from agentic_chat import _short_ids_from_tests, normalize
-
+from pgrag.agentic.eval import SHORT_TIER_IDS, load_case, normalize
 from pgrag.agentic.loop import run_loop
 from pgrag.rag.llm import LLMServerError
 
@@ -63,12 +60,10 @@ CANDIDATES = {
 
 def _load_cases(eval_set: str, cases_path: str | None) -> list[dict]:
     if eval_set == "golden-short":
-        ids = _short_ids_from_tests()
         cases = []
-        for cid in ids:
-            p = Path("data/golden") / f"{cid}.json"
-            if p.exists():
-                cases.append(json.loads(p.read_text(encoding="utf-8")))
+        for cid in SHORT_TIER_IDS:
+            if (Path("data/golden") / f"{cid}.json").exists():
+                cases.append(load_case(cid))
         return cases
     path = Path(cases_path) if cases_path else DEFAULT_CASES
     data = json.loads(path.read_text(encoding="utf-8"))

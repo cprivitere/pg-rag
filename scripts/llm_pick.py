@@ -114,7 +114,7 @@ def _interactive(no_restart: bool = False) -> None:
     while True:
         try:
             choice = input(f"Pick model [1-{len(keys)}/q]: ").strip()
-        except EOFError, KeyboardInterrupt:
+        except (EOFError, KeyboardInterrupt):
             print()
             return
 

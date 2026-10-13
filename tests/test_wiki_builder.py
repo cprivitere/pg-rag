@@ -564,6 +564,44 @@ def test_favor_template_renders_tier():
     )
 
 
+def test_npc_training_rows_render_prices():
+    """contract: {{NPC training unlock row …}} / {{NPC training row …}} render
+    one line each, keeping the source's price wording. They hold the ONLY copy
+    of a trainer's unlock cost and taught abilities; strip_code deleted the
+    shells, so 209 pages emitted an empty Training table and no unlock cost
+    existed anywhere in the corpus. The body nests {{pipe}} (an escaped `|`),
+    so the scan must be balanced-brace aware, not a linear body regex."""
+    raw = """__NOTOC__
+== Training ==
+:{| class = "sortable mw-collapsible mw-collapsed"
+|+ style="white-space:nowrap;" | [[Lycanthropy]]
+{{NPC training unlock row
+ |Icon=Unlock
+ |item=Lycanthropy{{pipe}}Unlock Lycanthropy Prodigy Potential
+ |skilllevel=100
+ |cost=126 SR or 252,000
+ |favor=?
+}}
+{{NPC training row
+ |ability=Bite 9
+ |skilllevel=104
+ |cost=0 NT & 0
+ |favor=Neutral
+}}
+|}
+"""
+    db = FakeDB({"Jenny Foster": raw})
+    docs = build_wiki_documents(db)
+    training = [d for d in docs if d["metadata"]["section"] == "Training"]
+    assert training, "the Training section must emit a doc"
+    text = " ".join(d["text"] for d in training)
+    assert "Unlock Lycanthropy Prodigy Potential" in text  # {{pipe}} -> ": "
+    assert "skill level 100" in text
+    assert "126 SR or 252,000" in text
+    assert "Teaches: Bite 9" in text and "favor Neutral" in text
+    assert "{{" not in text and "}}" not in text
+
+
 # --- _build_entity_index name resolution ---
 
 

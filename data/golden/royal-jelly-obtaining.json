@@ -1,0 +1,12 @@
+{
+  "id": "royal-jelly-obtaining",
+  "question": "Which NPC trades Royal Jelly for Phoenix Eggs, and are there quests that also reward Royal Jelly?",
+  "type": "general",
+  "facts": [
+    ["midge"],
+    ["barter", "trading", "trade"],
+    ["phoenix egg"],
+    ["quest"]
+  ],
+  "notes": "Split 2026-10-11 out of `royal-jelly-gathering`. Grounding: wiki_Midge_the_Apothecary_Bartering ('Midge will give one Royal Jelly in exchange for various items. The items she requests changes every 2-4 hours ...'), wiki_Midge_the_Apothecary_table_1_row_22 ('Phoenix Egg x 1 | Royal Jelly x 6' - Midge's barter table row), source_items_item_1337 ('Barter from Midge the Apothecary' + the quest entries), and quest_quest_17101 (Bad Memory Potion: Midge in the Fae Realm, 'I'll barter for royal jelly'). The old case's `phoenix egg` fact was the recurring GEN-side miss because the question ('How do I gather Royal Jelly?') never pointed at the barter table; naming the Phoenix Egg in the question makes the fact fair and retrievable."
+}

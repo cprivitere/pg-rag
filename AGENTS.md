@@ -1,19 +1,32 @@
 # Repository Guidelines
 
 Oh My Pi agent guide for **pg-rag** — the unified repo for the Project
-Gorgon knowledge base: corpus build, retrieval pipeline, agentic SQLite
-store, and tooling in one place.
-The marimo notebooks live in `notebooks/` (molab-mirror = corpus chat, molab-agentic = tool loop).
+Gorgon knowledge base: corpus build (documents + BM25 + tool corpus), the
+agentic SQLite store, and the single retrieval path — the agentic tool loop —
+in one place.
+The marimo notebook lives in `notebooks/molab-agentic/` (the tool loop over a
+private store snapshot); the corpus-chat **mirror notebook was deleted** with
+the dense-RAG cutover.
 
 ---
 
 ## Project Overview
 
-Build a searchable, fact-grounded knowledge base from two sources:
-- **CDN**: structured `data/cdn/*.json` tables (items, recipes, abilities, skills, quests, npcs, areas, effects).
-- **Wiki**: raw `data/wiki/*.txt` page dumps (hashed filenames, titles via `data/wiki/.meta.json`).
+Two sources feed a searchable, fact-grounded knowledge base:
+- **CDN**: structured `data/cdn/*.json` tables (items, recipes, abilities,
+  skills, quests, npcs, areas, effects).
+- **Wiki**: raw `data/wiki/*.txt` page dumps (hashed filenames, titles via
+  `data/wiki/.meta.json`).
 
-Generate typed documents → embed → index in Chroma → retrieve (dense + BM25 → RRF fuse → rerank) → answer via LLM. Ships a CLI (`pgrag`), OpenWebUI pipe, Gradio chat, curation tooling, and golden/embed eval suites.
+`generate_documents()` → `data/documents.json` (+ a `DOCUMENTS_VERSION` stamp)
+→ a persisted BM25 index (`data/bm25_index.pkl`) and a trimmed tool-corpus
+variant (`data/tool_documents.json` + `data/tool_bm25.pkl`). A separate SQLite
+store (`data/sqlite_gorgon.db`) holds the same CDN/wiki data plus live session
+and glogger play history. **All retrieval is the agentic tool loop**
+(`pgrag.agentic.loop.run_loop`, `src/pgrag/agentic/loop.py`) driving five tools
+over that store + the BM25 corpus. Ships a CLI (`pgrag`), the Gradio chat,
+agentic CLI chat, the legacy OpenWebUI pipe, curation tooling, and the golden
+eval.
 
 ## Architecture & Data Flow
 
@@ -22,122 +35,327 @@ cdn/*.json ─┐
             ├─ loaders → GameDatabase(tables + wiki) ─┐
 wiki/*.txt ─┘                                          ├─ documents/ (builder + wiki_builder + skill_profiles + summaries)
 data/wiki/curated/*.json ──────────────────────────────┘
-                        │  build.py: generate_documents() → documents.json (+ documents_version.json, stamps DOCUMENTS_VERSION)
+                        │  build.py: generate_documents() → data/documents.json
+                        │           (+ data/derived/documents_version.json, stamps DOCUMENTS_VERSION)
                         ▼
-              build_index.py → Chroma collection "project_gorgon" (incremental, hash-based)
-                        │  EMBED_BATCH_SIZE=10000, validates EMBEDDING_DIM=384
+      rag/bm25.py              → data/bm25_index.pkl        (persisted lexical index)
+      scripts/build_tool_corpus.py → data/tool_documents.json + data/tool_bm25.pkl  (corpus_search --corpus tool)
+
+      scripts/build_sqlstore.py → data/sqlite_gorgon.db  (CDN + wiki + live session + glogger)
+
+Question → agentic.loop.run_loop (blocking, bounded rounds; temp 0 / seed 0 by default)
+            ├─ sql_query      read-only SELECT over the store (LIMIT 200, 2M-op budget)
+            ├─ find_entities  FTS5 over entity_names
+            ├─ get_page       full wiki page text
+            ├─ corpus_search  BM25 over data/documents.json (or the tool corpus)
+            └─ player_state   live-session sections (summary/skills/stall/abilities/…)
                         ▼
-Query → query_classifier → retriever (dense + BM25 → RRF fuse → reranker :8082)
-                        │
-                        ├─ entity queries → entity_retrieval (skill dossiers sorted by required level) + gap-fill
-                        └─ pipeline.ask / ask_stream → prompt → LLM :8080 → answer
+              prompt + tool results → LLM :8080 → grounded answer
 ```
 
-- **Freshness contract (avoid stale-document trap)**: `build-documents` stamps `data/derived/documents_version.json` with `DOCUMENTS_VERSION` (config.py; authority is the constant, not this doc). `build-index` only reads the persisted `documents.json` and refuses to embed if the stored version differs — it never regenerates. To converge a source in one command, use `mise sync-*` tasks (they run `build-documents` first). Bump `DOCUMENTS_VERSION` whenever document shape changes.
-- **Agentic SQLite store + tool loop**: `src/pgrag/agentic/` builds a separate SQLite store (`data/sqlite_gorgon.db`, `mise sql-store`) holding the primary sources — hand-mapped CDN tables, raw wiki pages, live play-session data (`~/AppData/LocalLow/Elder Game/Project Gorgon`: ChatLogs, Player.log, Reports, Books), and glogger play-history (`src/pgrag/agentic/glogger.py` reads `%APPDATA%/glogger.Release/glogger.db` via a WAL-safe snapshot copy: stall sales, gift/favor deltas, kills/deaths, loot transactions, recipe completions, Words of Power, vendor gold — watermark-incremental in `data/sqlite_state.json` under `"glogger"`; glogger's own CDN mirrors are deliberately skipped, ours is fresher). `src/pgrag/agentic/loop.py` runs the LLM in a bounded tool loop (5 tools: sql_query, find_entities, get_page, corpus_search, player_state; native tool_calls + fenced ```tool text-protocol fallback; max 6 rounds; temp 0/seed 0) via `mise agentic-chat`. `corpus_search` reads the BM25 doc store — `--corpus tool` reads the Phase B variant (`data/tool_documents.json` + `data/tool_bm25.pkl`, built by `scripts/build_tool_corpus.py`). This never touches documents.json / Chroma / the golden pipeline.
-Tuning sweeps live in `scripts/agentic_tune.py` (`mise agentic-tune`,
-reports in `data/agentic_tune/` + README verdicts): measured outcomes are
-**temp 0 confirmed** (no candidate beat it on any seed; goldens stay temp
-0/seed 0), **reasoning budget 4096 kept**, **Ornith-1.5-9B kept**
-(qwen-27b ties 6/6 at ~2.6x latency; gemma-26b regressed a case). Qwen MoE
-templates reject a 2nd system message, so the loop sends the forced-final
-notice as a user-role message.
+The five tool names are the exact `AVAILABLE_TOOLS` string in
+`src/pgrag/agentic/tools.py`: `sql_query, find_entities, get_page,
+corpus_search, player_state`.
+
+- **DELETED in the cutover** — do not name these as live: the whole dense path
+  (`pgrag.rag.{pipeline,retriever,reranker_client,entity_retrieval,resolve,
+  synthesis_detector,synthesis_generator,spelling,query_classifier,query_plan,
+  retrieval_eval,prompts}`, `pgrag.vectorstore.*`, `pgrag.embeddings.*`,
+  `pgrag.validation`, `pgrag.documents.prompts`), the scripts
+  `retrieval.py`/`rag.py`/`retrieval_eval.py`/`bakeoff_corpus.py`/
+  `embed_eval.py`/`embed_vram_probe.py`/`vram_sweep.py`, the
+  `.mise/tasks/{embed,rerank}-{start,stop}.ps1` tasks, `notebooks/molab-mirror/`,
+  and their tests. There is no Chroma collection, no dense retrieval, no
+  reranker, no embedding server, no RRF fusion, no entity dossier / `_gap_fill`,
+  no query classifier, and no IR-metric harness. Chroma is out of
+  `pyproject.toml`; the venv no longer ships `chromadb`/`onnxruntime`.
+  `EMBEDDING_DIM` and `CONTEXT_BUDGET` no longer exist.
+
+- **Freshness contract (avoid the stale-document trap)**: `build-documents`
+  stamps `data/derived/documents_version.json` with `DOCUMENTS_VERSION`
+  (`src/pgrag/config.py`; authority is the constant, not this doc).
+  `scripts/build_tool_corpus.py` (and the `sync-*` tasks that call it)
+  **refuses** to run against a stale stamp — the ported successor of the old
+  `build-index` refusal. `pgrag/rag/bm25.py` serves its persisted index while
+  `data/documents.json` is unchanged (mtime-keyed) and rebuilds otherwise.
+  Bump `DOCUMENTS_VERSION` whenever document shape changes; regenerate with
+  `build-documents` (`mise generate-docs`) or a `mise sync-*` task.
+
+- **Agentic SQLite store + tool loop**: `src/pgrag/agentic/` builds a separate
+  SQLite store (`data/sqlite_gorgon.db`, `mise sql-store`) holding the primary
+  sources — hand-mapped CDN tables, raw wiki pages, live play-session data
+  (`~/AppData/LocalLow/Elder Game/Project Gorgon`: ChatLogs, Player.log,
+  Reports, Books), and glogger play-history (`src/pgrag/agentic/glogger.py`
+  reads `%APPDATA%/glogger.Personal/glogger.db` (the fork-local daily driver;
+  `glogger.Release` is the fallback) via a WAL-safe snapshot copy:
+  stall sales, gift/favor deltas, kills/deaths, loot transactions, recipe
+  completions, Words of Power, vendor gold — watermark-incremental in
+  `data/sqlite_state.json` under `"glogger"`; glogger's own CDN mirrors are
+  deliberately skipped, ours is fresher). `src/pgrag/agentic/loop.py` runs the
+  LLM in a bounded tool loop (`DEFAULT_MAX_ROUNDS` rounds; each tool-result
+  payload capped at 12000 chars; a final no-tools answer is forced once the
+  budget is exhausted). `run_loop` returns the same 5-key shape as the deleted
+  `pipeline.ask` — `{answer, documents, sources, rounds, trace_rounds}` — where
+  `documents` is exactly what the model was fed and `sources` is one entry per
+  tool round.
+- **Tuning sweeps** live in `scripts/agentic_tune.py` (`mise agentic-tune`,
+  reports in `data/agentic_tune/`): measured outcomes are **temp 0 confirmed**
+  (no candidate beat it on any seed; goldens stay temp 0/seed 0), **reasoning
+  budget 4096 kept**, **Ornith-1.5-9B kept** (qwen-27b ties 6/6 at ~2.6x
+  latency; gemma-26b regressed a case). Qwen MoE templates reject a 2nd system
+  message, so the loop sends the forced-final notice as a user-role message.
 
 ## Key Directories
 
 - `src/pgrag/` — importable package (`uv` installs editable).
-  - `cli.py` — CLI: `download-cdn`, `download-wiki`, `build-documents`, `build-index`, `validate`.
-  - `config.py` — paths, `EMBEDDING_DIM=384`, `CONTEXT_BUDGET=80000`, `DOCUMENTS_VERSION`, `TARGET_CATEGORIES`/`RECURSIVE_CATEGORIES`.
+  - `cli.py` — CLI: `download-cdn`, `download-wiki`, `build-documents`
+    (exactly those three).
+  - `config.py` — paths, `DOCUMENTS_VERSION`, `TARGET_CATEGORIES`/
+    `RECURSIVE_CATEGORIES`.
   - `build.py` — `generate_documents()` orchestration.
-  - `loaders/` — `cdn_loader` (tables from CDN json), `wiki_loader` (wiki text + `.meta.json` title mapping, orphan cleanup), `database.GameDatabase` (in-memory `tables` + `wiki` bag).
-  - `documents/` — `builder.py`, `wiki_builder.py` (mwparserfromhell → sections/chunks, `parent_id` links), `chunking.py`, `resolver.py` (internal code → display name), `skill_profiles.py`, `summaries.py` (gathering skill maps).
-  - `embeddings/llama_embeddings.py` → :8081.
-  - `vectorstore/` — `build_index.py`, `hashes.py`, `health_check.py`.
-  - `rag/` — `retriever.py`, `reranker_client.py`, `bm25.py`, `query_classifier.py`, `query_plan.py`, `spelling.py`, `entity_retrieval.py`, `resolve.py`, `synthesis_detector.py`+`synthesis_generator.py`, `pipeline.py` (+ `ask_stream`), `prompts.py`, `llm.py`.
+  - `loaders/` — `cdn_loader` (tables from CDN json), `wiki_loader` (wiki text
+    + `.meta.json` title mapping, orphan cleanup), `database.GameDatabase`
+    (in-memory `tables` + `wiki` bag).
+  - `documents/` — `builder.py`, `wiki_builder.py` (mwparserfromhell →
+    sections/chunks, `parent_id` links), `chunking.py`, `resolver.py` (internal
+    code → display name), `skill_profiles.py`, `summaries.py` (gathering skill
+    maps), `creature_zones.py`, `combat_xp.py`.
+  - `rag/bm25.py` — the lexical index (build + persistence +
+    `load_bm25_index`); `rag/llm.py` — the LLM client (SSE parse, server-error
+    types).
+  - `agentic/` — `store.py` + `session.py` + `glogger.py` (SQLite store
+    build), `tools.py` (the five tools), `loop.py` (the tool loop),
+    `eval.py` (golden fact-presence eval + tier membership).
 - `scripts/` — eval + service tooling (see Important Files).
 - `tests/` — pytest suite, imports the installed `pgrag` package.
-- `data/` (gitignored) — `cdn/`, `wiki/` (+`curated/`, `.meta.json`), `derived/` (`documents_version.json`), `documents.json`, `chroma/`, `golden/`, `retrieval_traces/`, eval records (`embed_eval_*.log`, `embed_vram.json`, `bakeoff_*.json`). Service logs live at project-root `logs/` (`embed.log`, `llm.log`, `rerank.log`, `chat.log`, and `webui.log` when run).
-- `.omp/` — oh-my-pi config: `RULES.md`, `config.yml`, `WATCHDOG.md`.
-- `.agents/skills/` — all agent skills, discoverable by any agent harness: `pg-rag`, `pg-data`, `retrieval`, `evaluation`, `testing` (pipeline/workflow skills) + `molab-notebook` (pairing on the molab-hosted marimo chat notebook). Skills live here only — commit changes here, never re-create `.omp/skills/` copies.
-- `notebooks/molab-agentic/` — the **tool-loop-only** molab notebook (agentic): `pgrag.agentic.loop.run_loop` against a snapshot of `data/sqlite_gorgon.db` published to the private `hf://buckets/Nubula/paddock-private` by `mise upload-store` (store + manifest + `src`/`scripts` tarball). No torch in its kernel (inference is the vLLM sidecar, which the notebook launches from the extracted tarball when `:8000` is down), so no env repair / session restart / in-process fallback. PEP 723 deps: `marimo[mcp]`, `huggingface-hub`, `requests` — the kernel is Python 3.13, so the loop source must stay 3.13-parseable (no PEP 758 `except A, B:`).
-- `notebooks/molab-mirror/` — the **corpus-chat** molab notebook: single-shot lexical RAG over the public `hf://buckets/Nubula/paddock` corpus, answered by the vLLM sidecar or an in-process 4-bit model; keeps a mode switch that can also run the tool loop. Platform mechanics (sandbox lifecycle, GPU attach, torch repair, HF bucket, auto-start limits): `docs/MOLAB_OPS.md`. Pairing/protocol: the `molab-notebook` skill.
+- `data/` (gitignored) — `cdn/`, `wiki/` (+ `curated/`, `.meta.json`),
+  `derived/` (`documents_version.json`, `wiki_parsed.json`), `documents.json`,
+  `bm25_index.pkl`, `tool_documents.json`, `tool_bm25.pkl`,
+  `sqlite_gorgon.db` (+ `sqlite_state.json`), `golden/`, `agentic_tune/`,
+  `eval/`, and `retrieval_traces/` (loop traces: `PGRAG_TRACE=1` on
+  `golden_check.py`, `--trace` on `golden_rerun.py`). Service logs live at project-root
+  `logs/` (`llm.log`, `chat.log`, and `webui.log` when run). The dense path's
+  artifacts (`chroma/`, `bakeoff_*.json`, `embed_vram.json`,
+  `rerank_stats.json`, `evaluation/queries.jsonl`) were deleted with the
+  cutover — nothing reads them. `retrieval_traces/` is live (loop traces).
+- `.omp/` — oh-my-pi config: `RULES.md`, `config.yml`, `WATCHDOG.md`,
+  `hooks/pre/00-repo-lock.ts`.
+- `.agents/skills/` — all agent skills, discoverable by any agent harness:
+  `pg-rag`, `pg-data`, `retrieval`, `evaluation`, `testing` (project skills) +
+  `molab-notebook` (pairing on the molab-hosted marimo notebook). Skills live
+  here only — commit changes here, never re-create `.omp/skills/` copies.
+- `notebooks/molab-agentic/` — the **tool-loop-only** molab notebook:
+  `pgrag.agentic.loop.run_loop` against a snapshot of `data/sqlite_gorgon.db`
+  published to the private `hf://buckets/Nubula/paddock-private` by
+  `mise upload-store` (store + manifest + `src`/`scripts` tarball). No torch in
+  its kernel (inference is the vLLM sidecar, which the notebook launches from
+  the extracted tarball when `:8000` is down), so no env repair / session
+  restart / in-process fallback. PEP 723 deps: `marimo[mcp]`,
+  `huggingface-hub`, `requests` — the kernel is Python 3.13, so everything the
+  tarball ships (`src/`, `scripts/`) must stay 3.13-parseable: no PEP 758
+  `except A, B:` (valid here on ≥3.15, a SyntaxError there). Gated by
+  `tests/test_lint.py::test_shipped_source_stays_python_313_parseable` —
+  write `except (A, B):`. Platform mechanics:
+  `docs/MOLAB_OPS.md`. Pairing/protocol: the `molab-notebook` skill.
+- `docs/` — `TEST_CONTRACTS.md` (the authoritative layer→tests→contract map),
+  `REVIEW.md` (audit findings + backlog), `LLM_MODEL_WIRING.md` (per-model
+  launch flags + determinism evidence), `MOLAB_OPS.md` (molab platform
+  mechanics), `research/` (policy docs).
 
 ## Development Commands
 
-Python ≥3.14, managed with `uv`. `mise tasks` lists everything (`uv run pgrag …`).
+Python ≥3.15, managed with `uv`. `mise tasks` lists everything. The
+`mise.toml` `[tasks]` set is exactly: `test`, `sync`, `sync-full`,
+`refresh-cdn`, `refresh-wiki`, `generate-docs`, `build-bm25`,
+`build-tool-corpus`, `sync-wiki`, `sync-cdn`, `sql-store`, `upload-store`,
+`agentic-chat`, `agentic-tune`, `golden`, `golden-short`, `golden-one`,
+`golden-type`, `golden-flaky`, `golden-flaky-list`, `debug-llm`, `llm-pick`,
+`debug-webui`, `chat`, `start-all`, `stop-all`, `status`, `drift`, `logs`,
+`tail-llm`, `tail-webui`, `lint`, `fmt` — plus the `.mise/tasks/*.ps1` file
+tasks (`llm-start`/`llm-stop`, `chat-start`/`chat-stop`,
+`webui-start`/`webui-stop`, `upload-docs`, `ensure-logs-dir`).
 
 ```sh
 uv run pgrag download-wiki          # fetch wiki dumps
 uv run pgrag download-cdn           # fetch CDN json
 uv run pgrag build-documents        # regenerate documents.json (stamps version)
-uv run pgrag build-index            # embed + index into Chroma
-uv run pgrag validate              # full offline pipeline integrity check (sources, documents+freshness, wiki meta, index)
-uv run pgrag build-index --source cdn|wiki|computed|curated   # partial rebuild of one source
-mise sync-wiki / sync-cdn / sync   # build-documents + build-index in one shot (aliases syw/syc/sy)
-mise generate-docs                 # bare idempotent documents rebuild (alias docs)
-mise upload-docs                   # publish data/documents.json -> hf://buckets/Nubula/paddock (HF_TOKEN write; verifies remote size; alias up)
-mise upload-store                  # publish data/sqlite_gorgon.db -> the PRIVATE hf://buckets/Nubula/paddock-private for the molab tool loop (VACUUM INTO snapshot + manifest + src/scripts tarball; asserts privacy before upload; alias us)
-mise golden                        # golden eval (needs :8080 + :8081)
-mise golden-short                  # quick tier (~3-5 min; alias gds)
-mise golden-one -- fireball-ability   # rerun named golden case(s) fast (alias go; comma-separate ids)
-mise golden-flaky / golden-flaky-list # focus on historically-troublesome golden cases / audit stats
-mise sql-store (alias sq)        # build data/sqlite_gorgon.db: CDN + wiki + session + glogger sources for the agentic tool loop
-mise agentic-chat (alias ac)     # agentic CLI chat over the SQLite store (tool loop; needs only LLM :8080; pre-chat session+glogger store refresh runs automatically, --no-sync skips)
-mise agentic-eval (alias ae)     # agentic tool-loop eval over the golden fact set (short tier + store-only glogger cases; report data/agentic_eval_report.json)
-# tuning sweeps: uv run python scripts/agentic_tune.py --eval-set cases --sweep-temperature 0,0.2,0.4 --sweep-seeds 0,1,2
-mise chat                          # Gradio chat (primary UI; also started by `mise start` = start-all; needs embed + LLM up)
-mise lint                        # ruff check src scripts tests (alias li) — run after editing code
-mise fmt                         # ruff format + safe autofix (alias fo)
-uv run pytest                      # offline test suite
-uv run pytest tests/test_retrieval_unit.py tests/test_bm25.py tests/test_rerank*.py  # retrieval regression
-mise drift                        # check docs/skills against the repo (aliases: dr)
+mise sync / sync-full               # CDN (+wiki) → documents → BM25 → tool corpus (aliases sy/syf)
+mise sync-wiki / sync-cdn           # converge one source, then documents + BM25 (syw/syc)
+mise generate-docs                  # bare idempotent documents rebuild (alias docs)
+mise build-bm25 / build-tool-corpus # rebuild the lexical index / tool-corpus variant (b25/btc)
+mise sql-store (alias sq)           # build data/sqlite_gorgon.db: CDN + wiki + session + glogger sources
+mise agentic-chat (alias ac)        # agentic CLI chat over the store (tool loop; needs only LLM :8080; pre-chat session+glogger refresh runs automatically, --no-sync skips)
+mise golden                         # full golden eval through the loop (LLM only; LONG — batch it in the background)
+mise golden-short                   # the 8-case fast tier (alias gds)
+mise golden-one fireball-ability    # rerun named golden case(s) fast (alias go; comma-separate ids)
+mise golden-type recipe             # golden subset by type (entity|recipe|comparison|general; alias gt)
+mise golden-flaky / golden-flaky-list # focus on historically-troublesome cases / audit stats
+mise chat                           # Gradio chat (primary UI; started by `mise start`; refreshes the store first; needs only LLM up)
+mise lint                           # ruff check src scripts tests (alias li) — run after editing code
+mise fmt                            # ruff format + safe autofix (alias fo)
+uv run pytest                       # offline test suite
+mise drift                          # check docs/skills against the repo (alias dr)
 ```
 
-**Build/refresh needs no servers**; only Q&A/eval (`golden`, `chat`, `scripts/retrieval.py`) do.
+**Build/refresh needs no servers**; only Q&A/eval (`golden*`, `chat`,
+`agentic-chat`) need the LLM at :8080.
+
+**Concurrency gate.** `.omp/hooks/pre/00-repo-lock.ts` guards the destructive
+corpus commands (`build-*`, `generate-docs`, `mise sync-*`) with an atomic
+`O_EXCL` lock at `data/.omp-build.lock`, so two omp instances on this repo
+never rewrite the shared corpus at once. Never bypass it by hand-editing the
+lock; to clear a stuck lock, delete `data/.omp-build.lock`.
 
 ## Code Conventions & Common Patterns
 
-- **Python/uv**: py≥3.14, type-annotated, package-relative imports (`from pgrag.config import …`). Edit the package in `src/pgrag/`, never hand-edit build artifacts (`documents.json`, `data/derived/wiki_parsed.json`, `bm25_index.pkl`).
-- **Doc identity contract**: every doc carries `id` + `metadata.source` + `metadata.table`. Chroma `update()` merges metadata (add-only) — renames/removals require a full rebuild. Preserve these fields.
-- **Retrieval architecture is fixed**: dense + BM25 → RRF fusion (`_hybrid_fuse`, `HYBRID_MULTIPLIER`) → reranker (`bge-reranker-v2-m3` :8082, lexical fallback if down). Don't replace a component without identifying the existing implementation first; verify with the retrieval regression tests.
-- **Incremental index**: `build_index.py` computes embedding hashes to avoid re-embedding unchanged docs, batches at `EMBED_BATCH_SIZE=10000`, validates dims against `EMBEDDING_DIM`. **Never change embedding models silently** — embeddings are a fixed-dim contract with the Chroma collection.
-- **Error handling**: server clients raise domain errors (e.g. `EmbeddingServerError`, LLM/rerank errors) with the URL in the message; offline tests assert these. Server reachability is checked but servers down → graceful lexical/fallback paths.
-- **Wiki categories**: `TARGET_CATEGORIES` flat + `RECURSIVE_CATEGORIES` (Creatures d2, Items d1) — monsters/items only via recursion. Subcats bare (no `Category:` prefix). Uncategorized pages (racial-stat pages, badge hub) come from `WIKI_TITLE_EXTRAS` — category-driven discovery cannot see them. Wiki filenames `{safe_title}_<sha256-8>.txt`; display names come only from `.meta.json` (never filenames). Sync ends with `remove_orphan_files`.
-- **Test isolation**: temp dirs for anything touching `data/` (real meta/documents are guarded — a past bug silently destroyed `data/wiki/.meta.json`). `tests/conftest.py` snapshots `data/cdn`/`data/wiki` and asserts immutability. Fixture-based store tests pass `session_dir=`/`glogger_db=` pointing at absent tmp paths — the `build_store` defaults are LIVE sources (real game dir, real glogger DB), so a fixture that omits them ingests live data and races it.
-- **Store-only goldens**: golden JSONs with `"store": true` (glogger play-history facts) are excluded from the pipeline harnesses (golden_check/golden_rerun/pytest golden tiers) and run only via the agentic loop eval (`mise agentic-eval`), which appends them to the short tier.
+- **Python/uv**: py≥3.15, type-annotated, package-relative imports
+  (`from pgrag.config import …`). Edit the package in `src/pgrag/`, never
+  hand-edit build artifacts (`documents.json`, `data/derived/wiki_parsed.json`,
+  `bm25_index.pkl`, `tool_documents.json`, `tool_bm25.pkl`).
+- **Doc identity contract**: every doc carries `id` + `metadata.source` +
+  `metadata.table`. Preserve these fields — the store and the BM25 index are
+  keyed off them.
+- **One retrieval path.** The agentic tool loop is the only retrieval
+  architecture. There is no dense path, no vector store, no reranker, and no
+  query classifier to "restore"; a proposal that reintroduces one is a new
+  architecture, not a fix. Inspect `src/pgrag/agentic/tools.py` and `loop.py`
+  before proposing retrieval changes — the loop is blocking/bounded, and only
+  the model's own tool rounds re-query.
+- **Error handling**: tool errors are returned to the model as strings (data to
+  self-correct), never raised out of `execute_tool`. The LLM client
+  (`rag/llm.py`) raises domain errors with the URL in the message; offline
+  tests assert these.
+- **Wiki categories**: `TARGET_CATEGORIES` flat + `RECURSIVE_CATEGORIES`
+  (Creatures d2, Items d1) — monsters/items only via recursion. Subcats bare
+  (no `Category:` prefix). Uncategorized pages (racial-stat pages, badge hub)
+  come from `WIKI_TITLE_EXTRAS` — category-driven discovery cannot see them.
+  Wiki filenames `{safe_title}_<sha256-8>.txt`; display names come only from
+  `.meta.json` (never filenames). Sync ends with `remove_orphan_files`.
+- **Test isolation**: temp dirs for anything touching `data/` (real
+  meta/documents are guarded — a past bug silently destroyed
+  `data/wiki/.meta.json`). `tests/conftest.py` snapshots `data/cdn`/`data/wiki`
+  and asserts immutability. Fixture-based store tests pass
+  `session_dir=`/`glogger_db=` pointing at absent tmp paths — the `build_store`
+  defaults are LIVE sources (real game dir, real glogger DB), so a fixture that
+  omits them ingests live data and races it.
+- **Store-only goldens**: golden JSONs with `"store": true` (glogger
+  play-history facts) are excluded from the corpus-side goldens and run through
+  the tool loop like every other case — the loop reads the store, so there is
+  no separate store-only harness anymore.
 
 ## Important Files
 
-- `src/pgrag/cli.py` — entry point; `config.py` — constants/paths; `build.py` — document orchestration; `rag/pipeline.py` — query path (deterministic temp=0/seed=0).
-- `src/pgrag/agentic/glogger.py` — glogger play-history ingestion (WAL-safe snapshot copy → watermark-incremental mirror into the store; `DEFAULT_GLOGGER_DB` = `%APPDATA%/glogger.Release/glogger.db` is what moves if glogger relocates).
-- `scripts/pg_rag.py` — OpenWebUI pipe, `PG_ROOT = os.environ.get("PG_RAG_ROOT", r"F:\ProjectGorgon\pg-rag")` (env override, Windows default) + `os.chdir()`, adds `PG_ROOT/src` to `sys.path` — the default path is what moves if the repo relocates. Valves: `TOP_K=40`, `USE_HYBRID=True`, `USE_RERANK=True`.
-- `scripts/curator.py` + `curator_scheduler.py` — heuristic (non-LLM) curation: regex-detect fragmented knowledge (area_levels, skill_trainers, crafting_progressions), write template docs to `data/wiki/curated/`, scheduler persists state to `data/curator_state.json` and rebuilds doc/index on change. Deterministic by design — no LLM, so curated docs are stable anchors.
-- `scripts/golden_check.py` — fact-presence golden eval → `data/golden/`; `scripts/golden_rerun.py` — quick named-case rerun + flaky focus (`mise golden-one`/`golden-flaky`; appends miss history to `data/golden/history.jsonl`); `scripts/embed_eval.py` (+`bakeoff_corpus.py`; VRAM helpers in `embed_vram_probe.py`) — embedding bake-offs.
-- `docs/TEST_CONTRACTS.md` — layer→tests→contract map + regression-triage protocol (read before changing behavior/tests); `docs/REVIEW.md` — audit findings + improvement backlog.
+- `src/pgrag/cli.py` — entry point; `config.py` — constants/paths; `build.py` —
+  document orchestration.
+- `src/pgrag/agentic/glogger.py` — glogger play-history ingestion (WAL-safe
+  snapshot copy → watermark-incremental mirror into the store;
+  `DEFAULT_GLOGGER_DB` = `%APPDATA%/glogger.Personal/glogger.db` (`RELEASE_GLOGGER_DB`
+  is the fallback) is what moves if
+  glogger relocates).
+- `scripts/pg_rag.py` — legacy OpenWebUI pipe, `PG_ROOT =
+  os.environ.get("PG_RAG_ROOT", r"F:\ProjectGorgon\pg-rag")` (env override,
+  Windows default) + `os.chdir()`, adds `PG_ROOT/src` to `sys.path` — the
+  default path is what moves if the repo relocates.
+- `scripts/rag_chat.py` — Gradio chat over the tool loop (port 7860).
+- `scripts/curator.py` + `curator_scheduler.py` — heuristic (non-LLM) curation:
+  regex-detect fragmented knowledge (area_levels, skill_trainers,
+  crafting_progressions), write template docs to `data/wiki/curated/`,
+  scheduler persists state to `data/curator_state.json` and rebuilds docs on
+  change. Deterministic by design — no LLM, so curated docs are stable anchors.
+- `scripts/golden_check.py` — fact-presence golden eval through the loop →
+  `data/agentic_eval_report.json`; `scripts/golden_rerun.py` — quick named-case
+  rerun + flaky focus (`mise golden-one`/`golden-flaky`; appends miss history to
+  `data/golden/history.jsonl`); `scripts/agentic_tune.py` — tuning sweeps.
+- `scripts/build_sqlstore.py` — SQLite store build; `scripts/build_tool_corpus.py`
+  — tool-corpus variant; `scripts/publish_store.py` — private-bucket publish;
+  `scripts/agentic_chat.py` — agentic CLI chat (+ pre-chat sync).
+- `docs/TEST_CONTRACTS.md` — layer→tests→contract map + regression-triage
+  protocol (read before changing behavior/tests); `docs/REVIEW.md` — audit
+  findings + improvement backlog.
 - `scripts/check_services.py` — [OK]/[DOWN] probes for all services.
-- `mise.toml` `[env]`: `WEBUI_DIR`, `LOGS_DIR` — update if paths move.
+- `mise.toml` `[env]`: `WEBUI_DIR`, `LOGS_DIR`, `LLM_MODEL`, `LLM_FLAGS` —
+  update if paths move.
 
 ## Runtime/Tooling Preferences
 
-- **Runtime**: Python ≥3.14 via `uv`; model binaries fetched with `hf` global CLI (cache `F:\AI\models\hub\`; GGUF via `-hf org/repo:quant`).
+- **Runtime**: Python ≥3.15 via `uv`; model binaries fetched with `hf` global
+  CLI (cache `F:\AI\models\hub\`; GGUF via `-hf org/repo:quant`).
 - **Local services** (running on Windows host):
   | svc | port | model / note |
   |-----|------|--------------|
-  | Embeddings | 8081 | `EMBED_MODEL` (`[env]`) — bge-small f16, cls pooling, hard 512-token server cap (input chars clipped to `llama_embeddings.MAX_EMBED_CHARS` = 2000); needed for Q&A/eval |
-  | LLM | 8080 | `LLM_MODEL` (`[env]`; `LLM_FLAGS` carries launch tuning, e.g. `--jinja`) — RAG Q&A; a running instance OOMs before start → `mise down` (alias of `stop-all`) first |
-  | Reranker | 8082 | `RERANK_MODEL` (`[env]`) — bge-reranker cross-encoder; optional, lexical fallback |
-  | Chat (Gradio) | 7860 | primary UI — part of `mise start` (alias of `start-all`); `mise chat` foreground; history in browser localStorage |
-  | OpenWebUI | 3000 | optional (legacy) — `mise webui-start`/`webui-stop`; no longer in `start-all`/`stop-all` |
-- **Single-source models**: refs + tuning flags live once in `mise.toml [env]` (`*_MODEL`/`*_FLAGS`); consumed by `.mise/tasks/*-start.ps1` (`$env:`), `mise debug-*` (`{{ env.* }}`), `scripts/vram_sweep.py` and `scripts/embed_eval.py` (tomllib). `mise drift` fails if any consumer hardcodes a model literal.
-- `scripts/rag_chat.py` and `pg_rag.py` assume these services up.
-- Tests import the installed `pgrag` package — after changing `src/pgrag/`, no reinstall needed (editable install).
+  | LLM | 8080 | `LLM_MODEL` (`[env]`; `LLM_FLAGS` carries launch tuning) — the one hard dependency; the tool loop answers through it. A running instance OOMs before start → `mise down` (alias of `stop-all`) first |
+  | Chat (Gradio) | 7860 | primary UI — part of `mise start` (alias of `start-all`); `mise chat` foreground; loop-driven, refreshes the store at startup, needs LLM :8080 |
+  | OpenWebUI | 3000 | optional (legacy) — `mise webui-start`/`webui-stop`; not in `start-all`/`stop-all` |
+
+  Embed (:8081) and reranker (:8082) services are **retired** — start tasks
+  and env keys were deleted with the dense path.
+- **Single-source models**: refs + tuning flags live once in `mise.toml [env]`
+  (`LLM_MODEL`/`LLM_FLAGS`); consumed by `.mise/tasks/llm-start.ps1` (`$env:`),
+  `mise debug-llm` (`{{ env.LLM_MODEL }}`/`{{ env.LLM_FLAGS }}`), and
+  `scripts/check_docs.py` (tomllib). `mise drift` fails if any consumer
+  hardcodes a model literal. Tuning rationale: `docs/LLM_MODEL_WIRING.md`.
+- Tests import the installed `pgrag` package — after changing `src/pgrag/`, no
+  reinstall needed (editable install).
 
 ## Testing & QA
 
-- **Framework**: pytest via `uv run pytest`; 597 tests pass, 42 skipped (655 collected — skips are offline server-guards: golden tests), 16 slow deselected. All offline; temp-dir integration.
-- **Golden eval** (`tests/test_golden_check.py`): parametrized over `data/golden/*.json`; `require_servers` fixture skips unless LLM :8080 + embed :8081 are up; retries once (2 attempts) to damp LLM nondeterminism; both attempts fail = regression. `GENERATION = {"temperature":0,"seed":0}` is wired into every `ask()`; observed 7/8/10 single-run variance was **LLM-side** (reasoning-ON thinking trajectory is not greedy-pinned even at temp 0 + seed), not a harness miss. For a byte-reproducible comparison, launch the server with `--reasoning off` (gemma AND qwen proven reproducible); reasoning-ON production runs remain single-sample noisy. See `docs/LLM_MODEL_WIRING.md` → "Card flags & determinism".
-- **Retrieval regression set** (run when changing retrieval): `tests/test_bm25.py`, `tests/test_retrieval_unit.py`, `tests/test_rerank*.py`, `tests/test_retriever_spelling.py`. **`docs/TEST_CONTRACTS.md` is the authoritative layer→tests→contract map** — read L3 before any retrieval change: it flags shared-function facet coverage (`retrieve()` asserted across 5 files; `_hybrid_fuse` across `test_bm25.py`/`test_rerank.py`) and notes the stale-`DOCUMENTS_VERSION` refusal is directly tested in `test_build_index.py`.
-- **Test edits are contract changes.** Editing what a test *asserts* is not a workaround — state the new contract in the test, run the layer's sibling suite (`docs/TEST_CONTRACTS.md`), and never hand-edit a build artifact (`documents.json`, `bm25_index.pkl`, `wiki_parsed.json`) to satisfy a test. If the behavior didn't legitimately change, the failure is a source regression: fix the source, not the test.
-- **Lint gate** (`tests/test_lint.py`, layer L9 in `docs/TEST_CONTRACTS.md`): `uv run ruff check src scripts tests` must be clean — a failing check fails `uv run pytest`. Run `mise lint` after editing code (`mise fmt` applies the safe autofixes: import sort, unused imports, f-strings, formatting). Rules live solely in `ruff.toml`; the per-file-ignores there (scripts: broad excepts, unchecked subprocess; tests: broad catches) are deliberate. New rule ⇒ fix all findings in the same commit.
-- **Key suites** (from `tests/`): `test_documents.py` (doc shape), `test_chunking.py`, `test_health_check.py` (index integrity incl. no-SQLite-crash on large collections), `test_llm.py` (SSE streaming parse), `test_download_wiki.py` (batching, redirects, orphan cleanup — patches `META_FILE`+`WIKI_DIR` to tmp), `test_query_classifier.py`/`test_query_plan.py`, `test_bm25_persist.py`, `test_rerank_fallback.py`, `test_hashes.py`, `test_embed_validation.py`.
-- **Coverage expectation**: one test defends each observable contract; integration tests use temp dirs and mocked servers rather than live ones.
+- **Framework**: pytest via `uv run pytest`; the suite collects **399 tests**,
+  of which **76 are deselected by the default `not slow` marker** (16
+  data-heavy tests + the 60 parametrized golden cases), leaving **323** in the
+  default offline run — all offline (temp-dir integration, mocked servers). The
+  golden gate is the only suite that needs any server.
+- **Golden eval** (`tests/test_golden_check.py`): parametrized over
+  `data/golden/*.json`; the `require_servers` fixture skips unless the LLM
+  (:8080) is up — **LLM only**, nothing else. Each case runs through
+  `pgrag.agentic.eval.run_case` → `run_loop`; retries once (2 attempts) to damp
+  reasoning-ON nondeterminism; both attempts fail = regression.
+  `GENERATION = {"temperature":0,"seed":0}` is wired into every run; reasoning-ON
+  decoding is not greedy-pinned even at temp 0 + seed (observed 7/8/10
+  single-run variance was **LLM-side**, not a harness miss), so the retry-once
+  is the harness's defense. For a byte-reproducible comparison, launch the
+  server with `--reasoning off`. See `docs/LLM_MODEL_WIRING.md` → "Card flags &
+  determinism".
+- **Golden CLI**: `mise golden` (all 60 files through the loop, exit 1 on
+  missing facts), `mise golden-short` (`--tier short`, 8 cases),
+  `mise golden-one <id>` (named cases), `mise golden-type <type...>`. `--tier`,
+  `--ids`, `--type`, `--max-facts`, `--diagnose`, `--export`, `--corpus`,
+  `--max-rounds`, `--store`, `--report` are the `golden_check.py` flags.
+  Per-case cost is dominated by the reasoning model's rounds — a store-only
+  case with 1-2 rounds answers in tens of seconds, but a 5-6 round wiki case
+  takes minutes, so a full 60-case run is a long background job, not a
+  foreground watch. `--diagnose` labels a miss GEN-side (fact was in the fed
+  context, the model dropped it) vs RET-side (never retrieved) from the
+  `documents`/`trace_rounds` the loop returns.
+- **Store-only cases** still run through the same loop (`--store` points at
+  `data/sqlite_gorgon.db`); there is no separate store-only harness.
+- **No retrieval-regression set.** The L3/L4 suites (`test_retrieval_unit.py`,
+  `test_rerank*.py`, `test_retriever_spelling.py`, `test_where_filter.py`,
+  entity/query-plan tests) were deleted with the dense path. What remains for
+  retrieval is the agentic layer: `test_agentic_loop.py`,
+  `test_agentic_tools.py`, `test_bm25.py`, `test_bm25_persist.py`.
+  `docs/TEST_CONTRACTS.md` is the authoritative map — read the L-agentic and
+  BM25 layers before touching retrieval.
+- **Test edits are contract changes.** Editing what a test *asserts* is not a
+  workaround — state the new contract in the test, run the layer's sibling
+  suite (`docs/TEST_CONTRACTS.md`), and never hand-edit a build artifact
+  (`documents.json`, `bm25_index.pkl`, `tool_documents.json`,
+  `tool_bm25.pkl`, `wiki_parsed.json`) to satisfy a test. If the behavior
+  didn't legitimately change, the failure is a source regression: fix the
+  source, not the test.
+- **Lint gate** (`tests/test_lint.py`, layer L9 in `docs/TEST_CONTRACTS.md`):
+  `uv run ruff check src scripts tests` must be clean — a failing check fails
+  `uv run pytest`. Run `mise lint` after editing code (`mise fmt` applies the
+  safe autofixes: import sort, unused imports, f-strings, formatting). Rules
+  live solely in `ruff.toml`; the per-file-ignores there (scripts: broad
+  excepts, unchecked subprocess; tests: broad catches) are deliberate. New rule
+  ⇒ fix all findings in the same commit.
+- **Key suites** (from `tests/`): `test_documents.py` (doc shape),
+  `test_chunking.py`, `test_bm25.py`/`test_bm25_persist.py` (lexical index +
+  persistence), `test_llm.py`/`test_connectivity.py` (LLM client SSE + server
+  errors), `test_agentic_tools.py`/`test_agentic_loop.py` (the five tools + the
+  round protocol), `test_sqlstore_build.py`/`test_session_ingest.py`/
+  `test_glogger_ingest.py` (store ingestion), `test_golden_check.py` (the
+  golden gate), `test_download_wiki.py` (batching, redirects, orphan cleanup —
+  patches `META_FILE`+`WIKI_DIR` to tmp).
+- **Coverage expectation**: one test defends each observable contract;
+  integration tests use temp dirs and mocked servers rather than live ones.

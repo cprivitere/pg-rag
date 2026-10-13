@@ -1,10 +1,13 @@
 {
   "id": "first-aid-kit-recipe",
-  "question": "What skill do I need to make an Amazing First Aid Kit?",
+  "question": "What are the ways to make an Amazing First Aid Kit, and what skill and level does each require?",
   "type": "recipe",
   "facts": [
     ["first aid kit", "first aid"],
     ["toolcrafting"],
-    ["55"]
-  ]
+    ["55"],
+    ["combo method", "firstaid", "first aid level 40", "first aid at 40", "first aid 40"],
+    ["40"]
+  ],
+  "notes": "Two routes to item 4206 (recipes table, verified 2026-10-11): 'Amazing First Aid Kit' = Toolcrafting 55 (yields 2), 'Amazing First Aid Kit (Combo Method)' = FirstAid 40 (combines Good + Expert's kits). The question asks for both, so both skill/level pairs are required — either-answer acceptance let a correct-but-partial answer pass."
 }

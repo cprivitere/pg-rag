@@ -19,10 +19,9 @@ def main():
     print()
 
     services = [
-        ("Embedding Server (:8081)", "http://localhost:8081/health"),
         ("LLM Server (:8080)", "http://localhost:8080/health"),
-        ("Reranker Server (:8082)", "http://localhost:8082/health"),
         ("Chat (Gradio) (:7860)", "http://localhost:7860"),
+        ("OpenWebUI (:3000)", "http://localhost:3000"),
     ]
 
     for name, url in services:
@@ -34,11 +33,11 @@ def main():
     print("Commands:")
     print("  mise start      - Start all services")
     print("  mise down      - Stop all services")
-    print("  mise se        - Start embedding server only")
     print("  mise sl        - Start LLM server only")
-    print("  mise sr        - Start reranker server only")
     print("  mise sc        - Start Chat (Gradio) only")
     print("  mise xc        - Stop Chat (Gradio) only")
+    print("  mise sw        - Start OpenWebUI only")
+    print("  mise xw        - Stop OpenWebUI only")
 
 
 if __name__ == "__main__":

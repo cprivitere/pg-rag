@@ -6,7 +6,11 @@ store. No corpus chat, no in-kernel model: every question goes through
 `sql_query` / `find_entities` / `get_page` / `corpus_search` / `player_state`
 calls against the store, bounded to 6 rounds.
 
-Two things make it much smaller than `notebooks/molab-mirror`:
+This notebook is the only one left: the corpus-chat **mirror notebook was
+deleted** with the 2026-10-09 retrieval cutover (the loop replaces it, and the
+loop runs off the store bucket).
+
+What makes it small:
 
 - **The kernel never imports torch.** Inference is the vLLM sidecar's job, so
   there is no env-repair cell, no `transformers`, no 22 GB in-process fallback,
@@ -70,16 +74,13 @@ Publishing the data is explicit and separate: `mise sql-store` refreshes the
 local store, `mise upload-store` snapshots + uploads it (snapshot + manifest +
 `src`/`scripts` tarball, privacy asserted before the first byte).
 
-## Relationship to the other notebook
+## Platform mechanics
 
-- `notebooks/molab-mirror` — single-shot **corpus chat**: lexical retrieval over
-  the public corpus, answered by the sidecar *or* an in-process 4-bit model.
-  Keep it for corpus questions and for running without any sidecar.
-- `notebooks/molab-agentic` (this one) — **tool loop only**, store-backed, no
-  torch in the kernel.
-
-Both read the same public corpus bucket; only this one needs the private store
-bucket. Platform mechanics: `docs/MOLAB_OPS.md`.
+- This notebook is **tool loop only**: store-backed, no torch in the kernel.
+- It reads the private store bucket (`mise upload-store`); the public corpus
+  bucket supplies `data/documents.json`, from which the sandbox builds the tool
+  corpus.
+- Platform mechanics: `docs/MOLAB_OPS.md`.
 
 ## Local development
 

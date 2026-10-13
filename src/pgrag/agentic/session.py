@@ -39,7 +39,7 @@ _ITEMS_REPORT = "Storage"
 def _load_manifest() -> dict:
     try:
         return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-    except OSError, ValueError:
+    except (OSError, ValueError):
         return {}
 
 

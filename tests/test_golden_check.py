@@ -1,43 +1,32 @@
-"""Tests scripts.golden_check.check_golden against the golden JSON files in
-GOLDEN_DIR; requires the LLM (:8080), embedding (:8081), and reranker (:8082)
-servers and retries sampled LLM answers to damp nondeterminism.
+"""Golden fact-presence gate — every case runs through the agentic tool loop.
 
-Tiered by marker: -m short (8 representative queries, ~3-5 min) or
--m long (remaining 43, ~11-23 min). Default (no -m) runs all 51 pipeline
-files — store-only cases ("store": true in their JSON, glogger play-history
-facts) are excluded here; they run in the agentic eval (`mise agentic-eval`,
-16 cases incl. 8 short-tier ids)."""
+Parametrized over the golden JSON files in ``data/golden/``. Each case is
+answered by ``pgrag.agentic.loop.run_loop`` (SQLite store + BM25
+``corpus_search``), so the gate needs the LLM server (:8080) and nothing else
+— there is no embedding or reranker service to be up.
 
-import json
+Tiers come from ``pgrag.agentic.eval`` (the single home for tier membership,
+normalization and the reasoning-noise retry) so the pytest gate, the CLI
+harness (``scripts/golden_check.py``) and the tuning sweeps cannot drift:
+
+- ``-m short``: 8 representative cases.
+- ``-m long``: every remaining case, including the store-only play-history
+  cases — they are ordinary cases now that the loop is the only path.
+- Both tiers are also marked ``slow``, so the default offline run (``addopts =
+  -m "not slow"``) deselects them: each case is a multi-round reasoning
+  generation against a live LLM (minutes for the hard ones). Select them
+  explicitly with ``-m short`` / ``-m long``.
+"""
 
 import pytest
 
-from scripts.golden_check import GOLDEN_DIR, check_golden, normalize
+from pgrag.agentic import eval as agentic_eval
 
-_ALL_FILES = sorted(GOLDEN_DIR.glob("*.json"))
+_ALL_IDS = agentic_eval.golden_ids()
+_SHORT_IDS = agentic_eval.case_ids("short")
+_LONG_IDS = [i for i in _ALL_IDS if i not in set(_SHORT_IDS)]
 
-_SHORT_FILES = [
-    GOLDEN_DIR / "bacon-for-joeh.json",  # entity: simplest, 3 facts
-    GOLDEN_DIR / "fireball-ability.json",  # entity: variant normalization
-    GOLDEN_DIR / "moonstone-item.json",  # entity: 2 facts, quick
-    GOLDEN_DIR / "blacksmithing-leveling-25-30.json",  # entity: XP ranges
-    GOLDEN_DIR / "fireball-vs-fire-breath-damage.json",  # comparison: damage numbers
-    GOLDEN_DIR / "healing-potion-omega.json",  # recipe: crafting/effects
-    GOLDEN_DIR / "cheesemaking-leveling.json",  # entity: arithmetic, 8 facts, hardest
-    GOLDEN_DIR / "grow-field-mushrooms.json",  # general: 5 facts, medium
-    # NOTE: store-only glogger cases ("store": true in their JSON) are NOT in
-    # the pipeline tiers — they run in the agentic eval (`mise agentic-eval`),
-    # which appends them to the short tier automatically.
-]
-
-_LONG_FILES = [
-    f
-    for f in sorted(GOLDEN_DIR.glob("*.json"))
-    if f not in _SHORT_FILES and not json.loads(f.read_text(encoding="utf-8")).get("store")
-]
-# Store-only cases (top-level "store": true): facts live in the agentic SQLite
-# store (glogger play history), not in the RAG corpus — the pipeline harness
-# can never produce them. They run in the agentic eval (`mise agentic-eval`).
+normalize = agentic_eval.normalize
 
 
 def test_normalize_contractions_strip_not_space():
@@ -50,69 +39,70 @@ def test_normalize_contractions_strip_not_space():
     assert normalize("Blacksmithing: 25") == "blacksmithing 25"
 
 
-def _servers_up():
+def _llm_up():
     import requests
 
-    # :8082 too: with the reranker down, retrieval degrades to the lexical
-    # fallback and general-query wiki expansion loses the substantive page
-    # (stub-item families eat both expansion slots — the grow-field-mushrooms
-    # flake cluster). Golden runs must reflect the healthy path, not the
-    # degraded fallback; reranker stats (data/rerank_stats.json) recorded 736
-    # such fallback runs before this gate.
-    for port in (8080, 8081, 8082):
-        try:
-            requests.get(f"http://127.0.0.1:{port}/health", timeout=2)
-        except Exception:
-            return False
+    try:
+        requests.get("http://127.0.0.1:8080/health", timeout=2)
+    except Exception:
+        return False
     return True
 
 
 @pytest.fixture()
-def require_servers():
-    """Runtime skip: golden checks need the LLM (:8080), embedding (:8081),
-    and reranker (:8082) servers. Checked per-test so a server coming
-    up/down mid-run doesn't make the suite depend on collection-time state."""
-    if not _servers_up():
-        pytest.skip(
-            "V38: golden check needs LLM (:8080) + embedding (:8081) + reranker (:8082) servers"
+def require_llm():
+    """Runtime skip: the golden gate needs the LLM server (:8080). Checked
+    per-test so a server coming up/down mid-run doesn't make the suite depend
+    on collection-time state."""
+    if not _llm_up():
+        pytest.skip("golden gate needs the LLM server (:8080)")
+
+
+def _check_case(case_id: str):
+    """Answer one golden case through the tool loop and assert every fact is
+    present. The retry that damps reasoning-ON sampling noise lives in
+    ``agentic_eval.run_case``; a real regression still fails both attempts."""
+    record = agentic_eval.run_case(agentic_eval.load_case(case_id))
+    status = record["status"]
+    if status == "ERROR":
+        pytest.fail(f"LLM server error on {case_id}: {record.get('error')}")
+    if status == "XPASS":
+        pytest.fail(
+            f"xfail golden {case_id} now passes — gap closed; remove the "
+            "'xfail' flag from its golden JSON"
         )
+    assert status in ("PASS", "KNOWN-GAP"), f"missing facts: {record['missing']}"
 
 
-def _check_golden_file(path):
-    """Run check_golden against one golden file with retry logic and xfail
-    handling. Shared by both short and long tier tests."""
-    golden = json.loads(path.read_text(encoding="utf-8"))
-    # LLM answers are sampled: retry once to damp nondeterminism. A real
-    # regression still fails both attempts.
-    for _attempt in range(2):
-        _, misses, _ = check_golden(golden)
-        if not misses:
-            break
-    if golden.get("xfail"):
-        # Known corpus gap (tracked via 'xfail: true' in the golden JSON):
-        # a persistent miss is expected; the moment it clears, FAIL
-        # to force unflagging(strict-xfail parity with scripts/golden_check.py).
-        if not misses:
-            pytest.fail(
-                f"xfail golden {path.stem} now passes — gap closed; "
-                "remove the 'xfail' flag from its golden JSON"
-            )
-        return
-    assert misses == [], f"missing facts: {misses}"
+def test_run_case_reports_server_error_as_record(monkeypatch):
+    """A server failure during a golden case must surface as an ERROR record
+    carrying the message — not as an exception that kills a long batch (the
+    loop's HTTP 500 path is what produced the batch-aborting traceback)."""
+    from pgrag.rag.llm import LLMServerError
+
+    def boom(*_args, **_kwargs):
+        raise LLMServerError("LLM server at http://localhost:8080 returned HTTP 500: boom")
+
+    monkeypatch.setattr(agentic_eval, "run_loop", boom)
+    record = agentic_eval.run_case({"id": "probe", "question": "q", "facts": [["a"]]}, retry=False)
+    assert record["status"] == "ERROR"
+    assert "HTTP 500" in record["error"]
+    assert record["missing"] == []
 
 
+@pytest.mark.slow
 @pytest.mark.short
-@pytest.mark.parametrize("path", _SHORT_FILES, ids=lambda p: p.stem)
-def test_golden_facts_short(path, require_servers):
+@pytest.mark.parametrize("case_id", _SHORT_IDS)
+def test_golden_facts_short(case_id, require_llm):
     """Short golden tier: 8 representative queries covering all types
-    (entity, comparison, recipe, general). ~3-5 min. Filter: -m short."""
-    _check_golden_file(path)
+    (entity, comparison, recipe, general). Filter: -m short (needs the LLM)."""
+    _check_case(case_id)
 
 
+@pytest.mark.slow
 @pytest.mark.long
-@pytest.mark.parametrize("path", _LONG_FILES, ids=lambda p: p.stem)
-def test_golden_facts_long(path, require_servers):
-    """Long golden tier: remaining 43 queries. ~11-23 min. Filter: -m long.
-    Default (no -m) runs both tiers = all 51 pipeline files exactly once
-    (store-only cases excluded; see module docstring)."""
-    _check_golden_file(path)
+@pytest.mark.parametrize("case_id", _LONG_IDS)
+def test_golden_facts_long(case_id, require_llm):
+    """Long golden tier: every remaining case, store-only play-history cases
+    included. Filter: -m long (needs the LLM)."""
+    _check_case(case_id)

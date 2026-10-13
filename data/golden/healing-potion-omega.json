@@ -1,11 +1,15 @@
 {
   "id": "healing-potion-omega",
-  "question": "What is the Healing Potion Omega recipe?",
+  "question": "What is the Healing Potion Omega recipe — what skill and level does it need, and what are its ingredients?",
   "type": "recipe",
   "facts": [
     ["healing potion omega"],
     ["mycology"],
     ["40"],
-    ["200 health", "restore 200"]
-  ]
+    ["200 health", "restore 200"],
+    ["uncrossing oil"],
+    ["blood mushroom suspension"],
+    ["basic fish scales"]
+  ],
+  "notes": "Refactored 2026-10-11: the recipe check was incomplete — it verified name/skill/level/effect but not the ingredients every other recipe golden checks. Grounded in the recipes table (Mycology 40, yields 2, 'restore 200 Health') and its ingredients rows (item codes 1119 Uncrossing Oil, 15107 Blood Mushroom Suspension, 1004 Basic Fish Scales)."
 }

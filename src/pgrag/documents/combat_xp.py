@@ -47,7 +47,7 @@ def _sort_key(entry: tuple[str, Any]) -> tuple[float, str]:
     name, value = entry
     try:
         return (-float(value), name.lower())
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return (0.0, name.lower())
 
 

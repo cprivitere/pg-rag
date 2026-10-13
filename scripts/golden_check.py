@@ -1,61 +1,141 @@
+"""Fact-presence golden eval over the agentic tool loop.
+
+Runs golden cases from ``data/golden/*.json`` through
+``pgrag.agentic.loop.run_loop`` — the tool loop over the SQLite store plus
+BM25 ``corpus_search`` — and checks that each golden fact appears in the
+answer. Needs the LLM server (:8080) and nothing else.
+
+Usage:
+    mise golden                  # every case, exit 1 on any missing fact
+    mise golden-short            # representative fast tier + store-only cases
+    mise golden-one -- fireball-ability
+    uv run python scripts/golden_check.py --tier short --diagnose
+    uv run python scripts/golden_check.py --ids bacon-for-joeh --type entity --max-facts 3
+
+``--diagnose`` labels each miss GEN-side (fact was in the context the model
+received) or RET-side (never retrieved) using the exact text the loop fed the
+model — that is the line between "the loop must fetch better" and "the model
+must extract better".
+"""
+
 import argparse
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
-from pgrag.rag.pipeline import _fit_context, ask
-
-GOLDEN_DIR = Path("data/golden")
-TRACE_DIR = Path("data/retrieval_traces")
-
-# Deterministic generation for reproducible golden runs: temperature 0 with a
-# fixed seed makes generation best-effort repeatable (llama.cpp may still vary).
-GENERATION = {"temperature": 0, "seed": 0}
+from pgrag.agentic import eval as agentic_eval
+from pgrag.agentic.loop import DEFAULT_MAX_ROUNDS, DEFAULT_STORE
 
 
-def normalize(text):
-    """Case/punctuation-insensitive text for fact-presence matching.
-
-    Apostrophes and single quotes are DELETED (not spaced) before the general
-    punctuation mangling, so a contraction in the source or answer ("don't",
-    "don\u2019t") normalizes to the same token as a contraction-stripped golden
-    fact variant ("dont") -- the golden files author variants that way (e.g.
-    "curses dont wear off"). Other punctuation still collapses to a space
-    ("Blacksmithing: 25" -> "blacksmithing 25")."""
-    text = (text or "").lower()
-    text = re.sub(r"[\u2018\u2019\u201a\u201b`']", "", text)
-    text = re.sub(r"[^a-z0-9 ]", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+def _matches(golden: dict, args) -> bool:
+    return (args.type is None or golden.get("type") == args.type) and (
+        args.max_facts is None or len(golden["facts"]) <= args.max_facts
+    )
 
 
-def check_golden(golden, trace=None):
-    """Run one golden case. Returns (result, misses, context) where misses is a
-    list of (variants, first_variant) tuples and context is the normalized text
-    of the exact documents the LLM received."""
-    result = ask(golden["question"], generation=GENERATION, trace=trace)
-    answer = normalize(result["answer"])
-    # Mirror the pipeline's _fit_context trim so a truncated (never-sent) doc
-    # is not mislabeled GEN-side; entity dossiers are already ≤ budget, so
-    # this is a no-op there.
-    fitted = _fit_context(result.get("documents") or [])
-    context = normalize("\n\n---\n\n".join(fitted))
-    misses = []
-    for variants in golden["facts"]:
-        if not any(normalize(v) in answer for v in variants):
-            misses.append((variants, variants[0]))
-    return result, misses, context
+def _print_case(record: dict, golden: dict, diagnose: bool) -> None:
+    rounds = record["rounds"]
+    status = record["status"]
+    if status == "KNOWN-GAP":
+        print(f"[KNOWN-GAP] {record['id']} ({golden.get('type')}, {rounds} rounds)")
+    elif status == "ERROR":
+        print(f"[ERROR] {record['id']}: {record.get('error')}")
+    elif status == "XPASS":
+        print(f"[XPASS] {record['id']} — gap closed; remove the 'xfail' flag")
+    else:
+        print(f"[{status}] {record['id']} ({golden.get('type')}, {rounds} rounds)")
+    if not record["missing"]:
+        return
+    context = agentic_eval.normalize("\n\n---\n\n".join(record.get("documents") or []))
+    for fact in record["missing"]:
+        if not diagnose:
+            print(f"    MISSING: {fact}")
+            continue
+        variants = next(v for v in golden["facts"] if v[0] == fact)
+        in_ctx = any(agentic_eval.normalize(v) in context for v in variants)
+        tag = (
+            "GEN-SIDE (fact in context but not extracted)"
+            if in_ctx
+            else "RET-SIDE (fact not in retrieved context)"
+        )
+        print(f"    MISSING: {fact}  [{tag}]")
 
 
-def main():
+def _write_traces(report: dict) -> None:
+    trace_dir = Path("data/retrieval_traces")
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    for record in report["cases"]:
+        try:
+            (trace_dir / f"{record['id']}.json").write_text(
+                json.dumps(
+                    {
+                        "rounds": record["rounds"],
+                        "trace_rounds": record.get("trace_rounds") or [],
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            print(f"    (trace write failed for {record['id']}: {exc})")
+
+
+def _write_export(report: dict, goldens: dict, path: str) -> None:
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as fh:
+        for record in report["cases"]:
+            golden = goldens[record["id"]]
+            fh.write(
+                json.dumps(
+                    {
+                        "id": record["id"],
+                        "question": golden["question"],
+                        "type": golden.get("type"),
+                        "xfail": bool(golden.get("xfail")),
+                        "context": record.get("documents") or [],
+                        "facts": golden["facts"],
+                        "local_misses": record["missing"],
+                        "local_answer": record["answer"],
+                        "trace_rounds": record.get("trace_rounds") or [],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    print(f"EXPORTED {len(report['cases'])} cases -> {out}")
+
+
+def main() -> None:
     parser = argparse.ArgumentParser(description="Run the fact-presence golden eval.")
+    parser.add_argument(
+        "--tier",
+        choices=["short", "all"],
+        default="all",
+        help="short = representative fast tier + store-only cases; all = every golden",
+    )
+    parser.add_argument(
+        "--ids",
+        default=None,
+        help="comma-separated golden ids (overrides the tier selection)",
+    )
+    parser.add_argument(
+        "--corpus",
+        choices=["full", "tool"],
+        default="full",
+        help="corpus_search document store: generated corpus (full) or tool variant",
+    )
+    parser.add_argument(
+        "--max-rounds", type=int, default=DEFAULT_MAX_ROUNDS, help="tool rounds per case"
+    )
+    parser.add_argument("--store", default=DEFAULT_STORE, help="SQLite store path")
     parser.add_argument(
         "--diagnose",
         action="store_true",
-        help="for each FAIL, report whether the missing fact is present in the "
-        "retrieved context (GEN-side extraction gap) or absent (RET-side "
-        "retrieval gap), using the exact context the LLM received.",
+        help="for each FAIL, report whether the missing fact was in the context the "
+        "model received (GEN-side) or never retrieved (RET-side)",
     )
     parser.add_argument(
         "--export",
@@ -63,16 +143,15 @@ def main():
         const="data/golden/golden_context_bundle.jsonl",
         default=None,
         metavar="PATH",
-        help="also write, per case, the exact fitted context the LLM received "
-        "(post-gap-fill/synthesis) plus question/query_type/facts/local answer "
-        "to a JSONL bundle for oracle replay on a stronger reader. Bare "
-        "--export writes data/golden/golden_context_bundle.jsonl.",
+        help="also write, per case, the exact context the model received plus "
+        "question/type/facts/local answer to a JSONL bundle for oracle replay "
+        "on a stronger reader. Bare --export writes "
+        "data/golden/golden_context_bundle.jsonl.",
     )
     parser.add_argument(
         "--type",
         choices=["entity", "recipe", "comparison", "general"],
-        help="run only goldens whose JSON `type` matches (repeatable "
-        "selections are not supported here; use one value)",
+        help="run only goldens whose JSON `type` matches",
     )
     parser.add_argument(
         "--max-facts",
@@ -81,98 +160,45 @@ def main():
         metavar="N",
         help="run only goldens with <= N fact groups (weight cap)",
     )
+    parser.add_argument(
+        "--report",
+        default=str(agentic_eval.REPORT_PATH),
+        help="where to write the JSON report (default data/agentic_eval_report.json)",
+    )
     args = parser.parse_args()
 
-    def _matches(golden):
-        return (args.type is None or golden.get("type") == args.type) and (
-            args.max_facts is None or len(golden["facts"]) <= args.max_facts
-        )
-
-    total_miss = 0
-    export_records = []
-    capture_trace = os.environ.get("PGRAG_TRACE") == "1"
-    total_xpass = 0
-    ran_any = False
-    for path in sorted(GOLDEN_DIR.glob("*.json")):
-        golden = json.loads(path.read_text(encoding="utf-8"))
-        if golden.get("store"):
-            # Store-only case: facts live in the agentic SQLite store, not the
-            # RAG corpus — pipeline.ask can never produce them. Runs via
-            # `mise agentic-eval` instead.
-            continue
-        if not _matches(golden):
-            continue
-        ran_any = True
-        trace = {} if capture_trace else None
-        result, misses, context = check_golden(golden, trace=trace)
-        if args.export:
-            export_records.append(
-                {
-                    "id": golden["id"],
-                    "question": golden["question"],
-                    "type": golden.get("type"),
-                    "query_type": result.get("query_type"),
-                    "xfail": bool(golden.get("xfail")),
-                    "fitted_docs": _fit_context(result.get("documents") or []),
-                    "facts": golden["facts"],
-                    "local_misses": [first for _variants, first in misses],
-                    "local_answer": result.get("answer"),
-                }
-            )
-        if capture_trace:
-            TRACE_DIR.mkdir(parents=True, exist_ok=True)
-            try:
-                trace_path = TRACE_DIR / f"{golden['id']}.json"
-                trace_path.write_text(
-                    json.dumps(trace, indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-            except OSError as exc:
-                print(f"    (trace write failed: {exc})")
-        if golden.get("xfail"):
-            if misses:
-                print(f"[KNOWN-GAP] {golden['id']} ({golden['type']}, {result['query_type']})")
-                continue
-            print(f"[XPASS] {golden['id']} — gap closed; remove the 'xfail' flag")
-            total_xpass += 1
-            continue
-        status = "PASS" if not misses else "FAIL"
-        print(f"[{status}] {golden['id']} ({golden['type']}, {result['query_type']})")
-        for variants, first in misses:
-            if args.diagnose:
-                in_ctx = any(normalize(v) in context for v in variants)
-                tag = (
-                    "GEN-SIDE (fact in context but not extracted)"
-                    if in_ctx
-                    else "RET-SIDE (fact not in retrieved context)"
-                )
-                print(f"    MISSING: {first}  [{tag}]")
-            else:
-                print(f"    MISSING: {first}")
-        total_miss += len(misses)
-
-    if not ran_any:
-        filters = [
-            f"--type {args.type}" if args.type else None,
-            f"--max-facts {args.max_facts}" if args.max_facts is not None else None,
-        ]
-        print("no goldens match " + " ".join(f for f in filters if f))
+    ids = agentic_eval.case_ids(args.tier, args.ids)
+    goldens = {i: agentic_eval.load_case(i) for i in ids}
+    goldens = {i: g for i, g in goldens.items() if _matches(g, args)}
+    if not goldens:
+        print("no goldens match the filter")
         return
 
+    report = agentic_eval.run_eval(
+        list(goldens),
+        tier=args.tier,
+        corpus=args.corpus,
+        max_rounds=args.max_rounds,
+        store=args.store,
+        on_case=lambda record: _print_case(record, goldens[record["id"]], args.diagnose),
+    )
+    report_path = agentic_eval.write_report(report, Path(args.report))
+    if os.environ.get("PGRAG_TRACE") == "1":
+        _write_traces(report)
     if args.export:
-        out = Path(args.export)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        with out.open("w", encoding="utf-8") as fh:
-            for rec in export_records:
-                fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        print(f"EXPORTED {len(export_records)} cases -> {out}")
+        _write_export(report, goldens, args.export)
 
     print()
-    if total_miss or total_xpass:
-        if total_miss:
-            print(f"FAIL: {total_miss} fact(s) missing")
+    print(f"{len(report['cases'])} case(s), {report['elapsed_s']:.0f}s, report -> {report_path}")
+    if report["errors"]:
+        print(f"FAIL: {report['errors']} case(s) hit an LLM server error")
+    total_xpass = report["xpass"]
+    if report["facts_missing"] or total_xpass:
+        if report["facts_missing"]:
+            print(f"FAIL: {report['facts_missing']} fact(s) missing")
         if total_xpass:
             print(f"FAIL: {total_xpass} known-gap probe(s) now pass — remove 'xfail' flag(s)")
+    if report["facts_missing"] or total_xpass or report["errors"]:
         sys.exit(1)
     print("OK: all golden facts present")
 

@@ -11,9 +11,11 @@ Round protocol (both mechanisms wired, deterministic order):
 4. Else the content is the final answer -> return.
 
 Transport is this module's own requests.post to the llama.cpp
-OpenAI-compatible endpoint at :8080 (pgrag.rag.llm stays single-message and
-untouched). Return shape mirrors pipeline.ask() so eval tooling treats both
-uniformly.
+OpenAI-compatible endpoint at :8080 (pgrag.rag.llm keeps the shared
+LLMServerError type and stays single-message). The return dict carries the
+answer plus what the model actually saw — ``documents`` (seed + every tool
+result sent) and ``sources`` (one entry per tool round) — and the per-round
+``trace_rounds``, so the eval harness, chat UIs and sweeps share one shape.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ import time
 import requests
 
 from pgrag.agentic.tools import DEFAULT_STORE, execute_tool
+from pgrag.rag.llm import LLMServerError
 
 LLM_URL = "http://localhost:8080/v1/chat/completions"
 
@@ -112,6 +115,8 @@ Rules:
 - Figure out what the user is really asking, even when the question is informal, and assemble the answer from the context — the exact answer need not be stated word-for-word in the documents.
 - Reason from the context: connect information across documents, compare and rank options, and draw conclusions that follow from the stated facts. Planning a path or choosing the most efficient option from stated values is expected and helpful.
 - Include relevant names, skills, levels, ingredients, and quantities when available.
+- State the concrete findings — item/NPC names, amounts, locations, numbers — that answer the question. Never answer with a pointer to a page you consulted ("see her page", "check the wiki"): the user cannot follow it, and the fact is already in the tool results.
+- Before answering, check your draft against every part of the question: if a part is still unanswered and a tool could find it, call another tool instead of answering.
 - If the user asks about recipes, include the recipe name, ingredients with quantities, required skill level, and the recipe's description text (e.g. dose counts, effects, results).
 - If multiple answers exist, list them.
 - If the context contains PARTIAL information for the question, answer with exactly what is present and explicitly state what is missing — do not refuse the whole question because one detail is absent.
@@ -170,6 +175,18 @@ Notes:
   Organs || … (level=15, grow time=5 hours, low substrate=Bone, high
   substrate=Organs). Skill prerequisites also appear as 'requires [[X]] 60
   to learn' lines in the overview.
+- Trainer prices (unlock cost in councils or Statehelm Renown, favor tier,
+  level band) live on the TRAINER NPC's wiki page, in its Training table —
+  e.g. 'Unlock: Lycanthropy: Unlock Lycanthropy Prodigy Potential - skill
+  level 100 - cost 126 SR or 252,000'. There is no '<Skill> Training' page
+  title: search/get_page the NPC name ('Jenny Foster', 'Burl', 'Sanja'), not
+  the skill, and quote the cost line verbatim.
+- Access gates are QUESTS: for 'how do I get into X / what does the guard
+  want / how do I reach Y' search corpus_search with the gate's own nouns
+  (e.g. 'rat guarding a door museum cheese' → quest 'Tethertooth's Museum',
+  objective 'Obtain Cambozola Cheese'). An ability line like Tame Rat's
+  'Requires a piece of cheese' is a pet-taming reagent, NOT a door key —
+  check the quests corpus before answering.
 - abilities.raw is JSON; base PvE damage per ability is
   json_extract(raw, '$.PvE.Damage') (e.g. Fireball 14, Fire Breath 80).
   Use it for damage comparisons instead of guessing from descriptions.
@@ -193,6 +210,29 @@ Notes:
   cheap. Avoid unfiltered GROUP BY/DISTINCT over all 3.5M rows (operation
   budget). The player character name is usually like the in-game name
   (case-sensitive; check DISTINCT speaker first with LIMIT).
+- Chat price mentions: other players' social lines sometimes quote prices
+  ('WTB abrasive sand 500 each pst', 'Selling Great Phlog 95C each and Phase
+  Duractor 2k each'). For a price question, after the stall ledger, ATTEMPT a
+  chat scan: channel IN ('Trade','Global','Nearby','Help','Tell','Guild',
+  'Party') AND text LIKE '%<item name>%', then keep only rows whose text
+  carries a price token (a number with a unit — c/k/g/gold/each/per/ppu — or
+  an '@<number>' ask); most hits merely name the item ('Anyone need
+  fulgurite?', item-link rows in channel='item', combat spam). Quote each hit
+  as a dated mention by another player — asking/wanting prices, never
+  realized sales and never your own price. player_state
+  section=stall (query=<item>) already appends this block when it finds any;
+  an item with chat mentions but no stall rows is no longer a dead end.
+- Work-order economics: many items are a work-order turn-in (repeatable
+  Collect quest; its 'Work Order for X' scroll is Industry-gated) paying a
+  FIXED council amount — payout ÷ required count is the item's guaranteed
+  per-unit floor, which neither items.value nor a stall/chat price shows.
+  SQL: SELECT q.name, json_extract(o.value,'$.Number'), q.rewards FROM
+  quests q, json_each(q.objectives) o WHERE json_extract(o.value,'$.Type')
+  = 'Collect' AND json_extract(o.value,'$.ItemName') = <items.internal_name>
+  AND q.rewards LIKE '%WorkOrderCurrency%'; the Industry gate is on the items
+  row named 'Work Order for X'. player_state section=stall (query=<item>)
+  prints this block when it applies — most items have no work order, which is
+  not a dead end and must not be reported as one.
 - Item sources: the sources table maps item_key to acquisition/usage info
   (entries JSON: npc/questId/type). To turn a barter/quest source into a
   readable name: SELECT json_extract(entries,'$.npc') FROM sources WHERE
@@ -236,12 +276,13 @@ Notes:
     payout pickups (price_total); 'configured' sets a price; 'hire_stall'
     rows are stall-keeper hire fees (price_total = fee paid, item NULL);
     'visitor_note' rows have player = the visitor who left a note.
-    The ONLY price history in the store: price-trend/market-price/pricing
-    questions (what items sell for, what's it worth) route here first
-    (item_transactions and wiki pages carry no prices). This is YOUR OWN
-    stall — no other players' stalls exist in the store, so stall prices
-    reflect your own listings/sales, never a market sample. Report each
-    sale's price separately (never average them). Or use
+    The only REALIZED price history in the store: price-trend/market-price/
+    pricing questions (what items sell for, what's it worth) route here first
+    (item_transactions and wiki pages carry no prices). Chat mentions (see the
+    chat_events note above) are asking prices by other players, not sales.
+    This is YOUR OWN stall — no other players' stalls exist in the store, so
+    stall prices reflect your own listings/sales, never a market sample.
+    Report each sale's price separately (never average them). Or use
     player_state section=stall (query=item name) for the pre-digested
     sale list (it also prints the item's CDN base value).
     When an asked item has NO stall rows at all, do not dead-end at "no
@@ -306,17 +347,22 @@ Tools (call to gather more data; up to {max_rounds} rounds):
 2. find_entities(query, type=None) - FTS5 over entity names (type one of
    item, recipe, ability, quest, npc, effect, skill). Up to 20 hits.
 3. get_page(title) - full wiki page text by exact title (LIKE fallback lists
-   candidates). Best for skill/mechanic prose.
-4. corpus_search(query, k=10) - BM25 over the generated corpus.
+   candidates). Best for skill/mechanic prose and for trainer unlock costs
+   (a trainer NPC's Training table).
+4. corpus_search(query, k=10) - BM25 over the generated corpus (includes
+   quest docs, which carry access-gate/required-item facts).
 5. player_state(character=None, section="summary", query=None, skill=None) - live
    session data. section: summary, skills, currencies, quests, favor, items,
    stall, abilities. abilities REQUIRES skill=<skill name> (e.g. "Animal Handling")
    and diffs the character sheet's known-ability list against the CDN family —
    use it for 'which abilities/skills do I know' questions. stall lists your
-   own shop's sales (query=item name filters) — the only price history in the
-   store; each sale is listed individually with buyer and per-unit price,
+   own shop's sales (query=item name filters) — the only realized price history
+   in the store; each sale is listed individually with buyer and per-unit price,
    plus the item's CDN base value (with an asking-price fallback when the item
-   has no stall rows).
+   has no stall rows), plus any chat_events lines where other players quote a
+   price for the item (labeled as mentions, not sales), plus the item's
+   work-order turn-in payout when one exists (fixed councils ÷ required count =
+   the guaranteed per-unit floor).
 
 How to call tools:
 - Preferred: emit a native tool call (the API's tools parameter).
@@ -477,11 +523,13 @@ def _post(
         raise LLMServerError(f"Cannot connect to LLM server at {url}.") from exc
     except requests.exceptions.Timeout as exc:
         raise LLMServerError(f"LLM server at {url} timed out after {_TIMEOUT}s.") from exc
+    except requests.exceptions.HTTPError as exc:
+        # llama.cpp reports context overflow / template failures as HTTP 500
+        # with a short body; surface status + body instead of a bare HTTPError.
+        status = exc.response.status_code if exc.response is not None else "?"
+        body = " ".join(((exc.response.text if exc.response is not None else "") or "").split())
+        raise LLMServerError(f"LLM server at {url} returned HTTP {status}: {body[:200]}") from exc
     return response.json()
-
-
-class LLMServerError(ConnectionError):
-    pass
 
 
 def _cap(text: str) -> str:
@@ -547,6 +595,32 @@ def _parse_tool_blocks(content: str) -> list[dict]:
     return calls
 
 
+def _args_preview(args: dict) -> str:
+    """Short human-readable summary of a tool call for traces and citations."""
+    for key in ("query", "title", "name", "id", "sql"):
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            flat = " ".join(value.split())
+            return flat[:100]
+    try:
+        return json.dumps(args, sort_keys=True, default=str)[:100]
+    except (TypeError, ValueError):
+        return ""
+
+
+def _sources(trace_rounds: list) -> list[dict]:
+    """Citation-ish view of the tool rounds (the loop has no document hits)."""
+    return [
+        {
+            "citation": f"{t['tool']}: {t['args_preview']}" if t.get("args_preview") else t["tool"],
+            "tool": t["tool"],
+            "rows_or_len": t["rows_or_len"],
+            "ms": t["ms"],
+        }
+        for t in trace_rounds
+    ]
+
+
 def _execute(calls: list[dict], store_path: str, corpus: str, trace_rounds: list) -> list[str]:
     results = []
     for call in calls:
@@ -565,6 +639,7 @@ def _execute(calls: list[dict], store_path: str, corpus: str, trace_rounds: list
             trace_rounds.append(
                 {
                     "tool": name,
+                    "args_preview": _args_preview(args),
                     "args_hash": hashlib.md5(
                         json.dumps(args, sort_keys=True, default=str).encode()
                     ).hexdigest()[:8],
@@ -581,7 +656,6 @@ def run_loop(
     history: list[dict] | None = None,
     corpus: str = "full",
     max_rounds: int = DEFAULT_MAX_ROUNDS,
-    trace: dict | None = None,
     generation: dict | None = None,
     store_path: str = DEFAULT_STORE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -590,6 +664,10 @@ def run_loop(
     generation = dict(DEFAULT_GENERATION if generation is None else generation)
     trace_rounds: list = []
     seed = execute_tool(store_path, "corpus_search", {"query": question, "k": 12}, corpus=corpus)
+    # Everything the model is fed, in order: the BM25 seed then every tool
+    # result. Returned as `documents` so the harness can tell a retrieval gap
+    # (fact never fetched) from a generation gap (fact fetched, not used).
+    gathered: list[str] = [seed]
     system = (
         f"{_SYSTEM_TEMPLATE}\n{_SCHEMA_SUMMARY}\n"
         f"{_TOOL_CONTRACT.format(max_rounds=max_rounds)}\n\n"
@@ -602,27 +680,51 @@ def run_loop(
 
     rounds_used = 0
     budget_line = "Tool budget exhausted - answer now from data already gathered."
+    # Native `tools=` goes through the server's own tool-call parser, which
+    # 500s the whole request when the model emits malformed call JSON
+    # ("Failed to parse tool call arguments as JSON"). Once that happens, drop
+    # to the fenced ```tool text protocol for the rest of the run instead of
+    # paying another wasted generation per round.
+    native_tools_ok = True
     while True:
-        tools = _tools_api() if rounds_used < max_rounds else None
-        if tools is None and budget_line:
+        allow_tools = rounds_used < max_rounds
+        tools = _tools_api() if (allow_tools and native_tools_ok) else None
+        if not allow_tools and budget_line:
             # The forced final turn must know why it can't call tools.
             # Sent as a user-role message: several chat templates (qwen
             # MoE family) reject a system message after the first turn
             # ("System message must be at the beginning").
             messages.append({"role": "user", "content": f"(system) {budget_line}"})
             budget_line = None
-        data = _post(messages, tools, generation, max_tokens)
-        message = data["choices"][0]["message"]
-        # Empty-content guard: a reasoning model can spend its whole
-        # generation budget on `reasoning_content` and return empty `content`
-        # (finish_reason="length"). _still_wants_tools already treats an
-        # empty message as "wants tools" — on the forced-final turn that
-        # routes into the digest fallback; on mid-loop turns it would
+        try:
+            data = _post(messages, tools, generation, max_tokens)
+        except LLMServerError as exc:
+            if not (tools and "Failed to parse tool call arguments" in str(exc)):
+                raise
+            native_tools_ok = False
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "(system) Your last tool call was malformed JSON and the "
+                    "server rejected it. Re-issue it as a fenced ```tool block whose "
+                    "JSON is valid, or answer from what you already have.",
+                }
+            )
+            data = _post(messages, None, generation, max_tokens)
+        choice = data["choices"][0]
+        message = choice["message"]
+        # Empty-or-truncated guard: a reasoning model can spend its whole
+        # generation budget on `reasoning_content` and return empty `content`,
+        # or get cut off mid-answer (`finish_reason="length"`), which silently
+        # drops every fact after the cut. _still_wants_tools already treats an
+        # empty message as "wants tools"; on mid-loop turns either case would
         # otherwise be returned verbatim as the final answer, so re-ask once
-        # with the digest framing instead. No loop risk: this branch only
-        # fires when the message has neither content nor tool_calls to
-        # execute, so it always returns.
-        if not (message.get("content") or "").strip() and not message.get("tool_calls"):
+        # with the digest framing and double the budget instead. No loop risk:
+        # this branch only fires when there is no tool call to execute, so it
+        # always returns.
+        if (
+            not (message.get("content") or "").strip() or choice.get("finish_reason") == "length"
+        ) and not message.get("tool_calls"):
             digest = _gathered_digest(trace_rounds, messages)
             data = _post(
                 [
@@ -656,10 +758,10 @@ def run_loop(
             message = {"role": "assistant", "content": stripped}
             return {
                 "answer": stripped,
-                "documents": [],
+                "documents": list(gathered),
                 "query_type": "agentic",
                 "rerank_used": False,
-                "sources": [],
+                "sources": _sources(trace_rounds),
                 "rounds": rounds_used,
                 "trace_rounds": trace_rounds,
             }
@@ -686,16 +788,17 @@ def run_loop(
             content = message.get("content") or ""
             return {
                 "answer": content,
-                "documents": [],
+                "documents": list(gathered),
                 "query_type": "agentic",
                 "rerank_used": False,
-                "sources": [],
+                "sources": _sources(trace_rounds),
                 "rounds": rounds_used,
                 "trace_rounds": trace_rounds,
             }
 
         rounds_used += 1
         results = _execute(calls, store_path, corpus, trace_rounds)
+        gathered.extend(results)
         used_native = any(cid is not None for cid in native_ids)
         if used_native:
             messages.append(

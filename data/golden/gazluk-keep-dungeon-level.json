@@ -1,10 +1,17 @@
 {
   "id": "gazluk-keep-dungeon-level",
-  "question": "What level should I be for Gazluk Keep?",
+  "question": "What level should I be for Gazluk Keep, and how many players should I bring?",
   "type": "general",
   "facts": [
     [
       "Gazluk Keep"
+    ],
+    [
+      "level 70",
+      "70 combat",
+      "65-75",
+      "level 65 to 75",
+      "level 65-75"
     ],
     [
       "5 players",
@@ -14,5 +21,6 @@
       "five to six players",
       "group of five"
     ]
-  ]
+  ],
+  "notes": "Refactored 2026-10-11: the question asked only for a level while the facts checked group size — and checked NO level, so it passed on two generic strings. Grounded: quest_quest_45041_chunk_0 'Gazluk Keep is a dungeon for a group of 5 players with level 70 combat skills'; wiki_Dev Notes, February 17, 2017_chunk_0 'intended for groups of five or six level 65-75 players'. Both dimensions are now asked and checked."
 }

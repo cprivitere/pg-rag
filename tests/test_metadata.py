@@ -1,19 +1,13 @@
-"""Metadata enrichment (Step 1 of metadata-bm25-eval) + Chroma-safe invariants.
+"""Metadata enrichment + document-identity invariants.
 
-Locks the suite invariants from the plan:
+Locks the suite invariants:
 
-1. Metadata is add-only — Chroma `update()` merges metadatas, never replaces,
-   so renamed/removed keys leave stale values behind (full rebuild required).
+1. Metadata is add-only across document-shape changes — an existing doc id may
+   gain keys but never lose them, so renamed/removed keys need a full rebuild.
 2. Metadata is scalar-only — every builder emits only str/int/float/bool/None;
-   multi-value fields are `" | ".join`-delimited (Chroma cannot filter lists).
-3. Text <-> embedding hash independent of metadata — enriched metadata never
-   re-embeds (embedding_hash ignores metadata).
-4. Metadata-only build-index pass routes through `collection.update`, never
-   `upsert` (no re-embedding of ~135k docs).
+   multi-value fields are `" | ".join`-delimited (the identity contract needs
+   filterable scalars).
 """
-
-import contextlib
-import tempfile
 
 from pgrag.documents.builder import (
     build_ability_documents,
@@ -23,8 +17,6 @@ from pgrag.documents.builder import (
     build_skill_documents,
 )
 from pgrag.documents.wiki_builder import build_wiki_documents
-from pgrag.vectorstore.build_index import build_index
-from pgrag.vectorstore.hashes import embedding_hash, metadata_hash
 
 
 class FakeDB:
@@ -347,103 +339,3 @@ def test_all_builders_emit_scalar_metadata_only():
             assert isinstance(value, scalar), (
                 f"non-scalar metadata {doc['id']}.{key}: {type(value).__name__}"
             )
-
-
-def test_embedding_hash_independent_of_metadata():
-    base = {"id": "x", "text": "hello"}
-    lean = dict(base, metadata={"source": "cdn"})
-    rich = dict(
-        base,
-        metadata={
-            "source": "cdn",
-            "skill": "Alchemy",
-            "skill_level_req": 25,
-            "ingredients": "Spider Silk | Toadstool Cap",
-        },
-    )
-    assert embedding_hash(lean) == embedding_hash(rich)
-    assert metadata_hash(lean) != metadata_hash(rich)
-
-
-def test_metadata_only_change_routes_to_update_not_upsert(monkeypatch):
-    from unittest.mock import MagicMock
-
-    old_meta = {"source": "cdn", "table": "recipes"}
-    new_meta = dict(old_meta, skill="Alchemy", skill_level_req=25)
-    old = {"id": "recipe_1", "type": "recipe", "text": "text", "metadata": old_meta}
-    new = {"id": "recipe_1", "type": "recipe", "text": "text", "metadata": new_meta}
-
-    collection = MagicMock()
-    # _get_existing_dim → one row with embedding; then hash scan batch.
-    collection.get.side_effect = [
-        {"ids": ["recipe_1"], "embeddings": [[0.1] * 384]},
-        {
-            "ids": ["recipe_1"],
-            "metadatas": [
-                dict(
-                    old_meta,
-                    type="recipe",
-                    embedding_hash=embedding_hash(old),
-                    metadata_hash=metadata_hash(old),
-                )
-            ],
-        },
-    ]
-    collection.count.return_value = 1
-
-    class FakeClient:
-        def __init__(self, **kwargs):
-            pass
-
-        def get_or_create_collection(self, name=None, **kwargs):
-            return collection
-
-    monkeypatch.setattr(
-        "pgrag.vectorstore.build_index.chromadb.PersistentClient",
-        FakeClient,
-    )
-
-    build_index(documents=[new])
-
-    assert collection.upsert.call_count == 0, "metadata-only change must not re-embed"
-    assert collection.update.call_count == 1
-    updated_meta = collection.update.call_args.kwargs["metadatas"][0]
-    assert updated_meta["skill"] == "Alchemy"
-    assert updated_meta["skill_level_req"] == 25
-
-
-def test_chroma_update_merges_metadata_add_only():
-    """Chromadb `update()` merges metadatas — removed keys linger forever.
-
-    This is why metadata is add-only: enriching is safe, but renaming/removing
-    a key requires a full rebuild.
-    """
-    import gc
-    import shutil
-
-    import chromadb
-
-    tmp = tempfile.mkdtemp(prefix="pgrag-chroma-")
-    try:
-        client = chromadb.PersistentClient(path=tmp)
-        col = client.get_or_create_collection("probe")
-        col.upsert(
-            ids=["doc_1"],
-            embeddings=[[0.1, 0.2, 0.3, 0.4]],
-            documents=["hello"],
-            metadatas={"source": "cdn", "table": "items", "value": 9},
-        )
-        col.update(
-            ids=["doc_1"],
-            metadatas={"skill": "Alchemy"},  # intentionally drops old keys
-        )
-        meta = col.get(ids=["doc_1"], include=["metadatas"])["metadatas"][0]
-        assert meta["skill"] == "Alchemy"
-        assert meta["source"] == "cdn", "update() must merge: stale keys persist"
-    finally:
-        # Windows: chroma holds mmaps on the data dir; release before rmtree.
-        with contextlib.suppress(Exception):
-            client._system.stop()
-        del client
-        gc.collect()
-        shutil.rmtree(tmp, ignore_errors=True)

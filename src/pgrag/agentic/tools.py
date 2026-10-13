@@ -41,7 +41,13 @@ _SQL_ERROR_PREFIX = "SQL error: "
 # find_entities / get_page / corpus_search caps (plan).
 _ENTITIES_MAX = 20
 _PAGE_CAP = 20_000
-_SEARCH_SNIPPET = 400
+# Per-hit text shown by corpus_search. 400 cut every hit before its tail, and a
+# corpus doc has no other reader (get_page serves wiki titles only), so anything
+# past the cut was unreachable: skillprofile_Pooping_chunk_0 (871 chars) hides
+# `Requires Beast` at 788 and the gourmand food-quality note at 451,
+# skillprofile_Gardening_chunk_4 (1089) hides the trainers at 703-830. 10 hits x
+# 1000 + prefixes ≈ 10.6K stays inside the loop's 12000-char tool-result cap.
+_SEARCH_SNIPPET = 1000
 _ENTITY_SNIPPET = 120
 
 
@@ -178,22 +184,22 @@ def _find_entities(store_path: str, args: dict) -> str:
 
 def _strip_wiki_markup(text: str, title: str = "") -> str:
     """Wiki dump to readable text: strip HTML tags, emphasis runs, and the
-    loud MediaWiki template/heading noise (wrapped template payloads survive;
-    leftover infobox bodies drop wholesale). ``title`` resolves the
-    {{msg:BASEPAGENAME}} magic word to the page's own name (headings like
-    "Training {{msg:BASEPAGENAME}}" otherwise render the literal string)."""
+    loud MediaWiki template/heading noise. Infobox-style templates keep their
+    ``key = value`` params (location/level facts live there); single-value
+    templates (``{{Quote|...}}``, ``{{Item|...}}``) keep their payload.
+    ``title`` resolves the {{msg:BASEPAGENAME}} magic word to the page's own
+    name (headings like "Training {{msg:BASEPAGENAME}}" otherwise render the
+    literal string)."""
     if title:
         text = re.sub(r"\{\{msg:BASEPAGENAME\}\}", title, text)
     text = re.sub(r"<[^>\n]+>", "", text)
     text = re.sub(r"'{2,5}", "", text)
-    # {{Quote|source=X|...}} and {{Item|Y}} keep their payload, drop the wrapper.
-    text = re.sub(
-        r"\{\{[^{}|]*\|([^{}]*)\}\}",
-        lambda m: m.group(1).split("|")[-1].strip(),
-        text,
-    )
     text = re.sub(r"\{\{msg:([^{}|]*)\}\}", r"\1", text)
-    # Remaining bare templates (infoboxes etc.) -> drop wholesale.
+    # Templates, innermost first. An infobox-style template (2+ `key = value`
+    # params) keeps its params: the old "keep the last payload field" rule kept
+    # only `lootlevel = 80` and dropped `locations = Povus rocky hillsides`
+    # from the MOB infobox, losing every location fact on a page fetch. Single
+    # value templates ({{Quote|source=X|text}}, {{Item|Y}}) keep the last field.
     while "{{" in text:
         start = text.find("{{")
         depth = 0
@@ -212,7 +218,22 @@ def _strip_wiki_markup(text: str, title: str = "") -> str:
         else:
             text = text[:start]
             break
-        text = text[:start] + text[i:]
+        inner = text[start + 2 : i - 2]
+        rest = inner.split("|")[1:]
+        if len([p for p in rest if "=" in p]) >= 2:
+            # Infobox: keep `key: value` so the param NAME stays readable. The
+            # old value-only rendering left a bare "80" on the page, and the
+            # model could not tell it was the loot level (ratkin-root-tender
+            # "level 80" miss) — while dropping the param outright lost
+            # `locations = Povus rocky hillsides` (the "rocky hillsides" miss).
+            lines = []
+            for param in rest:
+                key, sep, value = param.partition("=")
+                lines.append(f"{key.strip()}: {value.strip()}" if sep else param.strip())
+            payload = "\n".join(lines)
+        else:
+            payload = rest[-1].strip() if rest else ""
+        text = text[:start] + payload + text[i:]
     text = re.sub(r"^==+ ?(.*?) ?==+$", r"\n## \1", text, flags=re.M)
     text = re.sub(r"^__\w+__$", "", text, flags=re.M)
     text = re.sub(r"\{\||\|\}", "", text)
@@ -290,6 +311,157 @@ def _corpus_search(store_path: str, args: dict, corpus: str = "full") -> str:
     return f"{len(lines)} results:\n" + "\n".join(lines)
 
 
+_CHAT_PRICE_CHANNELS = (
+    "Trade",
+    "Global",
+    "Nearby",
+    "Help",
+    "Tell",
+    "Guild",
+    "Party",
+)
+# A price token in chat: a number carrying a unit ("500 each", "95c", "2k",
+# "1500 gold", "290 ppu"), an @-ask ("@500"), a shop-list "for 18690", or a
+# bare 5+-digit number ("phoenix egg 22690" — at that magnitude social chat is
+# quoting prices). Chatter that merely names the item ("Anyone need
+# fulgurite?", "took 2 minutes, 90 fulgurite", "wait for 30 minutes") is
+# dropped.
+_CHAT_PRICE_RE = re.compile(
+    r"@\s*\d[\d,]*"
+    r"|\b\d[\d,]*(?:\.\d+)?\s*(?:c|k|g|ea|ppu|each|per|council|councils|gold)\b"
+    r"|\bfor\s+\d[\d,]{2,}"
+    r"|\b\d[\d,]{4,}\b",
+    re.IGNORECASE,
+)
+
+
+_CHAT_PRICE_HEADER = (
+    "CHAT PRICE MENTIONS (other players' Trade/Global/etc. chatter — asking"
+    " or wanting prices, NOT realized sales and not your own listings):"
+)
+
+_WORK_ORDER_HEADER = (
+    "WORK ORDER (fixed turn-in payout — a guaranteed floor, not a market price"
+    " and not your stall):"
+)
+
+
+def _chat_price_lines(conn: sqlite3.Connection, query: str, limit: int = 20) -> list[str]:
+    """Best-effort price mentions for ``query`` in the player's chat logs.
+
+    ``stall_events`` is the player's OWN ledger; chat is the only place a
+    *market* ask from another player can appear ("WTB abrasive sand 500 each
+    pst", "Selling ... Phase Duractor 2k each"). Yield is low and every hit is
+    an asking/wanting price, never a realized sale, so each match is returned
+    as its raw dated line and the caller labels it as a mention. Rows in noisy
+    channels (Combat/Status/NPC Chatter/item-links/Error) and rows with no
+    price-shaped token are skipped."""
+    if not query:
+        return []
+    try:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_events'"
+        ).fetchone()
+        if not exists:
+            return []
+        placeholders = ",".join("?" * len(_CHAT_PRICE_CHANNELS))
+        rows = conn.execute(
+            "SELECT ts, channel, speaker, text FROM chat_events"
+            f" WHERE channel IN ({placeholders}) AND text LIKE ?"
+            " ORDER BY COALESCE(ts, '') DESC LIMIT 200",
+            (*_CHAT_PRICE_CHANNELS, f"%{query}%"),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    out: list[str] = []
+    for ts, channel, speaker, text in rows:
+        if not _CHAT_PRICE_RE.search(text or ""):
+            continue
+        snippet = " ".join((text or "").split())[:160]
+        out.append(f"  {ts or '?'} | {channel} | {speaker or '?'}: {snippet}")
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _item_name_like(query: str) -> list[str]:
+    """LIKE patterns for a queried item name, singular-aware.
+
+    CDN item names are singular ('Phoenix Egg'), but players (and the model,
+    echoing a question) type plurals — 'Phoenix Eggs' does not contain
+    'Phoenix Egg', so a plural query used to dead-end at 'no sales' with the
+    player's own realized sale sitting in the ledger. Returns the pattern as
+    typed plus the trailing-'s' trimmed one."""
+    pats = [f"%{query}%"]
+    if len(query) > 2 and query[-1] in "sS":
+        pats.append(f"%{query[:-1]}%")
+    return pats
+
+
+def _work_order_lines(conn: sqlite3.Connection, query: str) -> list[str]:
+    """Guaranteed per-unit payout when the queried item is a work-order turn-in.
+
+    A work order is a repeatable Collect quest (its scroll is 'Work Order for
+    X', Industry-gated) whose reward is WorkOrderCurrency: the councils are
+    fixed, so payout ÷ required count is the item's guaranteed floor — the
+    number a vendor value (items.value) or a stall price never shows. Only
+    items that ARE a Collect objective get a line; most items have no work
+    order at all, and that must not read as a dead end."""
+    try:
+        pats = _item_name_like(query)
+        clause = " OR ".join("name LIKE ?" for _ in pats)
+        item = conn.execute(
+            f"SELECT internal_name, name FROM items WHERE {clause}"
+            " ORDER BY LENGTH(name), name LIMIT 1",
+            pats,
+        ).fetchone()
+        if item is None or not item[0]:
+            return []
+        internal, item_name = item
+        rows = conn.execute(
+            "SELECT q.id, q.name, json_extract(o.value, '$.Number'), q.rewards"
+            " FROM quests q, json_each(q.objectives) o"
+            " WHERE json_extract(o.value, '$.Type') = 'Collect'"
+            " AND json_extract(o.value, '$.ItemName') = ?"
+            " AND q.rewards LIKE '%WorkOrderCurrency%'",
+            (internal,),
+        ).fetchall()
+        scroll = conn.execute(
+            "SELECT name, skill_reqs FROM items WHERE keywords LIKE '%WorkOrder%'"
+            f" AND ({clause}) ORDER BY LENGTH(name), name LIMIT 1",
+            pats,
+        ).fetchone()
+    except sqlite3.Error:
+        return []
+    out: list[str] = []
+    for qid, quest_name, count, rewards in rows:
+        try:
+            rw = json.loads(rewards or "[]")
+        except ValueError:
+            rw = []
+        amount = next(
+            (w.get("Amount") for w in rw if w.get("T") == "WorkOrderCurrency"), None
+        )
+        if not amount:
+            continue
+        n = count or 1
+        xp = next(
+            (w for w in rw if w.get("T") == "SkillXp" and w.get("Xp")), None
+        )
+        xp_txt = f" + {xp['Xp']:g} {xp.get('Skill', '')} XP".rstrip() if xp else ""
+        lines = [
+            (
+                f"work order: {n:g} x {item_name} -> {amount:,.0f} councils"
+                f" (~{amount / n:,.0f} each){xp_txt} [quest '{quest_name}', id {qid}]"
+            )
+        ]
+        if scroll:
+            gate = f", requires {scroll[1]}" if scroll[1] else ""
+            lines.append(f"  scroll: {scroll[0]}{gate}")
+        out.extend(lines)
+    return out
+
+
 def _stall_item_base_value(conn: sqlite3.Connection, query: str) -> str | None:
     """CDN base value (items.value) for a queried item name.
 
@@ -302,10 +474,12 @@ def _stall_item_base_value(conn: sqlite3.Connection, query: str) -> str | None:
             "SELECT name, value FROM items WHERE name = ? COLLATE NOCASE", (query,)
         ).fetchone()
         if row is None:
+            pats = _item_name_like(query)
+            clause = " OR ".join("name LIKE ?" for _ in pats)
             row = conn.execute(
-                "SELECT name, value FROM items WHERE name LIKE ?"
+                f"SELECT name, value FROM items WHERE {clause}"
                 " ORDER BY LENGTH(name), name LIMIT 1",
-                (f"%{query}%",),
+                pats,
             ).fetchone()
     except sqlite3.Error:
         return None
@@ -329,10 +503,12 @@ def _stall_source_lines(conn: sqlite3.Connection, query: str) -> list[str]:
             "SELECT code FROM items WHERE name = ? COLLATE NOCASE", (query,)
         ).fetchone()
         if code is None:
+            pats = _item_name_like(query)
+            clause = " OR ".join("name LIKE ?" for _ in pats)
             code = conn.execute(
-                "SELECT code FROM items WHERE name LIKE ?"
+                f"SELECT code FROM items WHERE {clause}"
                 " ORDER BY LENGTH(name), name LIMIT 1",
-                (f"%{query}%",),
+                pats,
             ).fetchone()
         if code is None:
             return []
@@ -384,10 +560,18 @@ def _stall_zero_sale_lines(store_path: str, query: str, base: str) -> str:
             lines.append(bv)
         lines.append(f"{base} matching '{query}'.")
         source_lines = _stall_source_lines(conn, query)
+        chat_lines = _chat_price_lines(conn, query)
+        wo_lines = _work_order_lines(conn, query)
     finally:
         conn.close()
     if not source_lines:
         source_lines.append("No source or barter info found for it in the store either.")
+    if wo_lines:
+        lines.append(_WORK_ORDER_HEADER)
+        lines.extend(wo_lines)
+    if chat_lines:
+        lines.append(_CHAT_PRICE_HEADER)
+        lines.extend(chat_lines)
     return "\n".join(lines + source_lines)
 
 
@@ -587,7 +771,7 @@ def _player_state(store_path: str, args: dict) -> str:
         # observed market price. 'bought' rows are realized prices; visible/
         # configured rows are asking prices that may not have sold. Report
         # each sale individually — never average sold prices into one number.
-        item_like = f"%{query}%" if query else None
+        item_likes = _item_name_like(query) if query else []
         try:
             conn2 = _conn(store_path)
         except sqlite3.Error as exc:
@@ -603,13 +787,15 @@ def _player_state(store_path: str, args: dict) -> str:
                 " price_total FROM stall_events WHERE ignored = 0"
             )
             params: list = []
-            if item_like:
-                sql += " AND item LIKE ?"
-                params.append(item_like)
+            if item_likes:
+                sql += " AND (" + " OR ".join("item LIKE ?" for _ in item_likes) + ")"
+                params.extend(item_likes)
             sql += " ORDER BY COALESCE(event_at, event_timestamp) DESC LIMIT 120"
             rows = conn2.execute(sql, params).fetchall()
             base_line = _stall_item_base_value(conn2, query) if query else None
             source_lines = _stall_source_lines(conn2, query) if query else []
+            chat_lines = _chat_price_lines(conn2, query) if query else []
+            wo_lines = _work_order_lines(conn2, query) if query else []
         finally:
             conn2.close()
         if not rows:
@@ -635,6 +821,9 @@ def _player_state(store_path: str, args: dict) -> str:
         if base_line:
             lines.append(base_line)
         lines.extend(source_lines)
+        if wo_lines:
+            lines.append(_WORK_ORDER_HEADER)
+            lines.extend(wo_lines)
         if sold:
             lines.append(f"SOLD ({len(sold)} sales, oldest first):")
             for item, ea, _a, buyer, qty, pu, pt in reversed(sold):
@@ -658,6 +847,9 @@ def _player_state(store_path: str, args: dict) -> str:
                 " SELECT item, COUNT(*), SUM(price_total) FROM stall_events"
                 " WHERE action='bought' GROUP BY item ORDER BY 3 DESC)"
             )
+        if chat_lines:
+            lines.append(_CHAT_PRICE_HEADER)
+            lines.extend(chat_lines)
         if not sold and not asking and query:
             return _stall_zero_sale_lines(store_path, query, base="no stall pricing")
         return "\n".join(lines)

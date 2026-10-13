@@ -25,7 +25,7 @@ class _Args:
 
 
 def test_load_cases_golden_short(monkeypatch):
-    monkeypatch.setattr(agentic_tune, "_short_ids_from_tests", lambda: ["bacon-for-joeh"])
+    monkeypatch.setattr(agentic_tune, "SHORT_TIER_IDS", ["bacon-for-joeh"])
     cases = _load_cases("golden-short", None)
     assert len(cases) == 1
     assert cases[0]["id"] == "bacon-for-joeh"

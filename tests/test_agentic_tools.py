@@ -215,6 +215,25 @@ def test_get_page_exact_ambiguous_missing(store):
     assert "No wiki page matching" in out
 
 
+def test_strip_wiki_markup_keeps_infobox_params():
+    """Infobox params carry the facts (a MOB's locations/levels) and must stay
+    LABELED: dropping the param lost `locations = Povus Rocky hillsides` (the
+    ratkin-root-tender "rocky hillsides" miss) and value-only rendering left a
+    bare "80" that the model could not identify as the loot level. Single-value
+    templates keep only their payload."""
+    from pgrag.agentic.tools import _strip_wiki_markup
+
+    out = _strip_wiki_markup(
+        "{{MOB infobox\n| type = Rodent\n| locations = Povus Rocky hillsides\n| lootlevel = 80\n}}",
+        "Ratkin Root-Tender",
+    )
+    assert "locations: Povus Rocky hillsides" in out
+    assert "lootlevel: 80" in out
+    assert "{{" not in out and "}}" not in out
+    assert _strip_wiki_markup("{{Item|Healing Potion}}", "P").strip() == "Healing Potion"
+    assert _strip_wiki_markup("{{Quote|source=[[X]]|Quote text}}", "P").strip() == "Quote text"
+
+
 def test_player_state_summary_skills_currencies(store):
     out = execute_tool(str(store), "player_state", {"section": "summary"})
     assert "Tester" in out and "gold 30711" in out
@@ -438,3 +457,232 @@ def test_player_state_stall_truncation_note(store):
     )
     assert "120 most recent" in out
     assert "sql_query" in out
+
+
+def test_player_state_stall_appends_chat_price_mentions(store):
+    """contract: price gathering also ATTEMPTS chat_events — other players'
+    asking prices are surfaced as dated raw mentions, labeled as NOT realized
+    sales (stall_events stays the only realized-price source). Chatter that
+    merely names the item, noisy channels (Combat), and price-looking numbers
+    with no unit are all skipped; an item with no mentions gets no empty
+    block."""
+    conn = sqlite3.connect(store)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS chat_events ("
+        "id INTEGER PRIMARY KEY, ts TEXT, channel TEXT, speaker TEXT, text TEXT,"
+        " source_file TEXT, line_no INTEGER)"
+    )
+    rows = [
+        # (id, ts, channel, speaker, text)
+        (1, "26-06-27 20:22:52", "Trade", "Vesperis", "WTB Fulgurite 500 each pst"),
+        (2, "26-09-11 22:02:59", "Global", "Orrion", "Anyone need a shitload of fulgurite?"),
+        (3, "26-10-04 21:57:23", "Combat", "Grunt", "Fulgurite 99c each"),
+        (4, "26-08-30 19:38:02", "Guild", "TwinkleofToes", "took 90 fulgurite in 2 minutes"),
+        (5, "26-10-09 20:33:00", "Trade", "Kynjin", "CS-8 Fulgurite stacks @the stop"),
+        (6, "26-10-04 17:33:50", "Trade", "chillerkiller", "restock: Fulgurite 22690, shard for 18690"),
+    ]
+    for rid, ts, channel, speaker, text in rows:
+        conn.execute(
+            "INSERT OR REPLACE INTO chat_events VALUES (?,?,?,?,?,?,?)",
+            (rid, ts, channel, speaker, text, "Chat-26-06-27.log", rid),
+        )
+    conn.commit()
+    conn.close()
+
+    out = execute_tool(
+        str(store), "player_state", {"section": "stall", "query": "Fulgurite"}
+    )
+    assert "CHAT PRICE MENTIONS" in out
+    assert "NOT realized sales" in out
+    # The one price-bearing social line, quoted with date/channel/speaker.
+    assert "26-06-27 20:22:52 | Trade | Vesperis: WTB Fulgurite 500 each pst" in out
+    # Shop-list lines stay in: a bare 5+-digit number and a "for <price>".
+    assert "restock: Fulgurite 22690, shard for 18690" in out
+    # Item-naming chatter (no price token) and the noisy channel are dropped.
+    assert "shitload of fulgurite" not in out
+    assert "took 90 fulgurite in 2 minutes" not in out
+    assert "99c each" not in out
+    assert "@the stop" not in out
+
+    # An item with no chat mentions appends no block (and still answers).
+    out2 = execute_tool(
+        str(store), "player_state", {"section": "stall", "query": "Moon Shard"}
+    )
+    assert "CHAT PRICE MENTIONS" not in out2
+
+
+def test_player_state_stall_chat_price_avoids_dead_end(store):
+    """contract: an item with NO stall rows at all but a chat price mention
+    surfaces the mention (plus its CDN base value) instead of dead-ending at
+    "no price"."""
+    conn = sqlite3.connect(store)
+    conn.execute(
+        "INSERT OR REPLACE INTO items VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (78, "Sunpetal", "Sunpetal", None, None, 40.0, 1, None, None, None, None, None),
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS chat_events ("
+        "id INTEGER PRIMARY KEY, ts TEXT, channel TEXT, speaker TEXT, text TEXT,"
+        " source_file TEXT, line_no INTEGER)"
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO chat_events VALUES (?,?,?,?,?,?,?)",
+        (9, "26-07-02 18:20:00", "Global", "Orrion", "WTB Sunpetal 300 each", "Chat-26-07-02.log", 9),
+    )
+    conn.commit()
+    conn.close()
+
+    out = execute_tool(
+        str(store), "player_state", {"section": "stall", "query": "Sunpetal"}
+    )
+    assert "No stall events matching 'Sunpetal'." in out
+    assert "base value" in out and "Sunpetal 40" in out
+    assert "CHAT PRICE MENTIONS" in out
+    assert "WTB Sunpetal 300 each" in out
+
+
+def test_player_state_stall_plural_query_matches_singular_item(store):
+    """contract: item names are singular in the CDN, so a plural query must
+    still find the item — 'Butter Churns' resolves the 'Butter Churn' ledger
+    rows, base value and sources instead of reporting 'no events' (the live
+    miss: 'Phoenix Eggs' hid a realized 28,000 sale)."""
+    conn = sqlite3.connect(store)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS stall_events ("
+        "id TEXT PRIMARY KEY, event_timestamp TEXT, event_at TEXT,"
+        "log_timestamp TEXT, log_title TEXT, action TEXT, player TEXT,"
+        "owner TEXT, item TEXT, quantity INTEGER, price_unit REAL,"
+        "price_total REAL, raw_message TEXT, entry_index TEXT,"
+        "ignored INTEGER, created_at TEXT)"
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO stall_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "p1", "2026-05-29 08:09:00", "2026-05-29 08:09:00", None, None,
+            "bought", "Livo", "TwinkleofToes", "Butter Churn", 1, 28000.0, 28000,
+            None, None, 0, None,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    out = execute_tool(
+        str(store), "player_state", {"section": "stall", "query": "Butter Churns"}
+    )
+    assert "No stall events" not in out
+    assert "Butter Churn x1 @ 28000 each = 28000 | buyer Livo" in out
+    # Base value resolves the singular item, not the longer 'Work Order for …'.
+    assert "base value (items.value, the vendor floor — NOT a stall price): Butter Churn 500" in out
+
+
+def test_player_state_stall_work_order_payout(store):
+    """contract: an item that is a work-order turn-in gets its FIXED payout
+    (councils ÷ required count = the guaranteed per-unit floor) plus the
+    Industry gate from the 'Work Order for X' scroll — a floor no vendor value
+    or stall price shows. Items with no work order get no block (not a dead
+    end). Plural queries resolve the singular item here too."""
+    conn = sqlite3.connect(store)
+    conn.execute(
+        "INSERT OR REPLACE INTO items VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (79, "Widget", "Widget", None, None, 10.0, 5, None, None, None, None, None),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO items VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            80, "Work Order for Widgets", "Scroll_Unknown_Widgets",
+            "Book | Document | WorkOrder", "Deliver 5 Widgets. Reward: 51,000 councils.",
+            30.0, 1, None, "Industry 25", None, None, None,
+        ),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO quests VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            901, "Widget Deliveries", "WidgetDeliveries", None, None,
+            json.dumps(
+                [
+                    {"Type": "Collect", "ItemName": "Widget", "Number": 5},
+                    {"Type": "Scripted", "Number": 1},
+                ]
+            ),
+            json.dumps(
+                [
+                    {"T": "SkillXp", "Skill": "Industry", "Xp": 300},
+                    {"T": "WorkOrderCurrency", "Currency": "Gold", "Amount": 51000},
+                ]
+            ),
+            None, None, None, "{}",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    out = execute_tool(
+        str(store), "player_state", {"section": "stall", "query": "Widgets"}
+    )
+    assert "WORK ORDER" in out
+    assert "guaranteed floor" in out
+    assert (
+        "work order: 5 x Widget -> 51,000 councils (~10,200 each) + 300 Industry XP"
+        " [quest 'Widget Deliveries', id 901]" in out
+    )
+    assert "scroll: Work Order for Widgets, requires Industry 25" in out
+
+    # No work order for the item → no block (and the answer still stands).
+    out2 = execute_tool(
+        str(store), "player_state", {"section": "stall", "query": "Moon Shard"}
+    )
+    assert "WORK ORDER" not in out2
+
+
+def test_corpus_search_snippet_reaches_doc_tail(monkeypatch):
+    """Regression (2026-10-11): every corpus hit was cut at 400 chars, and a
+    corpus doc has no other reader (get_page serves wiki titles only), so facts
+    past the cut were unreachable — `Requires Beast` sits at offset 788 of
+    skillprofile_Pooping_chunk_0 (871 chars) and `Tavilak` at 808 of
+    skillprofile_Gardening_chunk_4 (1089), and both silently missed.
+
+    Contract: a chunked skill-profile doc's tail is visible in the hit, and the
+    per-hit budget still bounds the payload (the loop caps tool results at
+    12000 chars).
+    """
+    import pgrag.agentic.tools as tools
+
+    class _Model:
+        def __init__(self, ids):
+            self.ids = ids
+
+        def search(self, query, k=10):
+            sel = self.ids[:k]
+            return sel, [1.0] * len(sel)
+
+    short_tail = {
+        "id": "skillprofile_Pooping_chunk_0",
+        "text": "Skill Profile: Dungcrafting\n" + ("x" * 700) + "\nRequires Beast",
+        "metadata": {"name": "Dungcrafting (skills)", "table": "skills"},
+    }
+    huge = {
+        "id": "doc_huge",
+        "text": "y" * (tools._SEARCH_SNIPPET * 5),
+        "metadata": {"name": "Huge (wiki)", "table": "wiki"},
+    }
+    docs = [short_tail, huge]
+    monkeypatch.setattr(tools, "load_bm25_index", lambda **kw: (_Model([0, 1]), docs))
+
+    out = tools.execute_tool("unused.db", "corpus_search", {"query": "Dungcrafting", "k": 2})
+    assert "Requires Beast" in out  # the tail past the old 400-char cut is visible
+    assert len(out) < 12_000  # still bounded: 2 hits x _SEARCH_SNIPPET + prefixes
+    assert "y" * (tools._SEARCH_SNIPPET + 1) not in out  # each hit is still capped
+
+
+def test_corpus_search_tokenizer_and_empty(monkeypatch):
+    """Missing query is an error string (data for the model), and a miss is a
+    plain '0 results' rather than an exception."""
+    import pgrag.agentic.tools as tools
+
+    assert "missing required argument" in tools.execute_tool("unused.db", "corpus_search", {})
+
+    class _Empty:
+        def search(self, query, k=10):
+            return [], []
+
+    monkeypatch.setattr(tools, "load_bm25_index", lambda **kw: (_Empty(), []))
+    assert tools.execute_tool("unused.db", "corpus_search", {"query": "zzz"}) == "0 results."

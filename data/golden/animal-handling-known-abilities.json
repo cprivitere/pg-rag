@@ -1,0 +1,11 @@
+{
+  "id": "animal-handling-known-abilities",
+  "question": "Which taming abilities does my character actually know, including any recorded outside the Animal Handling ability family?",
+  "type": "general",
+  "facts": [
+    ["TameRat", "tame rat", "Tame Rat"],
+    ["CharmRat", "charm rat", "Charm Rat"]
+  ],
+  "store": true,
+  "notes": "Split 2026-10-11 out of `animal-handling-ability-audit` (5 facts, the store-only case that failed the last full run). Store-only: read through player_state(section='abilities', skill='Animal Handling') against the CharacterSheet dump in data/sqlite_gorgon.db (char_reports). Verified live (sheet ts 2026-10-06, level 96 +9): the audit prints a 'KNOWN:' family list (73 entries, which includes Tame Rat) and a separate 'KNOWN non-skill abilities (Unknown bucket)' list whose first entry is CharmRat - so CharmRat IS a real known ability, filed outside the Animal Handling family. That bucket split is the whole point of this case: the old combined question let the model drop CharmRat, and an answer built only from the family list misses it. The question names both scopes for that reason. Guard rail: abilities.level_req is NOT a reliable known-gate (the audit reads the sheet's known list, not the level column)."
+}

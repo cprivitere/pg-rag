@@ -1,0 +1,12 @@
+{
+  "id": "gardening-trainers-and-fertilizer",
+  "question": "List every trainer of the Gardening skill (its Trainer list), and what is the Basic Fertilizer (from Animal Feces) recipe?",
+  "type": "entity",
+  "facts": [
+    ["floxie"],
+    ["therese"],
+    ["tavilak"],
+    ["basic fertilizer from animal feces", "basic fertilizer"]
+  ],
+  "notes": "Split 2026-10-11 out of `gardening`. Grounding: doc skillprofile_Gardening_chunk_4 (\"Trainers: - Floxie (Fae Realm) - Julius Patton (Serbule Hills) - Kelim (Ilmari Desert) - Suspicious Cow (Eltibule) - Tavilak (Red Wing Casino) - Therese (Serbule)\" and the recipe list containing 'Basic Fertilizer (from Animal Feces) (level 25)'), plus recipe_906 ('Recipe: Basic Fertilizer (from Animal Feces), Skill: Gardening, Required Skill Level: 25'). Trainers + the fertilizer recipe share ONE doc, so one focused question retrieves both; the fact accepts the bare 'basic fertilizer' wording the profile uses. STILL FLAKY (in data/golden/FLAKY.txt): the model reads the wiki level-cap trainer page (Kelim/Floxie/Dunahain) or recipe-teacher NPC pages and drops Tavilak/Therese instead of using the corpus Trainer list; a natural query returns ten wiki_Gardening_table_0_row_* hits naming Floxie, Tavilak and Therese, so the facts are reachable and the tool choice is the blocker. Do not weaken the facts."
+}

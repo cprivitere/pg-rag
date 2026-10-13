@@ -1,9 +1,11 @@
 {
   "id": "moonstone-item",
-  "question": "What is Moonstone used for?",
+  "question": "What is Moonstone, and what is it used for?",
   "type": "entity",
   "facts": [
     ["moonstone"],
-    ["new beginnings"]
-  ]
+    ["new beginnings"],
+    ["white dye", "dye making", "dyemaking"]
+  ],
+  "notes": "Refactored 2026-10-11: 'What is Moonstone used for?' was answered by the item description alone (the old two facts), while the corpus also records its one crafting use. Grounded: item_18038 'milky white this gem is useful in magic that relates to new beginnings associated primary skill lycanthropy' and itemuse_item_18038 'moonstone used in 1 recipes recipe ids 24105' (White Dye)."
 }

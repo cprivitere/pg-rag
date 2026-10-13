@@ -506,14 +506,12 @@ def chat(LLM_URL, NATIVE_TOOLS, SERVER_MODEL, STORE_PATH, STORE_OK, run_loop):
         _os.environ["PGRAG_LLM_NATIVE_TOOLS"] = NATIVE_TOOLS
         _question = messages[-1].content
         _history = [{"role": _m.role, "content": _m.content} for _m in messages[:-1]]
-        _trace = {}
         _t0 = _time.time()
         _res = run_loop(
             _question,
             history=_history or None,
             corpus="tool",
             store_path=STORE_PATH,
-            trace=_trace,
         )
         _dt = _time.time() - _t0
         print(f"[loop] rounds={_res['rounds']} {_dt:.1f}s trace={_res['trace_rounds']}")

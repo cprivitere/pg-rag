@@ -18,7 +18,7 @@ def _load_title_map():
         return {
             info.get("filename"): title for title, info in pages.items() if info.get("filename")
         }
-    except OSError, ValueError, AttributeError:
+    except (OSError, ValueError, AttributeError):
         return {}
 
 

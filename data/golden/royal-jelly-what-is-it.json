@@ -1,0 +1,10 @@
+{
+  "id": "royal-jelly-what-is-it",
+  "question": "What is Royal Jelly, and where does it come from?",
+  "type": "general",
+  "facts": [
+    ["royal jelly"],
+    ["fae realm"]
+  ],
+  "notes": "Split 2026-10-11 out of `royal-jelly-gathering` (6 facts failed as one answer). Grounding: doc item_1337 ('Item: Royal Jelly ... Usage: Fae Bee royal jelly -- a potent magical substance used as a currency by many parts of the Fae Realm'). Two facts, one doc - the item description is what a 'what is this item' question retrieves."
+}

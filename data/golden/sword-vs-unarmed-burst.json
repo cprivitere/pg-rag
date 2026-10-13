@@ -1,11 +1,12 @@
 {
   "id": "sword-vs-unarmed-burst",
-  "question": "Which skill has higher single target burst damage, Sword or Unarmed?",
+  "question": "How do Sword and Unarmed compare for single-target burst damage — what do their skill descriptions say, and how do the damage numbers compare?",
   "type": "comparison",
   "facts": [
     ["sword"],
     ["unarmed"],
     ["very damaging"],
     ["not especially damaging"]
-  ]
+  ],
+  "notes": "Refactored 2026-10-11: the facts are the skill descriptions' own verdicts (skill_Sword_chunk_0 'swords are very damaging and can reduce an opponents rage'; skill_Unarmed_chunk_0 'not especially damaging but with great controlling and stunning abilities'), while the old question asked only which hits harder — the model answered with ability damage numbers and omitted the verdict words, failing on phrasing rather than knowledge. The question now asks for both the descriptions and the numbers."
 }

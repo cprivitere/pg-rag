@@ -1,0 +1,13 @@
+{
+  "id": "dungcrafting-basics",
+  "question": "What is the Dungcrafting skill, how do you earn XP in it, what is its parent skill, and what food-quality note affects the fertilizer you produce?",
+  "type": "entity",
+  "facts": [
+    ["fertilizergrade poop", "fertilizer grade poop", "fertilizergrade"],
+    ["animalspecific", "animal specific"],
+    ["clean up your mess", "earn xp", "xp in this skill"],
+    ["gardening"],
+    ["gourmand"]
+  ],
+  "notes": "Split 2026-10-11 out of `dungcrafting` (10 facts failed as one answer). Grounding: doc skill_Pooping (skill: Dungcrafting; \"The animal-specific skill of creating fertilizer-grade poop. You earn XP in this skill when others clean up your mess.\"; Note 2 names the gourmand level-50 food rule; Parents: Gardening) and doc skillprofile_Pooping_chunk_0 (same description + Note 2 + 'Parents: Gardening'). All 5 facts live in ONE doc (the bare skill description), which is exactly what a 'what is this skill' question retrieves. The remaining 5 facts (ability/rewards/quest) live in the sibling skill-profile doc and are checked by `dungcrafting-poop-ability-and-rewards`."
+}

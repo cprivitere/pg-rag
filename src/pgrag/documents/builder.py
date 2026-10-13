@@ -37,10 +37,10 @@ def _int_or(value, default=0):
         return default
     try:
         return int(value)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         try:
             return int(float(value))
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             return default
 
 
@@ -154,7 +154,7 @@ Value:
                         label = attr["Label"]
                     try:
                         numeric = float(value)
-                    except TypeError, ValueError:
+                    except (TypeError, ValueError):
                         section.append(f"Stat: {label} {value}")
                         continue
                     sign = "+" if numeric >= 0 else ""

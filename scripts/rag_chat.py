@@ -1,7 +1,16 @@
 r"""Project Gorgon Gradio chat spike.
 
-Gradio ChatInterface over pgrag's streaming pipeline (ask_stream).
-Requires the embed (:8081) and LLM (:8080) services to be running.
+Gradio ChatInterface over the agentic tool loop (``pgrag.agentic.loop.run_loop``):
+the LLM drives the SQLite-store tools plus a BM25 corpus search over a bounded
+number of rounds. Needs only the LLM service (:8080) — there is no embed server
+any more.
+
+The store is refreshed once at startup (session + glogger play history,
+incremental) so play-history questions answer from current game state instead of
+whatever the last ``mise sql-store`` left behind; ``PG_RAG_CHAT_NO_SYNC=1``
+skips it. The loop is blocking (no token stream), so the handler yields a status
+line immediately, runs the loop, then yields the finished answer with a Sources
+block built from the loop's tool rounds.
 
 Run: mise chat   (uv run --with gradio python scripts/rag_chat.py)
 """
@@ -10,44 +19,41 @@ import os
 
 import gradio as gr
 
-from pgrag.rag.pipeline import ask_stream
+from pgrag.agentic.loop import run_loop
+from pgrag.agentic.store import refresh_store
+
+
+def _sources_block(sources: list[dict]) -> str:
+    if not sources:
+        return "No sources found."
+    shown = sources[:5]
+    block = "\n".join(f"- {s['citation']}" for s in shown)
+    hidden = len(sources) - len(shown)
+    if hidden > 0:
+        block += f"\n\n…and {hidden} more not shown."
+    return block
 
 
 def respond(message, history):
-    """Chat handler: streams tokens from ask_stream(), then appends sources.
+    """Chat handler: status line -> blocking tool loop -> answer + Sources.
 
-    history is threaded by Gradio but the pipeline is one-shot (it only
-    answers from the latest message), matching the Open WebUI pipe.
+    history is ignored on purpose: the loop answers from the latest question
+    alone, matching the Open WebUI pipe.
     """
-    full = ""
-    result = None
+    yield "Searching the knowledge base…"
     try:
-        for event in ask_stream(message):
-            if event["type"] == "reset":
-                full = ""
-            elif event["type"] == "token":
-                full += event["text"]
-                yield full
-            elif event["type"] == "final":
-                result = event["result"]
+        result = run_loop(message)
     except Exception as exc:
         yield f"Sorry, something went wrong: {exc}"
         return
 
-    if result is None:
-        yield "Sorry, no answer was produced."
-        return
-
-    sources = result["sources"]
-    if sources:
-        shown = sources[:5]
-        source_block = "\n".join(f"- {s['citation']}" for s in shown)
-        hidden = len(sources) - len(shown)
-        if hidden > 0:
-            source_block += f"\n\n…and {hidden} more not shown."
-    else:
-        source_block = "No sources found."
-    yield full + f"\n\n---\n**Sources ({len(sources)} total):**\n{source_block}"
+    sources = result["sources"] or []
+    rounds = result.get("rounds", 0)
+    yield (
+        f"{result['answer']}\n\n---\n"
+        f"**Sources ({len(sources)} total):**\n{_sources_block(sources)}\n\n"
+        f"_tool loop: {rounds} round(s)_"
+    )
 
 
 demo = gr.ChatInterface(
@@ -55,13 +61,28 @@ demo = gr.ChatInterface(
     title="Project Gorgon RAG",
     description=(
         "Ask about Project Gorgon skills, recipes, items, quests, and "
-        "abilities. Requires the embed and LLM services to be running."
+        "abilities. Answers come from the agentic tool loop over the SQLite "
+        "store; requires the LLM service to be running."
     ),
     save_history=True,
 )
 
 
+def _refresh_store() -> None:
+    """Refresh live session + glogger rows before the server starts.
+
+    Incremental (unchanged sources copy 0 rows), never raises — a broken source
+    degrades to a `[sync]` note in the log and the chat serves the store as-is.
+    `PG_RAG_CHAT_NO_SYNC=1` skips it (e.g. when the game is running and the
+    player log is locked)."""
+    if os.environ.get("PG_RAG_CHAT_NO_SYNC") == "1":
+        print("[sync] skipped (PG_RAG_CHAT_NO_SYNC=1)")
+        return
+    refresh_store()
+
+
 if __name__ == "__main__":
+    _refresh_store()
     demo.launch(
         server_name="0.0.0.0",
         server_port=7860,

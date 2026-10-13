@@ -4,51 +4,18 @@ WEBUI_DIR = "F:/ProjectGorgon/mywebui"
 # Logs directory
 LOGS_DIR = "{{ config_root }}/logs"
 # Model identities — SINGLE SOURCE of truth. Every consumer reads these:
-#   - `mise debug-embed` / `debug-llm` (via {{ env.X }})
-#   - `.mise/tasks/*-start.ps1` (via $env:X)
-#   - scripts/vram_sweep.py + scripts/check_docs.py (via tomllib)
+#   - `mise debug-llm` (via {{ env.X }})
+#   - `.mise/tasks/llm-start.ps1` (via $env:X)
+#   - scripts/check_docs.py (via tomllib)
 # Swap a model (ref + its tuning flags) here; nothing else should change.
 # Launchers append their own host/port/-np/batch/log-file assembly.
 # `mise drift` fails if any consumer hardcodes a model literal.
-# Qwen3.5-9B (MTP variant) — native THINKING model + multi-token-prediction
-# spec decode. `--reasoning-budget 4096` caps deliberation (native reasoning
-# path — granite has none). `--spec-type draft-mtp --spec-draft-n-max 6`
-# gemma-4-26B-A4B-it-qat (30L MoE, 3.8B active) — native thinking + MTP. MTP head
-# `mtp-gemma-4-26B-A4B-it.gguf` auto-discovered from -hf (do NOT pass
-# --model-draft); MTP n4. No `--jinja`. `-c 65536` free (hybrid sliding-window
-# /unified-KV attention → tiny KV, native 256k). Q8_0 KV; QAT pixels make
-# UD-Q4_K_XL near-lossless. `--reasoning-budget 1024` (NOT 4096: gemma-4's
-# verbose thinking leaves `content` empty at 4096 — 1024 caps it so facts land
-# in the answer the pipeline reads). Weights 13.27 GB + MTP ≈ ~16-17 GB total —
-# needs Project Gorgon CLOSED. CONTEXT_BUDGET is 80000 (config.py).
-# gemma-4-26B-A4B-it (NON-QAT) at UD-Q2_K_XL — 9.82 GB, no MTP file (so NO
-# --spec-type draft-mtp). gemma4 nano thinking via `--reasoning-budget 1024`.
-# Q2_K_XL on a non-QAT model is aggressive quant → expect quality loss vs the
-# QAT pair. `-c 65536` free (hybrid sliding-window KV). Golden: measured 12
-# facts missing on the QAT Q4 sibling; this Q2 non-QAT is expected lower.
-# Qwen3.8-27B (DENSE, Mamba2-hybrid) at UD-Q2_K_XL — the VRAM-decisive test:
-# 3x the params of the 12B winner at Q2 (9.15 GB file, ~11.5 GiB total) to see
-# if capacity beats quantization loss. Same arch as Qwen3.5-9B (qwen35, 4 KV
-# heads → tiny cache) with MTP head BUNDLED (nextn_predict_layers=1) so
-# `--spec-type draft-mtp --spec-draft-n-max 6` works single-file. Native
-# thinking via `--reasoning-budget 4096` (qwen's thinking is economical, unlike
-# gemma-4's — verified content reliable on the 9B). `-c 65536` free (KV ~4 GiB
-# @64k Q8, still small for a 27B). UD quant (unsloth dynamic), NOT QAT.
-# == PRODUCTION MODEL ==
-# Active values live in LLM_MODEL / LLM_FLAGS directly below;swap a model
-# here and nothing else should change — consumers read via env vars/tomllib.
 # Tuning rationale lives in docs/LLM_MODEL_WIRING.md — do not duplicate
 # per-model prose here.
+# == PRODUCTION MODEL ==
 
 LLM_MODEL = "ornith-ai/Ornith-1.5-9B-GGUF:Q4_K_M"
 LLM_FLAGS = "--no-mmproj -ngl 999 -fa on -c 65536 -ctk q8_0 -ctv q8_0 --reasoning-budget 4096"
-# Embeddings — bge-small-en; cls pooling; 512-token hard cap (see
-# llama_embeddings.MAX_EMBED_CHARS). Changing the model = full re-embed.
-EMBED_MODEL = "unsloth/bge-small-en-v1.5-GGUF:f16"
-EMBED_FLAGS = "--embedding --pooling cls -ngl 99 -c 512"
-# Reranker — bge-reranker-v2-m3 cross-encoder; lexical fallback if :8082 down.
-RERANK_MODEL = "gpustack/bge-reranker-v2-m3-GGUF:Q4_K_M"
-RERANK_FLAGS = "--reranking --pooling rank -ngl 99"
 
 [task_config]
 # Default to PowerShell on Windows with -NoProfile (mise default)
@@ -65,23 +32,23 @@ alias = "te"
 
 # --- Pipeline tasks ---
 [tasks.sync]
-description = "Fast sync: CDN data + rebuild documents + full index + BM25 (skips slow wiki fetch)"
+description = "Fast sync: CDN data + rebuild documents + BM25 + tool corpus (skips slow wiki fetch)"
 run = [
   "uv run pgrag download-cdn",
   "uv run pgrag build-documents",
-  "uv run pgrag build-index",
   "uv run python -m pgrag.rag.bm25",
+  "uv run python scripts/build_tool_corpus.py",
 ]
 alias = "sy, rf"
 
 [tasks."sync-full"]
-description = "Full sync: CDN + wiki data + rebuild documents + full index + BM25"
+description = "Full sync: CDN + wiki data + rebuild documents + BM25 + tool corpus"
 run = [
   "uv run pgrag download-cdn",
   "uv run pgrag download-wiki",
   "uv run pgrag build-documents",
-  "uv run pgrag build-index",
   "uv run python -m pgrag.rag.bm25",
+  "uv run python scripts/build_tool_corpus.py",
 ]
 alias = "syf"
 
@@ -94,43 +61,42 @@ description = "Download wiki pages to data/wiki/ (slow)"
 run = "uv run pgrag download-wiki"
 
 [tasks."generate-docs"]
-description = "Regenerate data/documents.json from CDN + wiki source (idempotent; stamps the generator version build-index checks)"
+description = "Regenerate data/documents.json from CDN + wiki source (idempotent; stamps the generator version)"
 run = "uv run pgrag build-documents"
 alias = "docs"
 
-# --- Desired-state syncs: one command converges an index to current source ---
-# Each runs build-documents first (which refreshes the generator-version
-# marker) so build-index never consumes a stale documents.json.
+# --- Desired-state syncs: one command converges generated docs + BM25 to current source ---
+# Each runs build-documents first so BM25 is rebuilt from fresh documents.json.
 
 [tasks."build-bm25"]
 description = "Pre-warm/build the BM25 index (rebuilt + persisted when documents.json changed). Prevents the lazy first-query rebuild spike"
 run = "uv run python -m pgrag.rag.bm25"
 alias = "b25"
 
+[tasks."build-tool-corpus"]
+description = "Build the tool corpus index (data/tool_documents.json + data/tool_bm25.pkl) for `corpus_search --corpus tool`"
+run = "uv run python scripts/build_tool_corpus.py"
+alias = "btc"
+
 [tasks."sync-wiki"]
-description = "Converge wiki index to current source: regenerate documents, then partial wiki re-embed (table records, parser/CACHE_VERSION changes), then BM25"
+description = "Converge wiki data to current source: regenerate documents, BM25, then the tool corpus"
 run = [
   "uv run pgrag build-documents",
-  "uv run pgrag build-index --source wiki",
   "uv run python -m pgrag.rag.bm25",
+  "uv run python scripts/build_tool_corpus.py",
 ]
 alias = "syw"
 
 [tasks."sync-cdn"]
-description = "Converge CDN index to current source: fetch CDN, regenerate documents, partial CDN re-embed, then BM25"
+description = "Converge CDN data to current source: fetch CDN, regenerate documents, BM25, then the tool corpus"
 run = [
   "uv run pgrag download-cdn",
   "uv run pgrag build-documents",
-  "uv run pgrag build-index --source cdn",
   "uv run python -m pgrag.rag.bm25",
+  "uv run python scripts/build_tool_corpus.py",
 ]
 alias = "syc"
 
-
-[tasks.validate]
-description = "Validate vectorstore health; rebuild if issues found"
-run = "uv run pgrag validate && echo 'Index healthy' || (echo 'Rebuilding...' && uv run pgrag build-index)"
-alias = "va"
 
 [tasks."sql-store"]
 description = "Build data/sqlite_gorgon.db (CDN + wiki + session + glogger primary sources) for the agentic tool loop"
@@ -147,24 +113,19 @@ description = "Agentic CLI chat over the SQLite store (tool loop; needs only LLM
 run = "uv run python scripts/agentic_chat.py"
 alias = "ac"
 
-[tasks."agentic-eval"]
-description = "Agentic tool-loop eval over the golden fact set (short tier; needs only LLM :8080)"
-run = "uv run python scripts/agentic_chat.py --eval --tier short"
-alias = "ae"
-
 [tasks."agentic-tune"]
 description = "Agentic loop tuning sweeps (temperature/reasoning/model) -> data/agentic_tune/"
 run = "uv run python scripts/agentic_tune.py --eval-set cases --sweep-temperature 0,0.2,0.4,0.7 --sweep-seeds 0,1,2"
 alias = "at"
 
 [tasks.golden]
-description = "Run golden eval set (needs embed + llm services up). Exits 1 on missing facts. `mise golden-short`/`mise gds` for quick tier (8 files, ~3-5 min; store-only glogger cases run via mise agentic-eval)"
+description = "Run the full golden eval set through the tool loop (LLM only). Long: every case is a multi-round reasoning generation, so batch it in the background. `mise golden-short` for the fast tier"
 run = "uv run python scripts/golden_check.py"
 alias = "gd"
 
 [tasks."golden-short"]
-description = "Run short golden eval tier (8 representative queries, ~3-5 min)"
-run = "uv run pytest -m short tests/test_golden_check.py"
+description = "Run the short golden eval tier (8 representative cases; fast path for a change you just made; LLM only)"
+run = "uv run python scripts/golden_check.py --tier short"
 alias = "gds"
 
 [tasks."golden-one"]
@@ -174,11 +135,11 @@ run = "uv run python scripts/golden_rerun.py --id {{ usage.ids | join(sep=',') }
 alias = "go"
 
 [tasks."golden-type"]
-description = "Run golden subset by type: `mise golden-type recipe` or `mise golden-type entity recipe` (needs embed + LLM up; also forwards --max-facts)"
+description = "Run golden subset by type: `mise golden-type recipe` or `mise golden-type entity recipe` (LLM only)"
 usage = 'arg "<types>" var=#true help="Golden type(s): entity|recipe|comparison|general"'
 run = '''
 foreach ($t in @('{{ usage.types | join(sep='\',\'') }}')) {
-  uv run python scripts/golden_check.py --type "$t"
+  uv run python scripts/golden_rerun.py --selection all --type "$t"
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 '''
@@ -193,33 +154,6 @@ alias = "gf"
 description = "Audit golden miss statistics per id (recent-miss%% over the last 10 records; no classification runs)"
 run = "uv run python scripts/golden_rerun.py --selection list"
 alias = "gfl"
-
-[tasks."eval-retrieval"]
-description = "Run pre-LLM retrieval evaluation suite (IR metrics: Recall@k, MRR, NDCG@k, Reranker Uplift)"
-run = "uv run python scripts/retrieval_eval.py"
-alias = "ev"
-
-[tasks."eval-offline"]
-description = "Run offline retrieval evaluation (BM25 + classifier + entity resolution without server dependencies)"
-run = "uv run python scripts/retrieval_eval.py --offline"
-
-[tasks."bakeoff-corpus"]
-description = "Regenerate the embedder bake-off corpus (data/bakeoff_corpus.json) from current data/documents.json: up to ~500 sampled docs, 40-query / 3-tier set (needle / fill / paraphrase). Plain bake-off re-runs reuse the persisted corpus"
-run = "uv run python scripts/bakeoff_corpus.py"
-alias = "bkc"
-
-[tasks.bakeoff]
-description = "Run the embedder bake-off (all candidates): spawns each embedder on :8085, measures per-PID VRAM + MRR/Recall@10/NDCG@10/Hit@k, writes data/bakeoff_report.json. Self-contained; no services needed"
-run = "uv run python scripts/embed_eval.py --bakeoff"
-alias = "bk"
-
-# --- Embedding server ---
-
-# Debug/foreground commands
-[tasks."debug-embed"]
-description = "Start embedding server in foreground (debug)"
-run = "llama-server -hf {{ env.EMBED_MODEL }} --host 0.0.0.0 --port 8081 {{ env.EMBED_FLAGS }} --ubatch-size 8192 -np 1"
-alias = "dse"
 
 # --- LLM server ---
 
@@ -244,26 +178,26 @@ alias = "dsw"
 # --- Gradio chat ---
 
 [tasks.chat]
-description = "Run Gradio chat UI (requires embed + llm services up). Port 7860"
+description = "Run Gradio chat UI (refreshes the store at startup; requires the LLM service up). Port 7860"
 run = "uv run --with gradio python scripts/rag_chat.py"
 alias = "chat"
 
 # --- All services (background via file tasks in .mise/tasks/) ---
 
 [tasks."start-all"]
-description = "Start all services (embed + llm + rerank + chat) with logging"
-depends = ["embed-start", "llm-start", "rerank-start", "chat-start"]
+description = "Start all services (llm + chat) with logging"
+depends = ["llm-start", "chat-start"]
 alias = "start"
 
 [tasks."stop-all"]
-description = "Stop all services (embed + llm + rerank + chat)"
-depends = ["embed-stop", "llm-stop", "rerank-stop", "chat-stop"]
+description = "Stop all services (llm + chat)"
+depends = ["chat-stop", "llm-stop"]
 alias = "down"
 
 # --- Status check ---
 
 [tasks.status]
-description = "Check status of all services (embed, llm, rerank, chat)"
+description = "Check status of all services (llm, chat)"
 run = "uv run python scripts/check_services.py"
 alias = "st"
 
@@ -279,11 +213,6 @@ alias = "dr"
 description = "List all log files in logs directory"
 run = "Get-ChildItem '{{ env.LOGS_DIR }}' -ErrorAction SilentlyContinue | Select-Object Name, Length, LastWriteTime | Format-Table -AutoSize"
 
-[tasks."tail-embed"]
-description = "Tail embedding server log (live, last 20 lines)"
-run = "Get-Content '{{ env.LOGS_DIR }}/embed.log' -ErrorAction SilentlyContinue -Wait -Tail 20"
-alias = "tle"
-
 [tasks."tail-llm"]
 description = "Tail LLM server log (live, last 20 lines)"
 run = "Get-Content '{{ env.LOGS_DIR }}/llm.log' -ErrorAction SilentlyContinue -Wait -Tail 20"
@@ -293,11 +222,6 @@ alias = "tll"
 description = "Tail Open WebUI log (live, last 20 lines)"
 run = "Get-Content '{{ env.LOGS_DIR }}/webui.log' -ErrorAction SilentlyContinue -Wait -Tail 20"
 alias = "tlw"
-
-[tasks."tail-rerank"]
-description = "Tail reranker server log (live, last 20 lines)"
-run = "Get-Content '{{ env.LOGS_DIR }}/rerank.log' -ErrorAction SilentlyContinue -Wait -Tail 20"
-alias = "tlr"
 
 # --- Lint / format ---
 
@@ -315,5 +239,5 @@ run = [
 alias = "fo"
 
 [tools]
-python = "3.14.8"
+python = "3.15"
 ruff = "latest"

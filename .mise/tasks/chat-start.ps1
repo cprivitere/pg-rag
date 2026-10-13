@@ -1,5 +1,5 @@
 #!/usr/bin/env pwsh
-#MISE description="Start Gradio chat on :7860 with logging (primary chat UI)"
+#MISE description="Start Gradio chat on :7860 with logging (primary chat UI; refreshes the store at startup)"
 #MISE alias="sc"
 #MISE depends=["ensure-logs-dir"]
 

@@ -1,11 +1,10 @@
 """Tests pgrag.documents.builder document text generation: recipe XP/reward/
-dropoff fields, item equip/skill/effect/crafting fields, and churn/hash
-stability of the generated text."""
+dropoff fields, item equip/skill/effect/crafting fields, and churn stability of
+the generated text."""
 
 from typing import ClassVar
 
 from pgrag.documents.builder import build_item_documents, build_recipe_documents
-from pgrag.vectorstore.hashes import embedding_hash
 
 
 def _make_db(items=None, recipes=None, attributes=None):
@@ -187,7 +186,7 @@ def test_item_omits_absent_fields():
         assert frag not in text
 
 
-# ---------- T72: churn / hash stability ----------
+# ---------- T72: churn stability ----------
 
 
 def test_churn_identical_source_identical_text():
@@ -204,26 +203,3 @@ def test_churn_identical_source_identical_text():
     t1 = {d["id"]: d["text"] for d in build_item_documents(db1) + build_recipe_documents(db1)}
     t2 = {d["id"]: d["text"] for d in build_item_documents(db2) + build_recipe_documents(db2)}
     assert t1 == t2
-
-
-def test_churn_single_field_change_only_target_hash():
-    base_items = {"item_1": BASIC_ITEM, "item_2": {**BASIC_ITEM, "Name": "Other Shoe"}}
-    base_recipes = {"recipe_1": BASIC_RECIPE, "recipe_2": {**BASIC_RECIPE, "Name": "Cheddar"}}
-    db_base = _make_db(items=base_items, recipes=base_recipes, attributes=ATTRIBUTES)
-    db_changed = _make_db(
-        items=base_items,
-        recipes={**base_recipes, "recipe_1": {**BASIC_RECIPE, "RewardSkillXp": 99}},
-        attributes=ATTRIBUTES,
-    )
-    base = {
-        d["id"]: embedding_hash(d)
-        for d in build_item_documents(db_base) + build_recipe_documents(db_base)
-    }
-    changed = {
-        d["id"]: embedding_hash(d)
-        for d in build_item_documents(db_changed) + build_recipe_documents(db_changed)
-    }
-    assert base["recipe_1"] != changed["recipe_1"]
-    assert base["recipe_2"] == changed["recipe_2"]
-    assert base["item_1"] == changed["item_1"]
-    assert base["item_2"] == changed["item_2"]

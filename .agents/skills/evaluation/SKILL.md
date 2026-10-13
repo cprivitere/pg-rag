@@ -1,12 +1,16 @@
 ---
 name: evaluation
-description: The pg-rag RAG evaluation harness — golden set (fact-presence LLM checks) + pre-LLM IR suite (Recall@k/MRR/NDCG/Hit@k, reranker uplift, entity accuracy), before/after workflow. Use before and after any retrieval or document-generation change that should be measured.
+description: The pg-rag golden evaluation harness — every case answered through the agentic tool loop, fact-presence scored, with GEN-side vs RET-side diagnosis, tuning sweeps, and before/after workflow. Use before and after any retrieval, tool, or document-generation change that should be measured.
 ---
 
-# evaluation — RAG eval harness
+# evaluation — golden eval through the tool loop
 
 The point of this repo's evaluation is making agent changes measurable instead
-of "this seems better."
+of "this seems better." Every case is answered by the **agentic tool loop**
+(`pgrag.agentic.loop.run_loop`); scoring, tier membership, normalization and
+retry live in `src/pgrag/agentic/eval.py`. The one-shot pre-LLM IR-metric suite
+(Recall@k/MRR/NDCG) and the embed-model bakeoff were **deleted** with the dense
+path — there is no per-stage ranking harness anymore.
 
 ## Golden set — `data/golden/*.json`
 
@@ -24,55 +28,144 @@ Each file:
 }
 ```
 
-- `facts` is a list of variant groups: the answer PASSES if ANY variant in
-  each group appears (normalized substring) in the LLM answer.
-- 62 files exist today (23 entity / 26 general / 7 recipe / 6 comparison),
+- `facts` is a list of variant groups: the answer PASSES if ANY variant in each
+  group appears (normalized substring) in the LLM answer. Add a variant, never
+  delete one, when the corpus wording legitimately differs.
+- `xfail: true` marks a known-gap probe — a persistent miss is expected, but a
+  **pass (XPASS) is a failure** forcing you to unflag it.
+- `store: true` marks a case whose facts live in the SQLite store (glogger play
+  history). The loop reads the store, so it runs through the same path — there
+  is no separate store-only harness anymore.
+- 60 files exist today (21 entity / 27 general / 7 recipe / 5 comparison),
   spanning recipes-by-ingredient, level-gated crafting, item acquisition/drops,
   ability lookups, comparisons, quest requirements, wiki lore, wiki how-to
   assembly, and player-state audits. 10 store-only cases (player facts,
-  `"store": true`) count in this total but are excluded from the pipeline
-  harnesses — they run via the agentic eval. Future additions should favor the
-  balanced categories (comparison is 6/62 today — the thinnest bucket).
+  `"store": true`). Future additions should favor the thin buckets (comparison
+  is 5/58 today).
+- **Question-shape rule (learned the hard way, 2026-10-11):** every dimension a
+  case's facts check must be asked for by its question. A question that asks
+  "where" while its facts also demand loot level and creature type fails a
+  correct answer, intermittently (the model answers what was asked). Refactored
+  under this rule: `ratkin-root-tender-location`, `gazluk-keep-dungeon-level`,
+  `sword-vs-unarmed-burst`, `meditation-synergy-skills`, plus the 8 cases split
+  below.
+- **Fact-density rule (2026-10-11):** a case whose facts span many docs AND
+  require ~10 facts in one answer is flaky no matter how the question is worded —
+  the model drops one. Split into focused sub-questions, one per source doc (or
+  per audit dimension). Sampled: 10-fact `dungcrafting`/`gardening` failed on
+  4-6 facts each while every focused case passes. The split → replacement map:
+  `dungcrafting` → `dungcrafting-basics` + `dungcrafting-poop-ability-and-rewards`;
+  `gardening` → `gardening-basics` + `gardening-trainers-and-fertilizer` (its
+  `giant mantises` fact was DROPPED — no Gardening-grounded source);
+  `animal-handling-ability-audit` → `animal-handling-known-abilities` +
+  `animal-handling-family-tames`; `royal-jelly-gathering` →
+  `royal-jelly-what-is-it` + `royal-jelly-obtaining`. The set went 54 → 58 files
+  at roughly the same wall time (the focused cases are 1-2 rounds each).
+- **Residual misses are tool choice, not goldens (2026-10-11).** After the split
+  and the `corpus_search` snippet fix (400 → 1000 chars; see the retrieval
+  skill), `dungcrafting-*`, `royal-jelly-*` and both audit cases pass in both
+  gate modes. `gardening-basics` and `gardening-trainers-and-fertilizer` still
+  fail ~every run, each time on a different fact subset: the model answers skill
+  questions from the CDB `skills`/`abilities` SQL tables and the wiki level-cap
+  trainer page rather than the corpus profile doc, and can assert the opposite
+  of the truth ("Gardening grants no bonus levels to any other skill"). Their
+  facts are provably reachable (`corpus_search "Gardening trainers Floxie
+  Tavilak Kelim"` returns ten `wiki_Gardening_table_0_row_*` hits naming all
+  three), so do **not** "fix" them by weakening the facts. Both ids are listed
+  in `data/golden/FLAKY.txt`; the fix belongs in the loop's tool-choice
+  guidance, not the eval.
+
+## Running it (LLM only)
+
+Every mode needs **only the LLM at :8080** — no embedder, no reranker.
+
+**Two gate modes, same commands** (details: `docs/LLM_MODEL_WIRING.md`):
+
+- **Dev gate (deterministic):** `mise llm-stop`, then `LLM_REASONING=off mise
+  llm-start`, then `mise golden-short` / `mise golden-one <id>`. With thinking
+  off + temp 0 + seed 0 the run is byte-reproducible, so a FAIL is a real
+  regression signal. Not the production config.
+- **Acceptance gate (production):** default flags (reasoning ON) + `mise golden`
+  over the full set. Single-sample noise is expected; a FAIL is a triage item
+  (`--diagnose` labels it GEN-side vs RET-side), not proof.
+
+- `mise golden` — all 60 files through the loop, exit 1 listing missing facts
+  on failure. `--tier {short,all}`, `--ids`, `--type
+  {entity,recipe,comparison,general}`, `--max-facts N`, `--corpus {full,tool}`,
+  `--max-rounds`, `--store`, `--report`, `--diagnose`, `--export [PATH]` are the
+  `scripts/golden_check.py` flags.
+- `mise golden-short` (`--tier short`) — the 8-case representative tier
+  (`SHORT_TIER_IDS` in `pgrag.agentic.eval`); the fast path for a change you
+  just made.
+- `mise golden-one <id[,id2]>` — rerun named cases (`scripts/golden_rerun.py`;
+  comma-separated).
+- `mise golden-type <type...>` — run one type's subset (repeatable).
+- `mise golden-flaky` / `mise golden-flaky-list` — focus on ids whose recent-10
+  miss-share exceeds 50% (plus manual `data/golden/FLAKY.txt`), or audit every
+  id's share. Every run appends a `{id, missing, missing_facts, query_type,
+  attempt_n, ts}` record to `data/golden/history.jsonl` (an accumulating ledger,
+  not a build output).
+
+### Timing (read this before you wait on a run)
+
+Per-case cost is dominated by the reasoning model's rounds (reasoning-ON,
+budget 4096): a store-only case with 1–2 rounds answers in tens of seconds, but
+a 5–6 round wiki case can take minutes per case. **A full 60-case run is a long
+background job — batch it, don't watch it in a foreground terminal.** Use
+`mise golden-one` while iterating and `--tier short` for a smoke check.
+
+### Scoring details
+
+- Generation is pinned to `EVAL_GENERATION = {"temperature": 0, "seed": 0}`.
+  Reasoning-ON decoding is NOT greedy-pinned even then, so the harness **retries
+  once** (2 attempts; the better attempt wins) to damp LLM-side noise — both
+  attempts failing is a regression.
+- `tests/test_golden_check.py` parametrizes over `data/golden/*.json` at
+  collection time → new goldens are AUTO-collected as offline-skipped tests
+  (skip unless the LLM is up); `-m short` selects the tier, the default
+  `not slow` deselects the long tier. No test code per golden.
+
+### Diagnosis: GEN-side vs RET-side
+
+`--diagnose` uses `run_loop`'s returned `documents` (exactly what the model was
+fed) and `trace_rounds` (per tool round) to label each FAIL:
+
+- **GEN-side** — the missing fact was in the fed context; the model dropped it.
+  Fix the prompt / tool contract, not retrieval.
+- **RET-side** — no tool round ever surfaced it. The model queried wrong, or the
+  fact is absent from the store/corpus. Route first, diagnose second.
+- `--export [PATH]` writes, per case, the exact fed context + question/type/facts
+  to a JSONL bundle for oracle replay on a stronger reader (bare writes
+  `data/golden/golden_context_bundle.jsonl`).
 
 ## Live-session goldens (answer-then-validate workflow)
 
 Standing session workflow: the user asks a gameplay question → research the
-answer against the live store + corpus → give the answer. **A new golden is
-the exception, not the default.** Pin one ONLY when the pipeline that would
-own it answers materially worse than you can, and only AFTER the user
-confirms. A question the pipeline already handles adds no signal; every
-golden is a permanent acceptance gate that must keep passing.
+answer against the live store + corpus → give the answer. **A new golden is the
+exception, not the default.** Pin one ONLY when the loop answers materially
+worse than you can, and only AFTER the user confirms. A question the loop
+already handles adds no signal; every golden is a permanent acceptance gate.
 
 1. **Research** against the store (`data/sqlite_gorgon.db`) and corpus. Sync
    first when the user just played: `ingest_glogger`/`ingest_session` are
    incremental (or run `mise agentic-chat`, whose preflight syncs).
-2. **Answer the user.** Ground every claim in a store table or corpus doc; if
-   a fact needed manual derivation (JOIN, arithmetic, name-mapping), note it
-   — that is exactly the part the model may fumble.
-3. **Measure the pipeline before proposing a golden.** Ask the same question
-   back through the pipeline that would own it — the DB/store tool loop
-   (`mise agentic-chat`) for player-state facts, the corpus pipeline
-   (`mise chat`, or `scripts/rag_chat.py` for a CLI REPL) for CDN/wiki facts
-   — and compare against your oracle answer. A golden is warranted ONLY when
-   that run is lower quality than it should be: a fact missing, an entity
-   misidentified, a routing miss, or an answer that needed manual SQL
-   gymnastics the model will not repeat. If the pipeline answers as well as
-   you did, stop here — no golden, no test.
-4. **Ask the user before writing a golden.** Even when step 3 shows a gap,
-   never pin the user's question as a golden unprompted — state the measured
-   gap plus the proposed id and facts, and get an explicit yes. Only then
-   create the file.
-5. **Derive fact groups** from what you verified. Every fact must exist in the
-   data you actually checked (grep the store / documents.json first — an
-   un-grounded fact is a permanently-failing test).
+2. **Answer the user.** Ground every claim in a store table or corpus doc; note
+   any fact you derived by hand (a JOIN, arithmetic, name-mapping) — that is
+   exactly the part the model may fumble.
+3. **Measure before proposing a golden.** Ask the same question back through the
+   loop (`mise agentic-chat`) and compare against your oracle answer. A golden is
+   warranted ONLY when that run is lower quality than it should be: a fact
+   missing, a wrong route, or an answer that needed manual SQL gymnastics the
+   model will not repeat. If the loop answers as well as you did, stop — no
+   golden.
+4. **Ask the user before writing a golden.** Even when step 3 shows a gap, state
+   the measured gap plus the proposed id and facts, and get an explicit yes.
+5. **Derive fact groups** from what you verified (grep the store /
+   `documents.json` first — an un-grounded fact is a permanently-failing test).
 6. **Route the golden:** facts from the player's own state (sheet abilities,
-   stall ledger, kills, favor) → `"store": true` (pipeline tiers skip it;
-   `mise agentic-eval` picks it up automatically). Facts from CDN/wiki corpus
-   → plain golden, validated with `mise golden-one -- <id>`.
-7. **Validate before committing:** run the golden through its eval path
-   (`mise agentic-eval` for store-only, `golden_rerun.py --id <id>` for
-   corpus). A FAIL means the model can't reproduce your answer — diagnose
-   (`--diagnose` for pipeline, trace_rounds for agentic) and fix the gap
+   stall ledger, kills, favor) get `"store": true`; CDN/wiki facts stay plain.
+7. **Validate before committing:** `mise golden-one <id>` (or `--diagnose`). A
+   FAIL means the model can't reproduce your answer — diagnose and fix the gap
    (tool, prompt note, doc builder) before committing. A golden that fails on
    commit is a known-gap trap, not a convenience.
 8. **Commit** the golden together with whatever fix it forced.
@@ -80,172 +173,71 @@ golden is a permanent acceptance gate that must keep passing.
 ### Traps learned the hard way (each cost a debug session)
 
 - **`abilities.level_req` is not a known-gate.** Shrine/riddle unlocks
-  (TameBear/TameCat) carry `level_req=1` yet may be unknown. The known list
-  lives ONLY in `char_reports` sheet `Skills[<skill>].Abilities`; non-skill
-  abilities (CharmRat) are bucketed under the pseudo-skill `"Unknown"` — audit
-  both buckets. `player_state section=abilities` does this diff.
+  (TameBear/TameCat) carry `level_req=1` yet may be unknown. The known list lives
+  ONLY in `char_reports` sheet `Skills[<skill>].Abilities`; non-skill abilities
+  (CharmRat) are bucketed under the pseudo-skill `"Unknown"` — audit both.
+  `player_state section=abilities` does this diff.
 - **`game_state_skills` is fresher than the sheet dump for LEVELS** (log-sourced
   vs export-time); the sheet is the only source for ability LISTS. Cross-check
   both; state which timestamp each claim comes from.
-- **Pipeline context is corpus-side; player-state facts can never appear in
-  it.** Diagnosing a store-only golden via the pipeline gives a guaranteed
-  RET-SIDE/GEN-SIDE false signal — route first, diagnose second.
+- **A store-only fact can never appear in the corpus.** Diagnosing a store-only
+  case via `corpus_search` alone gives a guaranteed RET-side false signal —
+  route first, diagnose second.
 - **Name mismatches across sources:** wiki "Bear Anatomy" ↔ CDN/game "Bear and
   Bugbear Anatomy"; sheet keys have no spaces (`AnimalHandling`). Normalize
   before diffing.
 - **A personal-data answer usually implies a schema/tool gap.** The AH audit
-  session produced `player_state section=abilities`; the stall session
-  produced the stall classifier. If you needed manual SQL gymnastics to answer
-  a question the model will get again, that gymnastics belongs in a tool or
-  doc-builder, not in the golden alone.
-- **Pricing questions have two layers; name both or the model answers the wrong one.**
- `items.value` is the CDN base value; `stall_events` holds realized prices —
- but only from the player's OWN stall (the store has no other players'
- stalls, so no market sample exists). A bare "pricing" question answered
- only from `items.value` is a routing miss: the loop's schema summary now
- routes pricing/pricing-trend questions to stall_events and
- `player_state section=stall` (added for the fat-woe-cutting-circuit
- session) lists each realized sale individually — averages erase the price
- spread and truncated windows must point aggregates back at sql_query. An
- item with zero stall history (Woe Coin) is currency: fall back to
- `sources`→`npcs`/`quests` for where it's spent (Sven the Bleeder barters).
- Zero-stall-history *materials* (Gloamwood, Soulbiter Larva, Orcish N Core,
- most slabs/sands) must instead fall back to the CDN **base value**
- (`items.value`) plus any `configured`/`visible` asking price, each labeled as
- base / asking — never as a realized sale. That fallback was added 2026-10-09
- (golden `stall-price-slabs-sands-gizmos`): `player_state section=stall` now
- prints the item's base value in every branch (sales / asking / zero-sale) and
- the schema summary tells the loop to do the same when it writes its own SQL —
- before this the loop dead-ended at "no price available" for exactly the items
- a "price of X" question names.
+  session produced `player_state section=abilities`; the stall session produced
+  the stall classifier. If you needed manual SQL gymnastics to answer a question
+  the model will get again, that gymnastics belongs in a tool or doc-builder.
+- **Pricing has four layers; name them or the model answers the wrong one.**
+  `items.value` is the CDN base value (the vendor floor); a **work order** is
+  the guaranteed floor for items that are a Collect objective (fixed councils ÷
+  required count — e.g. 5 Phoenix Eggs → 120,833 = 24,167 each, Industry 60
+  scroll); `stall_events` holds realized prices — but only from the player's OWN
+  stall (no other players' stalls exist in the store); and `chat_events` holds
+  other players' *asking* prices, which the tool attempts best-effort
+  (price-token filter over the social channels, labeled `CHAT PRICE MENTIONS …
+  NOT realized sales`). A "pricing" question answered only from `items.value`
+  is a routing miss: `player_state section=stall` lists each realized sale
+  individually (averages erase the spread) and prints the item's CDN base value
+  in every branch (sales / asking / zero-sale — plus the work-order payout and
+  chat mentions when they exist), so a zero-stall item falls back to base value
+  + `sources`→`npcs`/`quests` — or to a dated chat mention — instead of
+  dead-ending (golden `stall-price-slabs-sands-gizmos`).
 - **Synergy is directional, and the CDN stores it one way only.** A skill's
   `Rewards[level].BonusToSkill = X` means that skill grants a bonus level TO
-  `X` — the *outgoing* direction. Ask "what gives synergy to Meditation?" and
-  a dossier carrying only the outgoing lines makes the model answer backwards
-  (it listed Psychology/Archery/… — skills Meditation *feeds*). Fix: the skill
-  profile now carries a computed `Synergy Levels (bonus levels received from
-  other skills):` section (inverse over every skill's `Rewards`), so the
-  incoming sources (Unarmed 43, Compassion 10/50, Phrenology 15, each racial
-  Phrenology 20) sit in the entity context. Sibling bug found while
-  diagnosing (fixed 2026-10-05): `wiki_builder._build_entity_index` skipped
-  any CDN record with no `Name` — 40 skills (Meditation, Unarmed, Compassion,
-  …) — so their entire wiki page (incl. the wiki's own Synergy Levels table)
-  never linked into the dossier. The index now falls back to the record key
-  for the `skills` table (`_KEY_IS_NAME_TABLES`; 39/39 skill pages with a
-  wiki page relink), and `CACHE_VERSION`/`DOCUMENTS_VERSION` were bumped so
-  the change is actually emitted — regenerate with `mise generate-docs` +
-  `mise build-index --source wiki`.
+  `X` (outgoing). "What gives synergy to Meditation?" needs the *incoming*
+  direction — the skill profile carries a computed
+  `Synergy Levels (bonus levels received from other skills)` section (inverse
+  over every skill's `Rewards`).
 - **An answered question is not automatically a golden.** Auto-pinning every
-  session question bloats the set with cases the pipeline already passes,
-  slowing `mise golden`/`agentic-eval` for zero regression coverage. Golden
-  intake is gated on a *measured* pipeline gap (step 3) plus explicit user
-  confirmation (step 4); "the user asked it" is not a reason.
+  session question bloats the set with cases the loop already passes. Intake is
+  gated on a *measured* gap plus explicit user confirmation.
 
-## Running it
+## Tuning sweeps
 
-- `uv run python scripts/golden_check.py` — needs embed (:8081) + LLM (:8080)
-  up (`mise start`). Exits 1 with the missing facts on failure.
-- `tests/test_golden_check.py` parametrizes over `data/golden/*.json` at
-  collection time → new goldens are AUTO-collected as offline-skipped tests
-  (skip unless servers up). No test code needed per golden.
-- `mise golden-type recipe` — subset by type (entity|recipe|comparison|general,
-  repeatable); `--max-facts N` caps case weight. Both `golden_check.py` and
-  `golden_rerun.py` accept `--type`/`--max-facts`.
-- **Store-only cases** (`"store": true` in the golden JSON): facts live in the
-  agentic SQLite store (glogger play history), not in the RAG corpus — the
-  pipeline harnesses (golden_check/golden_rerun/-m short/-m long) skip them;
-  they run via the agentic tool loop instead (`mise agentic-eval`, which
-  appends them to the short tier automatically).
-
-## Retrieval eval suite (pre-LLM IR metrics)
-
-- `mise eval-retrieval` (alias `ev`) — full per-stage run (needs embed :8081
-  + rerank :8082 up; `build-index` required first). `scripts/retrieval_eval.py`.
-- `mise eval-offline` — `--offline` variant: BM25 + query classifier + entity
-  hub resolution only, no server deps. Use when you only touched retrieval
-  stages that don't need Chroma/rerank.
-- **Dataset**: `evaluation/queries.jsonl` — hand-authored gold input (tracked).
-  Each line: `id`, `query`, `query_type`, `expected_classifier`,
-  `target_entities`, `relevant_ids`, `relevant_names`, `category`.
-- **Output**: `evaluation/results/latest.json` (gitignored, generated).
-  `--baseline` reruns against a saved snapshot for diff/regression comparison
-  (`compare_benchmarks`).
-- The offline entity-hub path reuses `build_entity_context_offline`, so it
-  measures the same wiki-linked dossier the live pipeline builds.
-- Metrics count **canonical retrievable units**, not raw index docs: a wiki
-  table's `_coverage` + `_row_<n>` docs and any `_chunk_<n>` split collapse to
-  one unit (applied to both relevant and ranked, deduped). Without this the
-  per-row explosion deflates recall@k and chunked ranked docs never match base
-  relevant ids.
-- **Comparison queries** (`query_type == "comparison"`, ≥2 entities) are scored
-  on the multi-entity dossier production feeds the LLM
-  (`build_multi_entity_context`), not the single-hub rerank window — both
-  subjects must be present in the scored context.
-- Retrieval surfaces terse-stub lookup docs (e.g. ability/area stubs) by
-  **exact entity-name injection + promotion**: the bounded longest multi-token
-  span that resolves to a known entity name is injected into the query and the
-  matching explicit-id doc is promoted, so a stub that never appears via dense
-  embedding still ranks. Fragments that only partially match are excluded.
-- Add queries to `evaluation/queries.jsonl` to cover a regression case; prefer
-  a new per-stage assertion in `tests/test_retrieval_eval.py` for pure metric
-  or well-formedness guarantees.
-
-## Embed-model bakeoff (`embed_eval.py`)
-
-- `mise bakeoff` (alias `bk`) — `uv run python scripts/embed_eval.py --bakeoff`:
-  ranks all `BAKEOFF_CANDIDATES` on the persisted `data/bakeoff_corpus.json`
-  (40-query needle/fill/paraphrase set, `mise bakeoff-corpus` regenerates it)
-  → MRR/Recall/NDCG@10, HardMRR, per-PID VRAM. Spawns each embedder on :8085.
-- **Per-candidate `query_prefix`/`doc_prefix` are card-verified (2026-08-22)
-  and live only in `BAKEOFF_CANDIDATES`** — a prefix is a per-model property,
-  not a runtime flag. Sources: embeddinggemma `task: search result | query: `
-  + `title: none | text: `; jina-v5-retrieval `Query:`/`Document:`; nomic
-  `search_query:`/`search_document:` (both required); bge-small-en-v1.5
-  `Represent this sentence for searching relevant passages: ` on queries
-  only (docs bare); bge-m3 / MiniLM-L6 / mxbai-xsmall embed bare. When adding
-  or changing a candidate, verify the prompt against the model's HF card — a
-  prefix borrowed from another family is a confound (`mxbai-xsmall`'s bare is
-  its card behavior, not an oversight). **Production embed is bge-small-f16**
-  (wired 2026-08-22): `Represent this sentence...` query prefix, docs bare,
-  pooling `cls`, hard 512-token server cap (input chars clipped to `llama_embeddings.MAX_EMBED_CHARS` = 2000).
-
-## Two layers of measurement
-
-1. **LLM end-to-end** — fact presence (subset recall of stated facts) over
-   `data/golden/*.json`. Cheapest signal that the answer is right.
-2. **Pre-LLM IR suite** (`src/pgrag/rag/retrieval_eval.py`) — per-stage
-   ranking metrics over `evaluation/queries.jsonl`, so a regression can be
-   pinned to the exact stage (BM25, dense, hybrid RRF, rerank, entity hub)
-   instead of "LLM said something wrong":
-   - Recall@k, MRR, NDCG@k, Hit@k
-   - Reranker Uplift (Δ NDCG@5 rerank vs hybrid)
-   - Entity accuracy (Jaccard / strict match on entity linkage)
+`mise agentic-tune` (`scripts/agentic_tune.py`) sweeps (model, temperature, seed,
+reasoning budget, max-rounds) into `data/agentic_tune/<run-id>.json`
+(skip-if-exists, `--force` re-runs, `--compare` tabulates). Measured outcome:
+**temp 0 confirmed** (no candidate beat it on any seed — goldens stay temp
+0/seed 0), **reasoning budget 4096 kept**, **Ornith-1.5-9B kept**. The tuning
+case set lives in `data/eval/tune_cases.json` (never `data/golden/`).
 
 ## Before/after workflow
 
-1. Pick a focused query set (or write a new golden for the failing case).
-2. Run `golden_check.py` / targeted tests → record baseline.
+1. Pick a focused golden set (or write a new golden for the failing case).
+2. Run it → record baseline (`--report` / `data/agentic_eval_report.json`).
 3. Make the change (one stage).
-4. Re-run — compare pass/fail AND inspect which docs ranked (scripts/retrieval.py).
-5. If the "fix" only moved a ranking problem downstream, go back to stage
-   localization (`retrieval` skill).
+4. Re-run — compare pass/fail AND read the `--diagnose` GEN/RET labels.
+5. If the "fix" only moved a problem downstream, go back to stage localization
+   (`retrieval` skill).
 
-## Planned direction
+## Legacy: pre-LLM IR suite (DELETED)
 
-- Golden set is **at 62 and growing** via live-session goldens (see the
-  workflow above), but intake is gated: a session question becomes a golden
-  only when the owning pipeline measurably underperforms on it AND the user
-  confirms. Prefer filling thin buckets (comparison is the thinnest at 6/62)
-  over adding near-duplicates of passing cases. Beyond session intake, capture
-  a *named regression case*,
-  e.g.:
-  - `grow-field-mushrooms` ("How do I grow Field Mushrooms?") — fails before
-    wiki page expansion, passes after (already present).
-  - a `recipes-using-spider-silk`-style metadata/keyword case — fails before
-    recipe metadata enrichment, passes after (covered by the
-    `recipes-using-basic-spider-silk` family).
-- When adding a golden: ground every fact in the corpus first (`grep
-  data/documents.json`) so it is actually retrievable — an un-grounded fact
-  is a permanently-failing test.
-- Extend `evaluation/queries.jsonl` (48 cases today) across the same
-  categories, and promote benchmark snapshots into regression thresholds.
+The `eval-retrieval` / `eval-offline` commands, the pre-LLM IR suite
+(retrieval_eval in scripts and src, plus its test), and the embed bakeoff
+(embed_eval / bakeoff_corpus) were deleted with the dense path — none of those
+files exist, including `evaluation/queries.jsonl` (deleted 2026-10-11 with the
+rest of the orphaned artifacts). Do not rebuild an IR harness: the loop's own
+gate (`mise golden` + `--diagnose`) is the measurement surface.

@@ -109,15 +109,16 @@ Running models requires the user to attach a GPU via the notebook specs
 button in the UI. After attach, the sandbox is recreated:
 
 - New URL, new token → re-paste → cache upsert.
-- Fresh CUDA image with **CPU torch** (`2.11.0+cu130` etc.) - the notebook's
-  own `setup` cell handles the repair to `torch==2.14.0+cu132`; after repair,
-  the **session must be restarted in the UI** so the kernel re-imports torch.
-- `nvidia-smi -L` and `/tmp/uv-venv/bin/python -c "import torch;
-  torch.cuda.is_available()"` are the probes to run after any sandbox change.
-- The notebook's tool-loop mode also needs the vLLM sidecar and the private store
-  snapshot — see `docs/MOLAB_OPS.md` "Private store bucket" / "Tool-loop sidecar
-  config" before pairing on it. Remember the sandbox has **no repo checkout**
-  (molab imports only the notebook file): pushing
+- The surviving notebook's kernel never imports torch: inference is the vLLM
+  sidecar, so there is **no env-repair cell and no session-restart step** (those
+  belonged to the deleted corpus-chat mirror notebook).
+- `nvidia-smi -L` is the probe to run after any sandbox change; on a CPU-only
+  sandbox `notebooks/molab-agentic/notebook.py` refuses to launch the sidecar and
+  tells the user to attach the GPU first.
+- The tool-loop notebook also needs the vLLM sidecar and the private store
+  snapshot — see `docs/MOLAB_OPS.md` "Private store bucket" / "vLLM sidecar"
+  before pairing on it. Remember the sandbox has **no repo checkout** (molab
+  imports only the notebook file): pushing
   `scripts/molab_vllm_launch.sh` is the agent's job, or point the user at
   `notebooks/molab-agentic/notebook.py`, which auto-launches the launcher copy
   inside the extracted `pg-rag-src/` tarball and needs no torch at all.

@@ -34,7 +34,20 @@ $logFile = Join-Path $logDir 'llm.log'
 # docs/LLM_MODEL_WIRING.md. Swap models by editing the two [env] vars, then
 # `mise llm-stop` → `mise llm-start`. Launchers append only host/port/-np/log-file
 # assembly — no model literals here, so this comment never goes stale on swap.
-$serverArgs = @('-hf', $env:LLM_MODEL) + ($env:LLM_FLAGS -split '\s+') + @('--host','0.0.0.0','--port','8080','-np','1',"--log-file","$logFile")
+#
+# Dev-gate switch: `LLM_REASONING=off` appends `--reasoning off` to the flags.
+# Reasoning defaults ON in this build and reasoning-ON greedy is NOT
+# reproducible (the thinking trajectory is not greedy-pinned), so a golden case
+# can pass or fail on the same input. With reasoning off + temp 0 + seed 0 the
+# gate is byte-reproducible, which makes a FAIL a real signal — keep the
+# production flags for acceptance runs. See docs/LLM_MODEL_WIRING.md
+# ("Card flags & determinism") and the evaluation skill.
+$serverFlags = $env:LLM_FLAGS
+if ($env:LLM_REASONING -eq 'off') {
+    $serverFlags = "$serverFlags --reasoning off"
+    Write-Host 'LLM_REASONING=off -> appending --reasoning off (deterministic dev gate)'
+}
+$serverArgs = @('-hf', $env:LLM_MODEL) + ($serverFlags -split '\s+') + @('--host','0.0.0.0','--port','8080','-np','1',"--log-file","$logFile")
 
 Start-Process -FilePath $exe -ArgumentList $serverArgs -WindowStyle Hidden
 

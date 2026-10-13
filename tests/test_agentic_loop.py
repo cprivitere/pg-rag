@@ -42,6 +42,41 @@ def _no_tools(messages, tools, generation, max_tokens):
     return {"choices": [{"message": {"role": "assistant", "content": "final answer"}}]}
 
 
+def test_truncated_generation_is_reasked_not_returned(tiny_store, monkeypatch):
+    """`finish_reason="length"` means the answer was cut mid-sentence. The loop
+    must re-ask with the digest framing at a doubled budget instead of shipping
+    the stump — a truncated cheesemaking answer dropped every fact after the
+    cut (the last rows of its progression table)."""
+    calls = []
+
+    def truncated_then_complete(messages, tools, generation, max_tokens):
+        calls.append({"tools": tools, "max_tokens": max_tokens})
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "## Steps … cut off"},
+                        "finish_reason": "length",
+                    }
+                ]
+            }
+        return {
+            "choices": [
+                {"message": {"role": "assistant", "content": "complete answer"}, "finish_reason": "stop"}
+            ]
+        }
+
+    monkeypatch.setattr(loop, "_post", truncated_then_complete)
+    result = loop.run_loop("How do I level Cheesemaking?", store_path=str(tiny_store))
+    assert result["answer"] == "complete answer"
+    assert len(calls) == 2
+    assert calls[1]["tools"] is None  # the re-ask cannot call tools
+    assert calls[1]["max_tokens"] == calls[0]["max_tokens"] * 2
+    # `documents` is what the model was fed: the BM25 seed is always there.
+    assert result["documents"]
+    assert result["rounds"] == 0
+
+
 def test_no_tool_rounds_returns_single_generation(tiny_store, monkeypatch):
     monkeypatch.setattr(loop, "_post", _no_tools)
     result = loop.run_loop("What is an Empty Bottle?", store_path=str(tiny_store))
@@ -99,6 +134,19 @@ def test_native_tool_call_round_appends_tool_message(tiny_store, monkeypatch):
     assert result["answer"] == "It is the Empty Bottle."
     assert result["rounds"] == 1
     assert result["trace_rounds"][0]["tool"] == "sql_query"
+    # The chat Sources block and `golden_check --diagnose` consume these: one
+    # entry per tool round with a readable args preview, and `documents` = the
+    # exact text the model was fed (seed + tool results).
+    assert result["trace_rounds"][0]["args_preview"] == "SELECT name FROM items"
+    assert result["sources"] == [
+        {
+            "citation": "sql_query: SELECT name FROM items",
+            "tool": "sql_query",
+            "rows_or_len": result["trace_rounds"][0]["rows_or_len"],
+            "ms": result["trace_rounds"][0]["ms"],
+        }
+    ]
+    assert any("Empty Bottle" in block for block in result["documents"])
     assert seen["tools"], "native tools= parameter must be passed"
 
 
@@ -128,6 +176,48 @@ def test_fenced_tool_block_round(tiny_store, monkeypatch):
     assert result["answer"] == "Found: Empty Bottle."
     assert result["rounds"] == 1
     assert result["trace_rounds"][0]["tool"] == "find_entities"
+
+
+def test_malformed_native_tool_call_falls_back_to_text_protocol(tiny_store, monkeypatch):
+    """llama.cpp 500s the whole request when the model emits malformed native
+    tool-call JSON ("Failed to parse tool call arguments as JSON" — seen live on
+    1/62 golden cases). The loop must retry that turn without native tools (the
+    fenced ```tool protocol has no server-side parser) and keep native tools off
+    for the rest of the run, so the failure costs one generation, not one per
+    round."""
+    calls = []
+
+    def fake(messages, tools, generation, max_tokens):
+        calls.append(tools)
+        if len(calls) == 1:
+            raise loop.LLMServerError(
+                "LLM server at http://x returned HTTP 500: "
+                '{"error":{"message":"Failed to parse tool call arguments as JSON: ..."}}'
+            )
+        if len(calls) == 2:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": (
+                                'retrying\n```tool\n{"name": "sql_query", '
+                                '"args": {"sql": "SELECT name FROM items"}}\n```'
+                            ),
+                        }
+                    }
+                ]
+            }
+        return {"choices": [{"message": {"role": "assistant", "content": "It is the Empty Bottle."}}]}
+
+    monkeypatch.setattr(loop, "_post", fake)
+    result = loop.run_loop("items?", store_path=str(tiny_store))
+    assert result["answer"] == "It is the Empty Bottle."
+    assert result["rounds"] == 1
+    assert result["trace_rounds"][0]["tool"] == "sql_query"
+    assert calls[0] is not None, "native tools are used first"
+    assert calls[1] is None, "the retry must drop native tools"
+    assert all(tools is None for tools in calls[1:]), "native tools stay off for the run"
 
 
 def test_native_qwen_function_block_round(tiny_store, monkeypatch):

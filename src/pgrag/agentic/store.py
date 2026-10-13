@@ -187,7 +187,7 @@ def _num(value, default=None):
         return value
     try:
         return float(value) if isinstance(value, str) and "." in value else int(value)
-    except ValueError, TypeError:
+    except (ValueError, TypeError):
         return default
 
 
@@ -623,4 +623,53 @@ def build_store(
         conn.commit()
     finally:
         conn.close()
+    return counts
+
+
+def refresh_store(store_path: str = DEFAULT_DB_PATH, *, skip: bool = False) -> dict[str, int]:
+    """Incrementally refresh the live play-history sources in an existing store.
+
+    Session (chat logs, player log, reports, books) and glogger ingestion are
+    watermark-incremental, so unchanged sources re-copy 0 rows. Prints a note
+    only for tables that actually changed, and never raises: a broken source
+    degrades to a note so the caller (chat) still answers from the store as-is.
+    Returns the ingestion counts (empty when ``skip``).
+
+    Callers: `scripts/agentic_chat.py` (per process) and `scripts/rag_chat.py`
+    (at startup) — the Gradio UI would otherwise answer play-history questions
+    from whatever the last `mise sql-store` left behind.
+    """
+    if skip:
+        return {}
+    # Lazy imports: session.py and glogger.py import MANIFEST_PATH from this
+    # module, so importing them here would be circular.
+    from pgrag.agentic.glogger import ingest_glogger
+    from pgrag.agentic.session import ingest_session
+
+    counts: dict[str, int] = {}
+    try:
+        conn = sqlite3.connect(store_path)
+        try:
+            counts = ingest_session(conn, DEFAULT_SESSION_DIR)
+            try:
+                counts.update(ingest_glogger(conn))
+            except Exception as gexc:
+                # Session data may have committed above; report it accurately
+                # instead of claiming the store is untouched.
+                if any(n for t, n in counts.items() if n):
+                    print(f"[sync] session refreshed, glogger failed ({gexc})")
+                    return counts
+                raise
+            changed = {
+                t: n
+                for t, n in counts.items()
+                if n and t != "glogger_snapshots" and not t.endswith("_wm")
+            }
+            if changed:
+                print(f"[sync] refreshed: {changed}")
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        print(f"[sync] skipped ({exc}); using store as-is")
     return counts

@@ -1,5 +1,5 @@
 """Tests scripts.curator_scheduler.run_curator_with_scheduler ordering: the
-build-documents subprocess must run before build-index (V25)."""
+curator must run before the documents rebuild (V25)."""
 
 import sys
 from unittest.mock import MagicMock, patch
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from scripts.curator_scheduler import run_curator_with_scheduler
 
 
-def test_v25_scheduler_runs_main_before_build_index():
+def test_v25_scheduler_rebuilds_documents_after_curator():
     calls = []
 
     def fake_subprocess(args, **kwargs):
@@ -23,6 +23,6 @@ def test_v25_scheduler_runs_main_before_build_index():
     ):
         run_curator_with_scheduler()
 
-    main_idx = calls.index([sys.executable, "-m", "pgrag.cli", "build-documents"])
-    build_idx = calls.index([sys.executable, "-m", "pgrag.cli", "build-index"])
-    assert main_idx < build_idx, "V25: build-documents must run before build-index"
+    curator_idx = calls.index([sys.executable, "-m", "scripts.curator"])
+    docs_idx = calls.index([sys.executable, "-m", "pgrag.cli", "build-documents"])
+    assert curator_idx < docs_idx, "curator must run before the documents rebuild"

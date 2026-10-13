@@ -67,7 +67,7 @@ def stream_generate(prompt, temperature=0.2, seed=None):
             break
         try:
             delta = json.loads(data)["choices"][0]["delta"].get("content")
-        except ValueError, KeyError, IndexError, TypeError:
+        except (ValueError, KeyError, IndexError, TypeError):
             continue
         if delta:
             yield delta
