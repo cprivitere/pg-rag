@@ -95,6 +95,10 @@ def flaky_ids(
       start '#'). Only consulted when `explicit_manual` is True — otherwise
       manual picks would surprise.
 
+    Ids with no `data/golden/<id>.json` are dropped from both sources: the
+    ledger and FLAKY.txt outlive deleted goldens, and a deleted id must not
+    print (or read) as flaky.
+
     Sorts derived before manual; both id order stable by recency (their most
     recent record's ts desc — freshest pain first).
     """
@@ -122,10 +126,11 @@ def flaky_ids(
             if gid and not gid.startswith("#"):
                 manual_ids.append(gid)
 
+    have = set(all_golden_ids())
     seen: set[str] = set()
     out: list[str] = []
     for gid in derived_ids + manual_ids:
-        if gid in seen:
+        if gid in seen or gid not in have:
             continue
         seen.add(gid)
         out.append(gid)
@@ -145,6 +150,17 @@ def miss_stats(history: list[dict] | None = None) -> list[tuple]:
         rows.append((gid, missing / len(recent) if recent else 0.0, len(recs)))
     rows.sort(key=lambda r: (-r[1], r[0]))
     return rows
+
+
+def audit_rows(history: list[dict] | None = None) -> list[tuple]:
+    """`miss_stats` rows restricted to ids that still have a golden file.
+
+    `data/golden/history.jsonl` is an append-only ledger, so deleted ids
+    (`animal-handling-ability-audit`, `royal-jelly-gathering`, …) would
+    otherwise keep showing up (and, for a busy id, flagging) as flaky.
+    """
+    have = set(all_golden_ids())
+    return [row for row in miss_stats(history) if row[0] in have]
 
 
 def all_golden_ids() -> list[str]:
@@ -366,7 +382,7 @@ def main() -> int | None:
             )
             return 0
         print(f"{'id':40s} {'recent-miss%':>12s} {'records':>8s}")
-        for gid, share, n in miss_stats(history):
+        for gid, share, n in audit_rows(history):
             flag = "  <-- flaky" if share > _FLAKY_MISSING_SHARE else ""
             print(f"{gid:40s} {share:14.0%} {n:8d}{flag}")
         return 0

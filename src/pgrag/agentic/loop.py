@@ -181,6 +181,17 @@ Notes:
   level 100 - cost 126 SR or 252,000'. There is no '<Skill> Training' page
   title: search/get_page the NPC name ('Jenny Foster', 'Burl', 'Sanja'), not
   the skill, and quote the cost line verbatim.
+- Skill trainer LISTS (everyone who teaches skill X): the wiki level-cap page
+  lists only a subset. The complete CDN list:
+  SELECT n.name, n.area_friendly FROM npcs n, json_each(n.services) s WHERE
+  json_extract(s.value,'$.Type') = 'Training' AND EXISTS (SELECT 1 FROM
+  json_each(json_extract(s.value,'$.Skills')) sk WHERE sk.value =
+  REPLACE('<skill name>',' ','')) ORDER BY n.name;  -- Gardening → Floxie (Fae
+  Realm), Julius Patton, Kelim, Suspicious Cow, Tavilak, Therese. The service
+  key is normally the skill name without spaces (Animal Handling →
+  AnimalHandling); if the query returns nothing, retry with
+  json_extract(s.value,'$.Skills') LIKE '%<key-part>%' (Knife Fighting →
+  Knife).
 - Access gates are QUESTS: for 'how do I get into X / what does the guard
   want / how do I reach Y' search corpus_search with the gate's own nouns
   (e.g. 'rat guarding a door museum cheese' → quest 'Tethertooth's Museum',
@@ -190,6 +201,30 @@ Notes:
 - abilities.raw is JSON; base PvE damage per ability is
   json_extract(raw, '$.PvE.Damage') (e.g. Fireball 14, Fire Breath 80).
   Use it for damage comparisons instead of guessing from descriptions.
+- skills.raw is JSON: per-level rewards live under `Rewards` (keys are level
+  strings; values may carry `BonusToSkill`). The plain `skills` columns carry NO
+  synergy data — never answer 'this skill grants no bonus levels' from them.
+  Bonus levels a skill GRANTS:
+  SELECT rel.key, json_extract(rel.value,'$.BonusToSkill') FROM skills sk,
+  json_each(sk.raw,'$.Rewards') rel WHERE sk.name = <skill display name> AND
+  json_extract(rel.value,'$.BonusToSkill') IS NOT NULL;  -- Gardening →
+  20:Foraging, 25:Rabbit, 30:Cooking, … (also 45:Pig, 60:Mycology,
+  85:Tailoring) — quote every row, not just the first few.
+- The RECEIVED direction ('what gives synergy to X') is precomputed in the
+  corpus skill profile. Its doc id uses the skill's INTERNAL key, not the
+  display name (Dungcrafting → skillprofile_Pooping_chunk_0, Sigil Scripting →
+  skillprofile_SigilScripting_chunk_0). corpus_search 'BonusToSkill <skill>'
+  usually returns it, but a thin profile (Dungcrafting, 2 Rewards lines) can be
+  missing from the hits entirely while a bare skill_<key> doc answers instead —
+  so if the profile is NOT among the hits, or ranks below skill_<key>, ALSO run
+  corpus_search 'skill profile <skill>'. The profile carries Description, Type,
+  Max Bonus Levels, Trainers, Recipes and Quests — prefer it over a wiki page
+  for 'what does skill X do / grant'. The bare skill_<Key> doc has NO ability,
+  Requires, or quest lines — the profile is the only source for 'Requires Beast'
+  and 'Graffiti: Mastering "Poop"'. For 'what quest does mastering <skill>
+  unlock', also query the quests table directly (quests.rewards / objectives
+  reference the skill, e.g. Graffiti quests) since the quest line can sit past
+  corpus_search's 1000-char snippet cap.
 - keywords/slots/result_items are ' | '-joined TEXT; Lint_* internal markers
   are already filtered out of keyword columns (still in raw).
 - recipes.result_items format: "ItemCode xStackSize" (e.g. '5011 x3').
@@ -239,6 +274,15 @@ Notes:
   item_key='item_<code>' AND json_extract(entries,'$.type')='Barter' →
   npcs.key → npcs.name (e.g. Woe Coin → NPC_SvenTheBleeder → 'Sven the
   Bleeder'). item_key is literally 'item_' || code from the items table.
+  For a 'where do I get X' question ALWAYS run this and a vendor search before
+  concluding there is no source — recipe/uses docs are not acquisition:
+  SELECT json_extract(entries,'$.type'), json_extract(entries,'$.npc'),
+  json_extract(entries,'$.questId') FROM sources WHERE item_key = 'item_' ||
+  (SELECT code FROM items WHERE name = '<item name>') LIMIT 50;
+  -- all types, not just Barter; plus corpus_search '<item> vendor'.
+  (Verified: 'astounding ink vendor' ranks source_items_item_4105 #1 with Spot /
+  Hirochi / Wintria / Michael / Vendor Fox / Liamu, while a bare 'astounding
+  ink' query returns only recipe-uses tables.)
 - Ingredient item codes always resolve: JOIN ingredients.item_code = items.code
   to get names (e.g. SELECT i.item_code, it.name, i.stack FROM ingredients i
   JOIN items it ON it.code = i.item_code WHERE i.recipe_id = ?). Never tell

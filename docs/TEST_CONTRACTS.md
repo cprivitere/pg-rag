@@ -246,7 +246,7 @@ test (prove the source is fine) or recording a deliberate contract change
 
 ### L6 — Golden gate (`data/golden/*.json` through the loop)
 
-- **Tests**: `test_golden_check.py`
+- **Tests**: `test_golden_check.py`, `test_golden_rerun.py`
 - **Source**: `scripts/golden_check.py`, `scripts/golden_rerun.py`,
   `src/pgrag/agentic/eval.py` (normalization, tier membership, retry-once,
   report assembly)
@@ -265,8 +265,12 @@ test (prove the source is fine) or recording a deliberate contract change
   `SHORT_TIER_IDS`/`GOLDEN_DIR`/`EVAL_GENERATION` are single-sourced in
   `pgrag.agentic.eval` (asserted by `scripts/check_docs.py`).
 - **Change ⇒** `uv run pytest tests/test_golden_check.py -m short` (offline
-  collection + skip shape), then a live `mise golden-short` for the actual
-  facts. **Per-case cost is dominated by the reasoning model's rounds** — a
+  collection + skip shape, LLM-less) and `uv run pytest
+  tests/test_golden_rerun.py` (the `audit_rows`/`flaky_ids` selection filters —
+  these tests are unmarked, so they must NOT be on the `-m short` command,
+  which would deselect all of them), then a live `mise golden-short` for the
+  actual facts.
+  **Per-case cost is dominated by the reasoning model's rounds** — a
   store-only case answers in tens of seconds; a 5-6 round wiki case takes
   minutes; the full 61-case set is a long background run, not a foreground
   watch. Use `mise golden-one <id>` while iterating.
@@ -277,8 +281,9 @@ test (prove the source is fine) or recording a deliberate contract change
   exceeds 50% (plus manual entries in `data/golden/FLAKY.txt`); `list` audits
   shares. `history.jsonl` is an accumulating ledger, **not a build output** —
   its tests use tmp paths only. Note: the classic harness's offline rerun and
-  xfail-gate tests were deleted with the dense path; the rerun tool is now
-  exercised only via the CLI.
+  xfail-gate tests were deleted with the dense path: the run/record path is
+  exercised via the CLI, while the audit/selection filters (`audit_rows`,
+  `flaky_ids`) are unit-tested offline in `test_golden_rerun.py`.
 
 ### L7 — LLM client
 

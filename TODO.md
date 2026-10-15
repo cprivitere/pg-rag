@@ -1,47 +1,72 @@
 # Ideas to try
 
 - Burn down the flaky golden queue (`mise golden-flaky-list`, audit with
-  `uv run python scripts/golden_rerun.py --selection list`): current stats —
-  `ratkin-root-tender-location` 75%, `strom-farblood-favor` 75%,
-  `astounding-ink-acquisition` 67%, `animal-handling-trainer-bands` 50%,
-  `poison-belt-best` 50%; plus the manual trio in `data/golden/FLAKY.txt`
+  `uv run python scripts/golden_rerun.py --selection list`): current audit
+  (2026-10-14; recent-10 share, so reruns shift it) —
+  `ratkin-root-tender-location` 60%, `strom-farblood-favor` 60%,
+  `animal-handling-trainer-bands` 50%, `meditation-synergy-skills` 50%,
+  `poison-belt-best` 50%, `dungcrafting-poop-ability-and-rewards` 40%,
+  `gardening-basics` 10%; `data/golden/FLAKY.txt` now
+  holds only `dungcrafting-poop-ability-and-rewards`. The former manual trio
   (`gardening-basics`, `gardening-trainers-and-fertilizer`,
-  `astounding-ink-acquisition`). The audit still prints deleted ids
-  (`animal-handling-ability-audit`, `grow-field-mushrooms`,
-  `royal-jelly-gathering`, `mycology-skill`, `riding-trainer-bands`) because
-  `history.jsonl` is append-only and `--selection list` does not filter to
-  existing golden files — small tool hygiene fix: skip ids with no
-  `data/golden/<id>.json`. Triage each with
+  `astounding-ink-acquisition`) RECOVERED 2026-10-13 via the loop guidance
+  below and was deleted from `data/golden/FLAKY.txt`; all three pass the
+  deterministic gate (`LLM_REASONING=off`) and the production gate (trio alone,
+  and inside a full `mise golden` run), though `gardening-basics` still shows
+  one miss in its last 10 records (2026-10-14T01:53). Also landed: both
+  `--selection list` and `--selection flaky` drop ids with no golden file
+  (`scripts/golden_rerun.py::audit_rows`/`flaky_ids`,
+  `tests/test_golden_rerun.py`), so the deleted
+  `animal-handling-ability-audit`, `grow-field-mushrooms`,
+  `royal-jelly-gathering`, `mycology-skill`, `riding-trainer-bands` no longer
+  print (or read) as flaky. New standing entry:
+  `dungcrafting-poop-ability-and-rewards` (loses "Requires Beast" in production
+  runs with the guidance in place — 0/12 solo attempts vs 4/4 at the pre-change
+  prompt; context-sensitive inside a full `mise golden` run (FAIL, FAIL, PASS
+  across three runs) while the deterministic gate is the reverse; see below).
+  Triage each with
   `uv run python scripts/golden_rerun.py --id <id> --diagnose`: GEN-SIDE (fact in
   context, LLM dropped it) -> prompt-shape / loop-guidance fix; RET-SIDE ->
   retrieval. Fix the source, never the assertion.
 
-- **Loop tool-choice guidance — the systemic fix behind the remaining flaky
-  trio** (`gardening-basics`, `gardening-trainers-and-fertilizer`,
-  `astounding-ink-acquisition`). Their facts are reachable — verified
-  2026-10-11: `corpus_search "astounding ink vendor"` ranks
-  `source_items_item_4105` (Vendor from Spot / Hirochi …) **#1**, and a natural
-  Gardening-trainer query returns ten `wiki_Gardening_table_0_row_*` hits naming
-  Floxie/Tavilak/Therese — but the model (a) answers skill questions from the
-  CDB `skills`/`abilities` tables, which carry no `BonusToSkill` column (it once
-  asserted "Gardening grants no bonus levels to any other skill"), instead of
-  the corpus skill profile, and (b) runs ONE broad search for acquisition
-  questions, gets only the recipe-*uses* tables, and declares "I can't point you
-  to a specific source" (`astounding ink`) without ever querying `sources` or
-  searching `<item> vendor`. Fix lives in `src/pgrag/agentic/loop.py`: a rule in
-  `_SYSTEM_TEMPLATE` — "for where-do-I-get-X: query the `sources` table and
-  search '<item> vendor' / '<item> source' before concluding there is no source;
-  for skill rewards / trainers / abilities read the corpus skill profile (the
-  CDB `skills` table has no BonusToSkill column)" — plus a matching line in
-  `_SCHEMA_SUMMARY`'s skills + `sources` notes. Acceptance: `mise golden-short`,
-  then the trio (`mise golden-one
-  gardening-basics,gardening-trainers-and-fertilizer,astounding-ink-acquisition`),
-  then a full `mise golden` (61 cases), in both gate modes (add
-  `LLM_REASONING=off` for the deterministic dev signal). Do NOT weaken the trio's
-  facts — they are correct and source-grounded; the goldens were the wrong
-  suspect. (The `corpus_search` 400→1000 snippet fix already landed 2026-10-11:
-  `_SEARCH_SNIPPET` in `src/pgrag/agentic/tools.py` + the
-  `test_corpus_search_snippet_reaches_doc_tail` regression test — don't redo it.)
+- **DONE 2026-10-13 — Loop tool-choice guidance (the systemic fix behind the
+  flaky trio) landed** in `src/pgrag/agentic/loop.py` (`_SCHEMA_SUMMARY`, three
+  query-recipe notes; no `_SYSTEM_TEMPLATE` rule in the shipped shape — see the
+  tradeoff below): (1) skill trainer LISTS come from
+  `npcs.services` (`json_extract(s.value,'$.Type')='Training'` +
+  `json_each(...Skills)`, key = skill name without spaces), because the wiki
+  level-cap page lists only a subset; (2) 'where do I get X' runs the `sources`
+  table for `item_key='item_'||code` across ALL entry types plus
+  `corpus_search '<item> vendor'` before concluding there is no source —
+  recipe/uses docs are not acquisition, and a bare item-name search returns
+  only the recipe-uses tables; (3) skill synergy reads the corpus skill profile
+  (`corpus_search 'BonusToSkill <skill>'` → `skillprofile_<Skill>_chunk_0`,
+  which also carries Description / Type / Abilities / Trainers / Quests), never
+  the plain `skills` columns (they carry no `BonusToSkill` — the model used to
+  assert "Gardening grants no bonus levels to any other skill"). Verified
+  2026-10-13: the trio passes the deterministic gate (`LLM_REASONING=off`:
+  trio + `mise golden-short`) and the production gate (trio alone, and inside a
+  full `mise golden` run) — see TODO's flaky-queue entry.
+  **Open tradeoff (follow-up):** under production flags the guidance destabilises
+  `dungcrafting-poop-ability-and-rewards` when that case runs ALONE (0/12
+  attempts vs 4/4 at the pre-change prompt; it RET-side loses "Requires Beast",
+  which lives only in `skillprofile_Pooping_chunk_0`), while the same case
+  *passes* deterministically with the guidance and *fails* at the pre-change
+  prompt. Inside a full 61-case run it is context-sensitive (FAIL, FAIL, PASS
+  across three runs). Root cause is the suggested profile query:
+  `BonusToSkill Dungcrafting` does not return `skillprofile_Pooping_chunk_0`
+  at all (measured k=10/k=20, full and tool corpora) — Dungcrafting's profile
+  is thin (2 Rewards lines), so the bare `skill_Pooping` doc wins on token
+  echo and the requirement line is never in context. Querying the profile
+  directly works (`corpus_search 'skill profile Dungcrafting'` →
+  `skillprofile_Pooping_chunk_0` #1), and loop.py's guidance now says to
+  re-query whenever the profile is missing from the hits. A single-id
+  reasoning-ON run (2026-10-14) PASSED with the corrected guidance (1/1), so
+  the 0/12 above belongs to the pre-fix wording. An earlier
+  `_SYSTEM_TEMPLATE` rule + transcription directive ("answer WHERE/WHAT-grants
+  questions from a targeted query", "transcribe every entry of the list") was
+  dropped: it never changed this case's outcome and the trio passes without it.
+  Tracked in `data/golden/FLAKY.txt`.
 
 - Golden coverage: comparison is the thinnest bucket (5 of 58). Intake for new
   goldens is live-session questions; the workflow lives in
