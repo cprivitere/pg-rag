@@ -9,6 +9,46 @@ CACHE_VERSION = 1
 DEFAULT_INDEX_PATH = "data/documents.json"
 DEFAULT_PICKLE_PATH = "data/bm25_index.pkl"
 
+# Query-side stopwords (the index itself keeps every token, so the persisted
+# pickle stays valid). A long natural-language question otherwise ranks docs
+# that merely repeat function words above the doc holding the answer: common
+# terms carry a small-but-nonzero idf, and a doc stuffed with 'the'/'does'/'it'
+# accumulates more of them than a focused doc earns from its few rare terms.
+# Measured 2026-10-15 — the raw `dungcrafting-poop-ability-and-rewards`
+# question ranked `wiki_Citan Forum Posts…` and `effect_effect_7028` above
+# `skillprofile_Pooping_chunk_0`; without function words the profile (and
+# `skill_Pooping`) enter the top 5. It also RAISES docs within the seed rather
+# than newly seeding them for other long-question goldens (ratkin's
+# `creature_Ratkin_Root-Tender` 7 → 1, strom's `wiki_Strom Farblood_Favor`
+# 3 → 1) — those were already in the k=12 seed.
+# NOT a free win: the drop removes the credit long prose docs used to earn from
+# function words, so some seeds cover FEWER facts than before — measured over
+# the 61 golden questions, a strict multi-word-fact substring check on the
+# k=12 seed loses 13 fact-group hits and gains 15 (worst: meditation-synergy
+# 15 → 8; animal-handling-trainer-bands 2 → 0). Those cases pass because the
+# model's own tool calls carry the facts, and the full gate is the arbiter
+# (59/61 → 61/61 on 2026-10-15), not the seed.
+# Bare words only: `_tokenize` is `\w+`, so "don't" tokenizes to don + t and an
+# entry like "don't" would never match. `off`/`only`/`under` are DELIBERATELY
+# absent: hyphenated corpus vocabulary tokenizes to them (Off-Hand, Off-Guard,
+# '(Fae Only)', 'Caves Under Serbule') and dropping them inverts those queries
+# (measured: the Off-Hand bead question then ranks a Main-Hand row #1).
+# Contract: tests/test_bm25.py.
+_QUERY_STOPWORDS = frozenset((
+    "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any",
+    "are", "as", "at", "be", "because", "been", "before", "being", "below", "between",
+    "both", "but", "by", "can", "cannot", "could", "did", "do", "does", "doing", "down",
+    "during", "each", "few", "for", "from", "further", "had", "has", "have", "having", "he",
+    "her", "here", "hers", "herself", "him", "himself", "his", "how", "i", "if", "in",
+    "into", "is", "it", "its", "itself", "just", "me", "more", "most", "must", "my",
+    "myself", "no", "nor", "not", "of", "on", "once", "or", "other", "ought",
+    "our", "ours", "ourselves", "out", "over", "own", "same", "she", "should", "so", "some",
+    "such", "than", "that", "the", "their", "theirs", "them", "themselves", "then", "there",
+    "these", "they", "this", "those", "through", "to", "too", "until", "up", "very",
+    "was", "we", "were", "what", "when", "where", "which", "while", "who", "whom", "why",
+    "with", "would", "you", "your", "yours", "yourself", "yourselves",
+))
+
 
 class BM25:
     def __init__(self, k1=1.2, b=0.75):
@@ -55,6 +95,12 @@ class BM25:
         query_terms = self._tokenize(query)
         if not query_terms or not self.doc_count:
             return [], []
+        # Function words carry no signal for lexical ranking (see
+        # _QUERY_STOPWORDS). A query made ONLY of them ("what is it") keeps them
+        # rather than returning nothing.
+        content_terms = [t for t in query_terms if t not in _QUERY_STOPWORDS]
+        if content_terms:
+            query_terms = content_terms
 
         tf = Counter(query_terms)
         scores = {}

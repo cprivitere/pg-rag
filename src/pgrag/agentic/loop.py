@@ -71,6 +71,25 @@ def _strip_tool_markup(text: str) -> str:
 _DIGEST_BUDGET = 24_000
 
 
+def _final_messages(question: str, trace_rounds: list, messages: list[dict]) -> list[dict]:
+    """The forced-final request: digest framing, no tools, a doubled budget
+    (a reasoning model with a 4096 thinking budget can otherwise return empty
+    `content`). Used by the empty-or-truncated guard and by the malformed-tool
+    -call recovery when the model repeats the call that 500s the server."""
+    return [
+        {"role": "system", "content": _FINAL_SYSTEM},
+        {
+            "role": "user",
+            "content": (
+                f"{_gathered_digest(trace_rounds, messages)}\n\nOriginal question:"
+                f" {question}\n\nWrite the final answer now. Do not request any "
+                "tool; if a fact was never retrieved, state exactly what is "
+                "missing."
+            ),
+        },
+    ]
+
+
 def _gathered_digest(trace_rounds: list, messages: list[dict]) -> str:
     """Compress tool results into the fallback prompt: newest results first,
     each row-capped, total budgeted so a big conversation cannot push the
@@ -181,6 +200,12 @@ Notes:
   level 100 - cost 126 SR or 252,000'. There is no '<Skill> Training' page
   title: search/get_page the NPC name ('Jenny Foster', 'Burl', 'Sanja'), not
   the skill, and quote the cost line verbatim.
+- WHICH trainer teaches WHICH LEVEL BAND is the skill's OWN page, not the
+  per-NPC tables: get_page('<Skill>') and read its Training section ('Levels
+  51-60 are unlocked by Gisli in Serbule Keep.'). Quote EVERY 'Levels A-B are
+  unlocked by …' line verbatim — a band can have more than one trainer (Animal
+  Handling 81-90: Emersil the Ever-Gloating deep beneath Povus AND Sir Abbley
+  in Statehelm) — and give each trainer's location from the same line.
 - Skill trainer LISTS (everyone who teaches skill X): the wiki level-cap page
   lists only a subset. The complete CDN list:
   SELECT n.name, n.area_friendly FROM npcs n, json_each(n.services) s WHERE
@@ -287,6 +312,17 @@ Notes:
   to get names (e.g. SELECT i.item_code, it.name, i.stack FROM ingredients i
   JOIN items it ON it.code = i.item_code WHERE i.recipe_id = ?). Never tell
   the user item codes are unresolvable without running this join.
+- 'Which recipes use X / what does X make' comes from the itemuses table: its
+  recipes_that_use is a JSON array of recipe IDs, so resolve the NAMES in one
+  query — never quote a bare id, and say an item is used by no recipe only
+  after the join returns nothing (the table covers ingredients: 1,184 rows of
+  11,048 items, so an empty result is the normal, correct answer):
+  SELECT r.name FROM itemuses iu, json_each(iu.recipes_that_use) j
+  JOIN recipes r ON r.id = j.value
+  WHERE iu.item_key = 'item_' || (SELECT code FROM items WHERE name = <item>);
+  -- Moonstone → White Dye (2 ranks of resolution: the corpus doc
+  itemuse_<item_key> lists only 'Recipe IDs: 24105'). 'What is X used for' is
+  broader: ALSO quote the item's own Usage/Description text.
 - Recipe lists and unlock levels are authoritative in the recipes table
   (recipes.skill + recipes.skill_level_req, XP in recipes.reward_xp /
   reward_xp_first). Wiki skill pages contain tables with unlabeled numeric
@@ -328,14 +364,23 @@ Notes:
     stall prices reflect your own listings/sales, never a market sample.
     Report each sale's price separately (never average them). Or use
     player_state section=stall (query=item name) for the pre-digested
-    sale list (it also prints the item's CDN base value).
+    sale list (it also prints the item's CDN base value AND the item's
+    `source:` lines — where it comes from / is spent: 'source: Barter via
+    <NPC>', 'source: Quest via <quest>', 'source: Recipe via <recipe>').
+    A CATEGORY or plural ask ('all metal slabs', 'all sands') needs ONE call
+    per category, not one per variant: pass the shared words as query —
+    player_state section=stall (query='metal slab') returns every variant's
+    sale rows (measured: 63 slab sales, 52 sand sales in one payload). And
+    items.value is the BASE value, never the ledger: never report 'no stall
+    data' for an item or category from an items-table lookup alone.
     When an asked item has NO stall rows at all, do not dead-end at "no
     price": fall back to its CDN base value (items.value) and to any
     'configured'/'visible' asking price, and label each as base value or
     asking price — never as a realized sale. For an item the ledger barely
     covers (currency/barter/trophy), also say where it comes from or is
     spent (sources → npcs/quests) — a price answer without that context is
-    incomplete.
+    incomplete, so quote those `source:` lines (e.g. Woe Coin is a barter
+    currency: 'source: Barter via Sven the Bleeder').
     Revenue = SUM(price_total) WHERE action='bought'; owners' own buys are
     NOT excluded automatically — group by player to separate.
   - game_state_gift_log(id, character_name, npc_key, npc_name, gifted_at,
@@ -376,6 +421,14 @@ Notes:
   - game_state_npc_vendor(character_name, npc_key, vendor_gold_available,
     vendor_gold_max, councils_earned_current, councils_earned_lifetime,
     last_confirmed_at) — NPC vendor gold pool + your sell earnings per NPC.
+    It has NO npc_name column (unlike game_state_favor / game_state_gift_log),
+    so resolve the NAME in the query — never guess the column into existence and
+    never rank vendors from an unfiltered 'SELECT * … LIMIT n' sample:
+    SELECT n.name, v.councils_earned_lifetime, v.vendor_gold_available
+    FROM game_state_npc_vendor v JOIN npcs n ON n.key = v.npc_key
+    ORDER BY v.councils_earned_lifetime DESC LIMIT 10;  -- lifetime totals are
+    cumulative (they only grow), so answer 'which vendor earned me the most'
+    from councils_earned_lifetime, not the current-run column.
   Snapshot-linked rows are from the LATEST character_snapshots id (per-store
   watermark); event tables are cumulative history. All tables are small
   enough for GROUP BY except item_transactions (~240k rows) — filter it by
@@ -406,7 +459,8 @@ Tools (call to gather more data; up to {max_rounds} rounds):
    has no stall rows), plus any chat_events lines where other players quote a
    price for the item (labeled as mentions, not sales), plus the item's
    work-order turn-in payout when one exists (fixed councils ÷ required count =
-   the guaranteed per-unit floor).
+   the guaranteed per-unit floor), plus the item's `source:` lines (barter /
+   quest / recipe — where it comes from or is spent).
 
 How to call tools:
 - Preferred: emit a native tool call (the API's tools parameter).
@@ -743,18 +797,48 @@ def run_loop(
         try:
             data = _post(messages, tools, generation, max_tokens)
         except LLMServerError as exc:
-            if not (tools and "Failed to parse tool call arguments" in str(exc)):
+            # llama.cpp 500s the whole request when its own tool-call parser
+            # chokes on the arguments the model emitted. With native tools on,
+            # drop to the fenced text protocol for the rest of the run; with
+            # them already off (the forced final turn — the model keeps emitting
+            # calls from its history) there is nothing to drop and no round left
+            # to run the call in, so the notice must ask for the answer instead
+            # of a re-issued call (a re-emitted call there is returned verbatim
+            # by the `not calls or rounds_used >= max_rounds` branch below).
+            # A non-tool-call server error still propagates; a REPEAT of a
+            # malformed call is recovered by forcing the final answer (below),
+            # so the failure costs one extra generation, not the run.
+            if "Failed to parse tool call arguments" not in str(exc):
                 raise
             native_tools_ok = False
-            messages.append(
-                {
-                    "role": "user",
-                    "content": "(system) Your last tool call was malformed JSON and the "
-                    "server rejected it. Re-issue it as a fenced ```tool block whose "
-                    "JSON is valid, or answer from what you already have.",
-                }
+            notice = (
+                "(system) Your last tool call was malformed JSON and the server "
+                "rejected it. Re-issue it as a fenced ```tool block whose JSON is "
+                "valid, or answer from what you already have."
             )
-            data = _post(messages, None, generation, max_tokens)
+            if tools is None:
+                notice = (
+                    "(system) The server rejected your last tool call as malformed "
+                    "JSON and no tool rounds remain. Answer now from the data already "
+                    "gathered — do not emit another tool call."
+                )
+            messages.append({"role": "user", "content": notice})
+            try:
+                data = _post(messages, None, generation, max_tokens)
+            except LLMServerError as retry_exc:
+                # A model stuck re-emitting the call it just wrote 500s the
+                # server again. Stop asking for tool calls altogether and force
+                # the grounded final answer; an ERROR here would score a golden
+                # case that was never evaluated (2 of 6 full runs on 2026-10-15)
+                # and would hand a chat user an error instead of an answer.
+                if "Failed to parse tool call arguments" not in str(retry_exc):
+                    raise
+                data = _post(
+                    _final_messages(question, trace_rounds, messages),
+                    None,
+                    generation,
+                    max_tokens * 2,
+                )
         choice = data["choices"][0]
         message = choice["message"]
         # Empty-or-truncated guard: a reasoning model can spend its whole
@@ -769,20 +853,8 @@ def run_loop(
         if (
             not (message.get("content") or "").strip() or choice.get("finish_reason") == "length"
         ) and not message.get("tool_calls"):
-            digest = _gathered_digest(trace_rounds, messages)
             data = _post(
-                [
-                    {"role": "system", "content": _FINAL_SYSTEM},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"{digest}\n\nOriginal question: {question}\n\n"
-                            "Write the final answer now. Do not request any "
-                            "tool; if a fact was never retrieved, state "
-                            "exactly what is missing."
-                        ),
-                    },
-                ],
+                _final_messages(question, trace_rounds, messages),
                 None,
                 generation,
                 # Thinking-model budget: leave room for `content` after the

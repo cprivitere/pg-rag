@@ -7,11 +7,13 @@
    "Flia"
   ],
   [
+   "647287",
+   "647,287",
    "621",
    "621389",
    "621,389"
   ]
  ],
  "store": true,
- "notes": "Store-only case: facts live in data/sqlite_gorgon.db (glogger play history), not in the RAG corpus. Run via the agentic loop (`mise agentic-eval`), not pipeline golden checks."
+ "notes": "Store-only case: facts live in data/sqlite_gorgon.db (glogger play history), not in the RAG corpus. Grounding (2026-10-15): SELECT n.name, v.councils_earned_lifetime FROM game_state_npc_vendor v JOIN npcs n ON n.key = v.npc_key ORDER BY v.councils_earned_lifetime DESC -> Flia 647,287 (then Cheb 544,038; 585 rows, 1 per NPC). The lifetime figure was pinned at authoring (621,389) and DRIFTS as the player plays - variants for both readings are kept (add the current one, never delete); the durable fact is the NPC name. game_state_npc_vendor has no npc_name column, so the name needs the npcs JOIN: the 3 misses on 2026-10-15 were all the same failure (a query inventing `npc_name` errored, the model fell back to `SELECT * FROM game_state_npc_vendor LIMIT 5` and answered from that arbitrary row sample - Cheb - and the 621 variants were satisfied incidentally by Roshun the Traitor's 351,621 in passing answers). loop.py's `_SCHEMA_SUMMARY` now says so explicitly."
 }

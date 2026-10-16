@@ -45,6 +45,26 @@ A related trap: for skill questions the model often answers from the CDB
 can claim "this skill grants no bonus levels" while the corpus profile doc holds
 the full list — a RET/GEN miss that looks like a data gap but is tool choice.
 
+**Query-side stopwords.** `BM25.search` drops function words
+(`BM25._QUERY_STOPWORDS` in `src/pgrag/rag/bm25.py`) before scoring; the index
+keeps every token, so the persisted pickle is unaffected and no rebuild is
+needed. This matters for the loop's seed, which passes the **raw question**:
+before the filter, a long natural-language question scored docs stuffed with
+`the`/`does`/`it` above the doc holding the answer (measured 2026-10-15 — the
+`dungcrafting-poop-ability-and-rewards` question ranked a Citan forum post and
+`effect_effect_7028` above `skillprofile_Pooping_chunk_0`, so the profile's
+`Requires Beast` line never entered context and the case flapped RET-side; with
+the filter the profile is seed hit #5). If a long-question case misses while its
+keywords work as a short query, suspect the query shape, not the data.
+It is **not free**: the drop removes the credit long prose docs used to earn
+from function words, so a few seeds cover FEWER facts than before (measured
+over the 61 golden questions: 13 fact-group hits lost vs 15 gained on the
+k=12 seed; worst `meditation-synergy-skills` 15 → 8). Those cases still pass
+because the model's own tool calls carry the facts — the **full gate** is the
+arbiter, not the seed. `off`/`only`/`under` are deliberately NOT filtered:
+hyphenated corpus vocabulary tokenizes to them (Off-Hand, Off-Guard,
+'(Fae Only)', 'Caves Under Serbule') and dropping them inverts those queries.
+
 ## Debugging discipline
 
 **First localize the failure to the GEN side or the RET side. Never modify

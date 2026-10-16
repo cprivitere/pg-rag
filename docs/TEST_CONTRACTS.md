@@ -119,7 +119,11 @@ test (prove the source is fine) or recording a deliberate contract change
   `load_bm25_index`), invoked by `python -m pgrag.rag.bm25` (`mise build-bm25`)
   and `scripts/build_tool_corpus.py` (`mise build-tool-corpus`).
 - **Contracts**: pure BM25 lexical ranking (`test_bm25.py` — a known doc ranks
-  highest for its own terms); the persisted pickle ≡ the in-memory index
+  highest for its own terms; a query whose tokens are all function words still
+  searches, and a doc made only of function words never outranks the doc holding
+  the answer — `BM25._QUERY_STOPWORDS` filters common words *query-side only*,
+  leaving the indexed token stream and the persisted pickle untouched); the
+  persisted pickle ≡ the in-memory index
   (same rankings); the cache is **mtime-keyed** on `data/documents.json` — it
   serves the pickle while the source is unchanged and rebuilds otherwise, and
   survives a stale/corrupt pickle by rebuilding instead of raising.

@@ -220,6 +220,71 @@ def test_malformed_native_tool_call_falls_back_to_text_protocol(tiny_store, monk
     assert all(tools is None for tools in calls[1:]), "native tools stay off for the run"
 
 
+def test_malformed_tool_call_on_final_no_tools_turn_is_retried(tiny_store, monkeypatch):
+    """contract: the malformed-tool-call 500 is re-asked even when native tools
+    are ALREADY off (the forced final turn — the model keeps emitting tool calls
+    from its history). Before: run_loop re-raised whenever `tools` was None, so
+    the case was never evaluated and `mise golden` reported "hit an LLM server
+    error" (live: animal-handling-known-abilities, 2026-10-15)."""
+
+    def fake(messages, tools, generation, max_tokens):
+        if tools is not None:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": (
+                                '```tool\n{"name": "sql_query", '
+                                '"args": {"sql": "SELECT name FROM items"}}\n```'
+                            ),
+                        }
+                    }
+                ]
+            }
+        if any("malformed JSON" in (m.get("content") or "") for m in messages):
+            return {
+                "choices": [{"message": {"role": "assistant", "content": "It is the Empty Bottle."}}]
+            }
+        raise loop.LLMServerError(
+            "LLM server at http://x returned HTTP 500: "
+            '{"error":{"message":"Failed to parse tool call arguments as JSON: ..."}}'
+        )
+
+    monkeypatch.setattr(loop, "_post", fake)
+    result = loop.run_loop("items?", store_path=str(tiny_store), max_rounds=1)
+    assert result["answer"] == "It is the Empty Bottle."
+    assert result["rounds"] == 1
+
+
+def test_repeated_malformed_tool_call_forces_final_answer(tiny_store, monkeypatch):
+    """contract: when the model re-emits the malformed call the server just
+    500ed, the loop stops asking for tool calls and forces the grounded final
+    answer instead of raising. Before: the second 500 propagated out of
+    run_loop, so `mise golden` scored the case ERROR (never evaluated) — seen
+    live on 2 of 6 full runs 2026-10-15 (`animal-handling-known-abilities`,
+    `ranalon-den-quests`)."""
+    calls = []
+
+    def fake(messages, tools, generation, max_tokens):
+        calls.append((tools, messages[0].get("content")))
+        if messages[0].get("content") == loop._FINAL_SYSTEM:
+            return {
+                "choices": [{"message": {"role": "assistant", "content": "It is the Empty Bottle."}}]
+            }
+        raise loop.LLMServerError(
+            "LLM server at http://x returned HTTP 500: "
+            '{"error":{"message":"Failed to parse tool call arguments as JSON: ..."}}'
+        )
+
+    monkeypatch.setattr(loop, "_post", fake)
+    result = loop.run_loop("items?", store_path=str(tiny_store))
+    assert result["answer"] == "It is the Empty Bottle."
+    assert calls[0][0] is not None, "native tools are used first"
+    assert all(tools is None for tools, _ in calls[1:]), "every retry drops tools"
+    assert calls[-1][1] == loop._FINAL_SYSTEM, "the recovery must use the forced-final framing"
+
+
 def test_native_qwen_function_block_round(tiny_store, monkeypatch):
     """Contract: the served checkpoint's own tool syntax is parsed and executed.
 
