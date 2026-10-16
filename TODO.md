@@ -132,13 +132,28 @@
   split by source doc instead (see the 2026-10-11 splits).
 
 - Track pricing of items in player stalls and player work orders
-  - Other players' stalls: glogger's Personal-build `stall_price_observations`
-    (v68 market intel — "prices observed at OTHER players' stalls", 0 sentinel =
-    price pending) is mirrored into the store but read by nothing, and both the
-    tool output (`src/pgrag/agentic/tools.py`, the stall branch) and the loop's
-    schema note (`src/pgrag/agentic/loop.py`, the `stall_events` bullets) still
-    tell the model "this store has no other players' stalls". Update those notes
-    and surface the table (now: 3 rows, all `price_unit=0`).
+  - **DONE 2026-10-15 — Other players' stalls are a live store surface.**
+    glogger's Personal-build `stall_price_observations` (v68 market intel,
+    `price_unit 0` = price pending) was mirrored but read by nothing, and both
+    the tool banner and the loop's schema note told the model "this store has no
+    other players' stalls" — a false claim. Now: `player_state section=stall`
+    appends an `OTHER PLAYERS' STALLS` block in both branches (sales and
+    zero-sale), each row dated with stall label / owner / source and
+    `price not recorded (pending)` when glogger has no price; the loop note and
+    `_TOOL_CONTRACT` name the table and forbid presenting those rows as your own
+    sale or a market average (`scripts` need no change — ingest already mirrors
+    it). Contract: `tests/test_agentic_tools.py::
+    test_player_state_stall_other_players_observations`. Live rows are 4 (all
+    `price_unit 0`, `owner_name` NULL, `stall_label` 'Unidentified Stall'), so
+    the block currently reports observations without prices — real prices need
+    glogger captures, not a code change. A golden is NOT warranted yet: two
+    direct `run_loop` probes (2026-10-15) answered as well as a hand-written
+    oracle — the broad "what have I observed other players' stalls selling?"
+    went straight to `stall_price_observations` and reported all 4 rows with the
+    pending-price sentinel, owners and stall labels, and the targeted
+    "what's Great Phlogiston worth?" answered from the tool block (own sales by
+    price, the dated observation, chat mentions as asking prices). Revisit when
+    a PRICED observation exists — the fact set is thin until then.
   - Player work orders (signboard orders you post and price): no store surface at
     all — no `work_order` table, ingest or parser anywhere in `src/`/`scripts/`;
     only CDN NPC work-order turn-ins and `WORKORDER_COIN_REWARD_MOD` exist. Needs

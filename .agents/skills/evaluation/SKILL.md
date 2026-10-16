@@ -195,7 +195,10 @@ already handles adds no signal; every golden is a permanent acceptance gate.
   the guaranteed floor for items that are a Collect objective (fixed councils ÷
   required count — e.g. 5 Phoenix Eggs → 120,833 = 24,167 each, Industry 60
   scroll); `stall_events` holds realized prices — but only from the player's OWN
-  stall (no other players' stalls exist in the store); and `chat_events` holds
+  stall; `stall_price_observations` holds what the player saw at *other*
+  players' stalls (typed/OCR captures + auto-detected purchases, `price_unit 0`
+  = price pending — dated observations, never own sales and never a market
+  average); and `chat_events` holds
   other players' *asking* prices, which the tool attempts best-effort
   (price-token filter over the social channels, labeled `CHAT PRICE MENTIONS …
   NOT realized sales`). A "pricing" question answered only from `items.value`

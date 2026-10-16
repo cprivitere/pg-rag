@@ -546,6 +546,52 @@ def _stall_source_lines(conn: sqlite3.Connection, query: str) -> list[str]:
     return out
 
 
+_OTHER_STALL_HEADER = (
+    "OTHER PLAYERS' STALLS (market intel YOU observed there — typed/OCR captures"
+    " and auto-detected purchases; never your own listing and never one of your"
+    " sales):"
+)
+
+
+def _other_stall_lines(conn: sqlite3.Connection, query: str, limit: int = 20) -> list[str]:
+    """What YOU observed at OTHER players' stalls for ``query``.
+
+    glogger's Personal build keeps prices seen at other players' stalls in
+    ``stall_price_observations`` (v68 market intel: typed/OCR captures plus
+    auto-detected purchases; ``price_unit`` 0 = price pending, ``owner_name``
+    NULL = stall not identified). A priceless row still says that stall sells
+    the item, so rows are reported as dated OBSERVATIONS — never mixed with the
+    player's own realized sales, and never averaged into a market price."""
+    try:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table'"
+            " AND name='stall_price_observations'"
+        ).fetchone()
+        if not exists:
+            return []
+        pats = _item_name_like(query)
+        clause = " OR ".join("item_name LIKE ?" for _ in pats)
+        rows = conn.execute(
+            "SELECT observed_at, item_name, quantity, price_unit, stall_label,"
+            " owner_name, source, notes FROM stall_price_observations"
+            f" WHERE {clause} ORDER BY observed_at DESC LIMIT ?",
+            (*pats, limit),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    out: list[str] = []
+    for at, item, qty, price, label, owner, source, notes in rows:
+        price_bit = f"@ {price:g} each" if price else "price not recorded (pending)"
+        stall_bit = f"stall '{label}'" if label else "stall unidentified"
+        owner_bit = f"owner {owner}" if owner else "owner not identified"
+        note_bit = f" | {str(notes)[:120]}" if notes else ""
+        out.append(
+            f"  {at} | {item} x{qty} {price_bit} | {stall_bit} ({owner_bit})"
+            f" | via {source or 'observation'}{note_bit}"
+        )
+    return out
+
+
 def _stall_zero_sale_lines(store_path: str, query: str, base: str) -> str:
     """Zero-pricing fallback for section=stall: surface the CDN base value and
     where the item comes from / is spent, instead of dead-ending."""
@@ -562,6 +608,7 @@ def _stall_zero_sale_lines(store_path: str, query: str, base: str) -> str:
         source_lines = _stall_source_lines(conn, query)
         chat_lines = _chat_price_lines(conn, query)
         wo_lines = _work_order_lines(conn, query)
+        other_stall = _other_stall_lines(conn, query)
     finally:
         conn.close()
     if not source_lines:
@@ -569,6 +616,9 @@ def _stall_zero_sale_lines(store_path: str, query: str, base: str) -> str:
     if wo_lines:
         lines.append(_WORK_ORDER_HEADER)
         lines.extend(wo_lines)
+    if other_stall:
+        lines.append(_OTHER_STALL_HEADER)
+        lines.extend(other_stall)
     if chat_lines:
         lines.append(_CHAT_PRICE_HEADER)
         lines.extend(chat_lines)
@@ -796,6 +846,7 @@ def _player_state(store_path: str, args: dict) -> str:
             source_lines = _stall_source_lines(conn2, query) if query else []
             chat_lines = _chat_price_lines(conn2, query) if query else []
             wo_lines = _work_order_lines(conn2, query) if query else []
+            other_stall = _other_stall_lines(conn2, query) if query else []
         finally:
             conn2.close()
         if not rows:
@@ -813,9 +864,9 @@ def _player_state(store_path: str, args: dict) -> str:
         asking = [r for r in rows if r[2] in ("visible", "configured") and r[5] is not None]
         lines = [
             (
-                "stall_events = YOUR OWN stall ledger (this store has no other"
-                " players' stalls): prices below come from your own listings and"
-                " sales, not a market sample."
+                "stall_events = YOUR OWN stall ledger: the prices below come from"
+                " your own listings and sales, not a market sample (other players'"
+                " stalls appear only as the OBSERVED block, when it exists)."
             )
         ]
         if base_line:
@@ -847,6 +898,9 @@ def _player_state(store_path: str, args: dict) -> str:
                 " SELECT item, COUNT(*), SUM(price_total) FROM stall_events"
                 " WHERE action='bought' GROUP BY item ORDER BY 3 DESC)"
             )
+        if other_stall:
+            lines.append(_OTHER_STALL_HEADER)
+            lines.extend(other_stall)
         if chat_lines:
             lines.append(_CHAT_PRICE_HEADER)
             lines.extend(chat_lines)

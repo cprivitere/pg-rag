@@ -23,7 +23,7 @@ player_state"`.
 | `find_entities` | FTS5 over `entity_names` | resolving a name to its typed entity (item/recipe/ability/quest/npc/effect/skill), up to 20 hits |
 | `get_page` | raw wiki page text by exact title (LIKE fallback lists candidates) | prose/mechanics — how a skill works, growing/farming, crafting workflows |
 | `corpus_search` | BM25 over `data/documents.json` + `data/bm25_index.pkl` | generated-corpus recall when SQL/FTS don't fit — the lexical arm; `--corpus tool` swaps to `data/tool_documents.json` + `data/tool_bm25.pkl` |
-| `player_state` | live-session sections (summary/skills/currencies/quests/favor/items/stall/abilities) | the player's own state; `section=abilities` needs `skill=`; `section=stall` holds the only *realized* prices (own stall) and appends the work-order payout and best-effort chat price mentions |
+| `player_state` | live-session sections (summary/skills/currencies/quests/favor/items/stall/abilities) | the player's own state; `section=abilities` needs `skill=`; `section=stall` holds the only *realized* prices (own stall — `stall_events`) and appends the item's `source:` lines, CDN base value, OTHER PLAYERS' STALLS observations (`stall_price_observations`), the work-order payout and best-effort chat price mentions |
 
 The loop is blocking and bounded (`DEFAULT_MAX_ROUNDS` rounds; each tool-result
 payload capped at 12000 chars). Tool errors come back as strings for the model
@@ -88,8 +88,9 @@ Then:
    loop.
 2. **Did the model call the right tool?** Inspect `trace_rounds` — a
    pricing question that ran only `sql_query` against `items` instead of
-   `player_state section=stall` (realized sales + base value + chat mentions)
-   is a routing miss driven by the schema summary.
+   `player_state section=stall` (realized sales + base value + `source:` lines +
+   other-stall observations + chat mentions) is a routing miss driven by the
+   schema summary.
 3. **Corpus freshness** — is `corpus_search` reading stale text? See below.
 4. **Answer generation** — context right, answer wrong → prompt/`_SYSTEM_TEMPLATE`
    (GEN-side). Offline tests monkeypatch `loop._post`, never a live LLM;

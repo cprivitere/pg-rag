@@ -74,8 +74,11 @@ guardrail becomes a wrong guardrail that future runs trust.
 - **Golden coverage** is intake-gated on a *measured* pipeline gap plus explicit
   user confirmation (workflow in the `evaluation` skill); prefer filling thin
   buckets over near-duplicates of passing cases.
-- **Pricing surfaces**: other players' stall observations and player work orders
-  (see `TODO.md`) remain unimplemented store surfaces.
+- **Pricing surfaces**: other players' stall observations landed 2026-10-15
+  (`stall_price_observations` is read by `player_state section=stall` and named
+  in the loop's schema note; all 4 live rows are `price_unit 0` = price
+  pending, so the block says so). Player work orders (see `TODO.md`) remain an
+  unimplemented store surface — no ingest or parser exists.
 - **Glogger-driven first-class access** (a glogger build with this as a tab)
   remains an idea, not work.
 

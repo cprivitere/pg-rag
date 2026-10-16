@@ -360,13 +360,19 @@ Notes:
     pricing questions (what items sell for, what's it worth) route here first
     (item_transactions and wiki pages carry no prices). Chat mentions (see the
     chat_events note above) are asking prices by other players, not sales.
-    This is YOUR OWN stall — no other players' stalls exist in the store, so
-    stall prices reflect your own listings/sales, never a market sample.
+    This is YOUR OWN stall, so these prices are your own listings/sales, never
+    a market sample. OTHER players' stalls are visible only through the
+    stall_price_observations table (market intel YOU observed there: typed/OCR
+    captures plus auto-detected purchases — price_unit 0 = price pending,
+    owner_name NULL = stall not identified): report those as dated
+    OBSERVATIONS of another player's stall, never as your own sale and never as
+    a market average, and never claim the store has no other players' stalls.
     Report each sale's price separately (never average them). Or use
     player_state section=stall (query=item name) for the pre-digested
     sale list (it also prints the item's CDN base value AND the item's
     `source:` lines — where it comes from / is spent: 'source: Barter via
-    <NPC>', 'source: Quest via <quest>', 'source: Recipe via <recipe>').
+    <NPC>', 'source: Quest via <quest>', 'source: Recipe via <recipe>', plus any
+    OTHER PLAYERS' STALLS observations for that item).
     A CATEGORY or plural ask ('all metal slabs', 'all sands') needs ONE call
     per category, not one per variant: pass the shared words as query —
     player_state section=stall (query='metal slab') returns every variant's
@@ -383,6 +389,13 @@ Notes:
     currency: 'source: Barter via Sven the Bleeder').
     Revenue = SUM(price_total) WHERE action='bought'; owners' own buys are
     NOT excluded automatically — group by player to separate.
+  - stall_price_observations(id, character_name, server_name, item_name,
+    internal_name, item_type_id, quantity, price_unit, stall_npc_entity_id,
+    stall_label, owner_name, source, observed_at, notes, created_at) — the ONLY
+    other-players'-stall surface: prices YOU saw at other players' stalls
+    (typed/OCR captures plus auto-detected purchases). price_unit 0 = price
+    pending, owner_name NULL = stall not identified. Small and append-only, so
+    a plain SELECT ... WHERE item_name LIKE '%<item>%' is cheap.
   - game_state_gift_log(id, character_name, npc_key, npc_name, gifted_at,
     favor_delta) — every gift you gave, with favor delta. Weekly gift-limit
     math: strftime('%Y-%W', gifted_at) buckets per NPC.
@@ -460,7 +473,9 @@ Tools (call to gather more data; up to {max_rounds} rounds):
    price for the item (labeled as mentions, not sales), plus the item's
    work-order turn-in payout when one exists (fixed councils ÷ required count =
    the guaranteed per-unit floor), plus the item's `source:` lines (barter /
-   quest / recipe — where it comes from or is spent).
+   quest / recipe — where it comes from or is spent), plus any OTHER PLAYERS'
+   STALLS observations for that item (dated market intel you saw at another
+   player's stall — labeled as observations, never as your own sale).
 
 How to call tools:
 - Preferred: emit a native tool call (the API's tools parameter).

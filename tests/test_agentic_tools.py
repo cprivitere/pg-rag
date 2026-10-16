@@ -390,6 +390,73 @@ def test_player_state_stall_sales_individual_prices(store):
     assert "No source or barter info" in out3
 
 
+def test_player_state_stall_other_players_observations(store):
+    """contract: section=stall surfaces glogger's OTHER-players'-stall intel
+    (`stall_price_observations`, Personal-build v68 market intel) as dated,
+    clearly-labeled observations — another player's stall, never one of the
+    player's own sales, and 'price not recorded (pending)' when glogger has no
+    price yet (price_unit 0 sentinel). Before this contract the store had no
+    other-stall surface at all and the tool banner told the model "this store
+    has no other players' stalls", which the mirrored table makes false."""
+    conn = sqlite3.connect(store)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS stall_events ("
+        "id TEXT PRIMARY KEY, event_timestamp TEXT, event_at TEXT,"
+        "log_timestamp TEXT, log_title TEXT, action TEXT, player TEXT,"
+        "owner TEXT, item TEXT, quantity INTEGER, price_unit REAL,"
+        "price_total REAL, raw_message TEXT, entry_index TEXT,"
+        "ignored INTEGER, created_at TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS stall_price_observations ("
+        "id INTEGER PRIMARY KEY, character_name TEXT, server_name TEXT,"
+        "item_name TEXT, internal_name TEXT, item_type_id INTEGER,"
+        "quantity INTEGER, price_unit REAL, stall_npc_entity_id INTEGER,"
+        "stall_label TEXT, owner_name TEXT, source TEXT, observed_at TEXT,"
+        "notes TEXT, created_at TEXT)"
+    )
+    # One own-stall sale (so the SOLD branch renders) + two observations.
+    conn.execute(
+        "INSERT OR REPLACE INTO stall_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "o1", "2026-07-19 19:43:00", "2026-07-19 19:43:00", None, None,
+            "bought", "WyvernsImpermanence", "TwinkleofToes", "Off-Hand Bead", 1,
+            400.0, 400, None, None, 0, "2026-07-19 19:43:00",
+        ),
+    )
+    for rid, item, qty, price, label, owner, source, at, notes in [
+        (1, "Off-Hand Bead", 1, 0.0, "Unidentified Stall", None, "purchase", "2026-10-08 01:02:16", None),
+        (2, "Off-Hand Bead", 3, 2500.0, "Sal's Bargains", "Sellsword Sal", "capture", "2026-10-09 12:00:00", "typed"),
+    ]:
+        conn.execute(
+            "INSERT OR REPLACE INTO stall_price_observations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                rid, "TwinkleofToes", "Dreva", item, "BeadOffHand", 42, qty, price,
+                18242, label, owner, source, at, notes, at,
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+    out = execute_tool(str(store), "player_state", {"section": "stall", "query": "Off-Hand Bead"})
+    assert "OTHER PLAYERS' STALLS" in out
+    # Never presented as the player's own ledger, and the false absence claim is gone.
+    assert "never your own listing" in out
+    assert "this store has no other players' stalls" not in out
+    # The priceless row is honest about the pending price; the priced row is dated
+    # and attributed to the stall/owner that carried it.
+    assert "price not recorded (pending)" in out
+    assert "2026-10-09 12:00:00 | Off-Hand Bead x3 @ 2500 each" in out
+    assert "owner Sellsword Sal" in out
+    assert "via capture" in out
+    # Observations come after the player's own prices, before chat chatter.
+    assert out.index("SOLD") < out.index("OTHER PLAYERS' STALLS")
+
+    # No observations for the item: no empty block.
+    out2 = execute_tool(str(store), "player_state", {"section": "stall", "query": "Butter Churn"})
+    assert "OTHER PLAYERS' STALLS" not in out2
+
+
 def test_player_state_stall_zero_sale_sources(store):
     """contract: an item with no stall history falls back to its CDN sources —
     barter NPC and quest names are resolved (sources.item_key='item_'||code →
