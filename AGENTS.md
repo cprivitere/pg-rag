@@ -303,9 +303,9 @@ lock; to clear a stuck lock, delete `data/.omp-build.lock`.
 
 ## Testing & QA
 
-- **Framework**: pytest via `uv run pytest`; the suite collects **411 tests**,
-  of which **77 are deselected by the default `not slow` marker** (16
-  data-heavy tests + the 61 parametrized golden cases), leaving **334** in the
+- **Framework**: pytest via `uv run pytest`; the suite collects **412 tests**,
+  of which **78 are deselected by the default `not slow` marker** (16
+  data-heavy tests + the 62 parametrized golden cases), leaving **334** in the
   default offline run — all offline (temp-dir integration, mocked servers). The
   golden gate is the only suite that needs any server.
 - **Golden eval** (`tests/test_golden_check.py`): parametrized over
@@ -319,14 +319,14 @@ lock; to clear a stuck lock, delete `data/.omp-build.lock`.
   is the harness's defense. For a byte-reproducible comparison, launch the
   server with `--reasoning off`. See `docs/LLM_MODEL_WIRING.md` → "Card flags &
   determinism".
-- **Golden CLI**: `mise golden` (all 61 files through the loop, exit 1 on
+- **Golden CLI**: `mise golden` (all 62 files through the loop, exit 1 on
   missing facts), `mise golden-short` (`--tier short`, 8 cases),
   `mise golden-one <id>` (named cases), `mise golden-type <type...>`. `--tier`,
   `--ids`, `--type`, `--max-facts`, `--diagnose`, `--export`, `--corpus`,
   `--max-rounds`, `--store`, `--report` are the `golden_check.py` flags.
   Per-case cost is dominated by the reasoning model's rounds — a store-only
   case with 1-2 rounds answers in tens of seconds, but a 5-6 round wiki case
-  takes minutes, so a full 61-case run is a long background job, not a
+  takes minutes, so a full 62-case run is a long background job, not a
   foreground watch. `--diagnose` labels a miss GEN-side (fact was in the fed
   context, the model dropped it) vs RET-side (never retrieved) from the
   `documents`/`trace_rounds` the loop returns.

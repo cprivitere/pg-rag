@@ -7,7 +7,7 @@ tool-loop fact-presence harness the pytest golden gate uses:
    case instead of minutes for a tier):
 
        uv run python scripts/golden_rerun.py --id fireball-ability
-       uv run python scripts/golden_rerun.py --id fireball-ability,cheesemaking-leveling
+       uv run python scripts/golden_rerun.py --id fireball-ability,cheesemaking-leveling-recipes
        uv run python scripts/golden_rerun.py --selection all --type recipe
 
 2. Focus on historically troublesome cases. Every run (rerun or full batch)

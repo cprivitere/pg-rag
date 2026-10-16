@@ -276,7 +276,7 @@ test (prove the source is fine) or recording a deliberate contract change
   actual facts.
   **Per-case cost is dominated by the reasoning model's rounds** — a
   store-only case answers in tens of seconds; a 5-6 round wiki case takes
-  minutes; the full 61-case set is a long background run, not a foreground
+  minutes; the full 62-case set is a long background run, not a foreground
   watch. Use `mise golden-one <id>` while iterating.
 - **Golden-rerun tooling** (`scripts/golden_rerun.py`, `mise golden-one`/
   `golden-flaky`/`golden-flaky-list`): rerun named case(s); every run appends

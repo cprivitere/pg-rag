@@ -36,12 +36,12 @@ Each file:
 - `store: true` marks a case whose facts live in the SQLite store (glogger play
   history). The loop reads the store, so it runs through the same path — there
   is no separate store-only harness anymore.
-- 61 files exist today (21 entity / 28 general / 7 recipe / 5 comparison),
+- 62 files exist today (22 entity / 28 general / 7 recipe / 5 comparison),
   spanning recipes-by-ingredient, level-gated crafting, item acquisition/drops,
   ability lookups, comparisons, quest requirements, wiki lore, wiki how-to
   assembly, and player-state audits. 10 store-only cases (player facts,
   `"store": true`). Future additions should favor the thin buckets (comparison
-  is 5/61 today).
+  is 5/62 today).
 - **Question-shape rule (learned the hard way, 2026-10-11):** every dimension a
   case's facts check must be asked for by its question. A question that asks
   "where" while its facts also demand loot level and creature type fails a
@@ -59,8 +59,14 @@ Each file:
   `giant mantises` fact was DROPPED — no Gardening-grounded source);
   `animal-handling-ability-audit` → `animal-handling-known-abilities` +
   `animal-handling-family-tames`; `royal-jelly-gathering` →
-  `royal-jelly-what-is-it` + `royal-jelly-obtaining`. The set went 54 → 58 files
-  at roughly the same wall time (the focused cases are 1-2 rounds each).
+  `royal-jelly-what-is-it` + `royal-jelly-obtaining`;
+  `cheesemaking-leveling` → `cheesemaking-leveling-xp` +
+  `cheesemaking-leveling-recipes` (2026-10-15: 8 groups in ONE doc family and a
+  question that never asked for the two cumulative totals its facts demanded; it
+  failed 6 of 12 logged full runs, `6990` missing in 4). The set went 61 → 62
+  files.
+  The 2026-10-11 batch went 54 → 58 files at roughly the same wall time (the
+  focused cases are 1-2 rounds each).
 - **Residual misses are tool choice, not goldens (2026-10-11).** After the split
   and the `corpus_search` snippet fix (400 → 1000 chars; see the retrieval
   skill), `dungcrafting-*`, `royal-jelly-*` and both audit cases pass in both
@@ -89,7 +95,7 @@ Every mode needs **only the LLM at :8080** — no embedder, no reranker.
   over the full set. Single-sample noise is expected; a FAIL is a triage item
   (`--diagnose` labels it GEN-side vs RET-side), not proof.
 
-- `mise golden` — all 61 files through the loop, exit 1 listing missing facts
+- `mise golden` — all 62 files through the loop, exit 1 listing missing facts
   on failure. `--tier {short,all}`, `--ids`, `--type
   {entity,recipe,comparison,general}`, `--max-facts N`, `--corpus {full,tool}`,
   `--max-rounds`, `--store`, `--report`, `--diagnose`, `--export [PATH]` are the
@@ -110,7 +116,7 @@ Every mode needs **only the LLM at :8080** — no embedder, no reranker.
 
 Per-case cost is dominated by the reasoning model's rounds (reasoning-ON,
 budget 4096): a store-only case with 1–2 rounds answers in tens of seconds, but
-a 5–6 round wiki case can take minutes per case. **A full 61-case run is a long
+a 5–6 round wiki case can take minutes per case. **A full 62-case run is a long
 background job — batch it, don't watch it in a foreground terminal.** Use
 `mise golden-one` while iterating and `--tier short` for a smoke check.
 

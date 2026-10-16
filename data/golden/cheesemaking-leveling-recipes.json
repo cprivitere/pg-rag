@@ -1,0 +1,13 @@
+{
+  "id": "cheesemaking-leveling-recipes",
+  "question": "Which Cheesemaking recipes should I use to level from 17 to 25, what XP do they award, and how do first-time and repeat crafts compare?",
+  "type": "entity",
+  "facts": [
+    ["munster", "munster cheese"],
+    ["sharp cheddar", "sharp cheddar cheese", "96", "96 xp"],
+    ["first-time", "first time", "first-craft", "first craft"],
+    ["repeat", "spam", "highest"],
+    ["recipe", "crafts", "craft"]
+  ],
+  "notes": "Split from `cheesemaking-leveling` on 2026-10-15 - see the sibling `cheesemaking-leveling-xp`. The recipe/strategy dimension: `leveling_Cheesemaking_chunk_4` carries `- Munster Cheese [lvl 17]: +68 XP, first +272, drop after 27 (10%)`, chunk_5 `- Sharp Cheddar Cheese [lvl 24]: +96 XP, first +384, drop after 34 (10%)`, chunk_8 `Leveling strategy:` (`The first craft of each recipe awards its first-time XP`, `Repeat crafts award the normal per-craft XP`, `craft every unlocked recipe once for its first-time bonus, then repeat the highest-level recipe you can craft`). The legacy `munster` group also carried a bare `level 17` variant that any ladder answer satisfied; dropped here."
+}

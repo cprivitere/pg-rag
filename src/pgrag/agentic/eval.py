@@ -40,7 +40,7 @@ SHORT_TIER_IDS = [
     "beginners-arrow-recipe",  # recipe: ingredients + skill/level
     "fireball-vs-fire-breath-damage",  # comparison: damage numbers
     "healing-potion-omega",  # recipe: ingredients + effect
-    "cheesemaking-leveling",  # entity: arithmetic, 8 facts, hardest
+    "cheesemaking-leveling-xp",  # entity: arithmetic (cumulative-XP range), hardest
     "field-mushroom-locations",  # general: wiki location list
 ]
 

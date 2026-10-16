@@ -58,7 +58,7 @@ the filter the profile is seed hit #5). If a long-question case misses while its
 keywords work as a short query, suspect the query shape, not the data.
 It is **not free**: the drop removes the credit long prose docs used to earn
 from function words, so a few seeds cover FEWER facts than before (measured
-over the 61 golden questions: 13 fact-group hits lost vs 15 gained on the
+over the then-61 golden questions: 13 fact-group hits lost vs 15 gained on the
 k=12 seed; worst `meditation-synergy-skills` 15 → 8). Those cases still pass
 because the model's own tool calls carry the facts — the **full gate** is the
 arbiter, not the seed. `off`/`only`/`under` are deliberately NOT filtered:

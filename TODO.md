@@ -73,13 +73,35 @@
   malformed-tool-call 500 (`animal-handling-known-abilities`,
   `ranalon-den-quests`); the loop now re-asks once and, if the model repeats the
   call, forces the grounded final answer instead of raising.
-  Residual (single-run noise, NOT diagnosed failures — the derived flaky list
-  still computes to `[]`): the last gate's misses moved to
-  `cheesemaking-leveling` (2 of 5 runs, `6990` XP-range + `first-time`) and
-  `gardeningrelated_items` (1 run, `guano`). Both are multi-number answers over
-  reachable data — the XP-range scalar-difference recipe is already spelled out
-  in the guidance — so the doctrine-correct remedy is the fact-density split,
-  which needs the user's OK.
+- **DONE 2026-10-15 — `cheesemaking-leveling` split into ladder + recipe cases;
+  `gardeningrelated_items` measured and left alone (user OK'd the gate change).**
+  Single-attempt samples (`--attempts 1` — the honest single-sample rate; the
+  gate's retry-once is untouched): parent `cheesemaking-leveling` **1/4**
+  (misses `first-time`; `6990`+`11710`; `sharp cheddar`+`first-time`+`repeat`),
+  consistent with its 6-FAIL/6-PASS log history. The children:
+  `cheesemaking-leveling-xp` **3/4** (its one miss was `11710`+`4720` — the
+  `6990` arithmetic probe itself was answered) and
+  `cheesemaking-leveling-recipes` **4/4** — both at or above the accepted
+  ≥3/4, both better than the parent's 1/4.
+  Remedy rationale: the fact-density rule's precondition ("facts span many docs
+  **AND** ~10 facts in one answer") was NOT met — all 8 groups lived in ONE doc
+  family (`leveling_Cheesemaking` chunks 1/4/5/8). What WAS met: the
+  **question-shape violation** (the question never asked for the two cumulative
+  totals its facts demanded) and three bare `level 25`/`level 17` variants that
+  let a level-only mention satisfy three groups — exactly the measured `11710`
+  miss shape (`logs/golden-gate-after-review-fixes2.txt`). Those three variants
+  are DROPPED, each having made its group satisfiable without the graded
+  number. Split basis is the doctrine's fallback clause "per audit dimension":
+  XP ladder/arithmetic (3 groups) vs recipe/strategy text (5 groups).
+  `SHORT_TIER_IDS` now carries `cheesemaking-leveling-xp` (the tier stays 8);
+  the set went 61 → 62 files.
+  `gardeningrelated_items` measured **4/4** single-attempt (11/12 logged full
+  runs; the lone miss was a 1-round `guano` list omission, and
+  `history.jsonl` has zero records for it) → **no change**: 4 groups in one
+  table (`items`, matched on `keywords LIKE '%GardeningRelated%'`) is one
+  dimension, so the density rule's precondition is absent again and a split
+  would be an invented remedy. Watch the two new children; they run in the
+  normal gate, not `FLAKY.txt`.
 
 - **DONE 2026-10-13 — Loop tool-choice guidance (the systemic fix behind the
   flaky trio) landed** in `src/pgrag/agentic/loop.py` (`_SCHEMA_SUMMARY`, three
@@ -124,7 +146,7 @@
   of the list") was dropped: it never changed this case's outcome and the trio
   passes without it.
 
-- Golden coverage: comparison is the thinnest bucket (5 of 61). Intake for new
+- Golden coverage: comparison is the thinnest bucket (5 of 62). Intake for new
   goldens is live-session questions; the workflow lives in
   `.agents/skills/evaluation/SKILL.md`. Ground every fact with
   `grep data/documents.json` before adding it, and remember the fact-density

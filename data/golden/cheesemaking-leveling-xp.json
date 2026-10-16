@@ -1,0 +1,11 @@
+{
+  "id": "cheesemaking-leveling-xp",
+  "question": "How much total Cheesemaking XP does it take to go from level 17 to level 25, and what are the cumulative XP totals at level 17 and level 25?",
+  "type": "entity",
+  "facts": [
+    ["6990", "6,990", "6 990", "six thousand nine hundred ninety"],
+    ["11710", "cumulative 11710", "cumulative 11,710", "11,710"],
+    ["4720", "cumulative 4720", "cumulative 4,720", "4,720"]
+  ],
+  "notes": "Split from `cheesemaking-leveling` on 2026-10-15 (that id failed 6 of 12 logged full runs, `6990` missing in 4 of the 6). The ladder/arithmetic dimension: `leveling_Cheesemaking_chunk_1` carries `- Level 17: 680 XP (cumulative 4720)` and `- Level 25: 990 XP (cumulative 11710)`; 6990 is stated nowhere (no `6990` hit in data/documents.json) but is the sample result of the scalar-difference query over the store's xptable_levels that src/pgrag/agentic/loop.py spells out - the deliberate arithmetic probe kept after blacksmithing-leveling-25-30 was deleted. The legacy question never asked for the cumulative totals while its facts demanded them (question-shape violation), and its bare `level 25`/`level 17` variants let a level-only mention satisfy two endpoint groups (measured `11710` miss, logs/golden-gate-after-review-fixes2.txt); those variants are dropped here."
+}
