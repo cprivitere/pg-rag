@@ -81,8 +81,9 @@
   consistent with its 6-FAIL/6-PASS log history. The children:
   `cheesemaking-leveling-xp` **3/4** (its one miss was `11710`+`4720` — the
   `6990` arithmetic probe itself was answered) and
-  `cheesemaking-leveling-recipes` **4/4** — both at or above the accepted
-  ≥3/4, both better than the parent's 1/4.
+  `cheesemaking-leveling-recipes` **4/4** (re-measured 4/4 single-attempt after
+  the review split its `96` XP number into a group of its own) — both at or
+  above the accepted ≥3/4, both better than the parent's 1/4.
   Remedy rationale: the fact-density rule's precondition ("facts span many docs
   **AND** ~10 facts in one answer") was NOT met — all 8 groups lived in ONE doc
   family (`leveling_Cheesemaking` chunks 1/4/5/8). What WAS met: the
@@ -92,12 +93,15 @@
   miss shape (`logs/golden-gate-after-review-fixes2.txt`). Those three variants
   are DROPPED, each having made its group satisfiable without the graded
   number. Split basis is the doctrine's fallback clause "per audit dimension":
-  XP ladder/arithmetic (3 groups) vs recipe/strategy text (5 groups).
+  XP ladder/arithmetic (3 groups) vs recipe/strategy text (6 groups — the legacy
+  `sharp cheddar` group was split so its `96` XP number is graded on its own,
+  naming the recipe having satisfied it for free; parent 8 groups → 3 + 6).
   `SHORT_TIER_IDS` now carries `cheesemaking-leveling-xp` (the tier stays 8);
   the set went 61 → 62 files.
   `gardeningrelated_items` measured **4/4** single-attempt (11/12 logged full
   runs; the lone miss was a 1-round `guano` list omission, and
-  `history.jsonl` has zero records for it) → **no change**: 4 groups in one
+  `history.jsonl` carries no miss record for it — all 4 logged rows are passes)
+  → **no change**: 4 groups in one
   table (`items`, matched on `keywords LIKE '%GardeningRelated%'`) is one
   dimension, so the density rule's precondition is absent again and a split
   would be an invented remedy. Watch the two new children; they run in the

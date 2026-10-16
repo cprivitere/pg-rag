@@ -4,10 +4,11 @@
   "type": "entity",
   "facts": [
     ["munster", "munster cheese"],
-    ["sharp cheddar", "sharp cheddar cheese", "96", "96 xp"],
+    ["sharp cheddar", "sharp cheddar cheese"],
+    ["96", "96 xp"],
     ["first-time", "first time", "first-craft", "first craft"],
     ["repeat", "spam", "highest"],
     ["recipe", "crafts", "craft"]
   ],
-  "notes": "Split from `cheesemaking-leveling` on 2026-10-15 - see the sibling `cheesemaking-leveling-xp`. The recipe/strategy dimension: `leveling_Cheesemaking_chunk_4` carries `- Munster Cheese [lvl 17]: +68 XP, first +272, drop after 27 (10%)`, chunk_5 `- Sharp Cheddar Cheese [lvl 24]: +96 XP, first +384, drop after 34 (10%)`, chunk_8 `Leveling strategy:` (`The first craft of each recipe awards its first-time XP`, `Repeat crafts award the normal per-craft XP`, `craft every unlocked recipe once for its first-time bonus, then repeat the highest-level recipe you can craft`). The legacy `munster` group also carried a bare `level 17` variant that any ladder answer satisfied; dropped here."
+  "notes": "Split from `cheesemaking-leveling` on 2026-10-15 - see the sibling `cheesemaking-leveling-xp`. The recipe/strategy dimension: `leveling_Cheesemaking_chunk_4` carries `- Munster Cheese [lvl 17]: +68 XP, first +272, drop after 27 (10%)`, chunk_5 `- Sharp Cheddar Cheese [lvl 24]: +96 XP, first +384, drop after 34 (10%)`, chunk_8 `Leveling strategy:` (`The first craft of each recipe awards its first-time XP`, `Repeat crafts award the normal per-craft XP`, `craft every unlocked recipe once for its first-time bonus, then repeat the highest-level recipe you can craft`). The legacy `munster` group also carried a bare `level 17` variant that any ladder answer satisfied; dropped here. The legacy `sharp cheddar` group likewise carried bare `96`/`96 xp` alternates, so naming the recipe satisfied the question's XP dimension for free (and a bare `96` is matched by the same table's unrelated `- Prim Cheese [lvl 6]: +24 XP, first +96`); the number is graded as its own group instead (parent 8 groups -> 3 + 6)."
 }

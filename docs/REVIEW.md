@@ -174,7 +174,9 @@ guardrail that keeps it truthful.
   snapshot + source tarball to the private bucket.
 - **Golden-set hygiene + consolidation (2026-10-11).** 8 cases deleted as
   redundant (set 62 → 54): `blacksmithing-leveling-25-30` (shape survives in
-  `cheesemaking-leveling`, which also checks the arithmetic),
+  `cheesemaking-leveling`, which also checks the arithmetic; that case split
+  into `cheesemaking-leveling-xp` + `cheesemaking-leveling-recipes` on
+  2026-10-15),
   `fireball-vs-fire-breath` (identical facts to `-damage`),
   `riding-trainer-bands` (same shape as `animal-handling-trainer-bands`),
   `mycology-skill`, `mushroom-farming-gathering`, `grow-field-mushrooms`,

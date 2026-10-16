@@ -63,7 +63,8 @@ Each file:
   `cheesemaking-leveling` → `cheesemaking-leveling-xp` +
   `cheesemaking-leveling-recipes` (2026-10-15: 8 groups in ONE doc family and a
   question that never asked for the two cumulative totals its facts demanded; it
-  failed 6 of 12 logged full runs, `6990` missing in 4). The set went 61 → 62
+  failed 6 of 12 logged full runs, `6990` missing in 5 of the 6 (all but
+  `golden-full-offmode.log`). The set went 61 → 62
   files.
   The 2026-10-11 batch went 54 → 58 files at roughly the same wall time (the
   focused cases are 1-2 rounds each).
