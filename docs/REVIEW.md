@@ -423,6 +423,50 @@ skipping on Windows) with `mise lint`, `mise drift` (0 drift) and
   (204,232 docs kept / 65,491 dropped, 6 s, lock released) proves the CWD stamp
   path and the cross-instance lock still work in the repo, not just in tmp.
 
+## Leftovers for the next pass (found by the pass-5 review, deliberately not fixed)
+
+Ordered by value, not severity. Each was verified by its reviewer; none is
+blocking, and every one of them is in code the reviewer *executed* or traced, so
+they are evidence-backed rather than suspicions.
+
+1. **The molab corpus cache is existence-only** (`notebooks/molab-agentic/notebook.py`): a re-published
+   corpus is never picked up, so a live sandbox builds from the old pair and then dies with "run
+   `mise generate-docs`" — a task that does not exist there, with no stated remedy. Fix: probe the
+   remote stamp on a cache hit (the store cell already probes its manifest) and re-download on
+   mismatch.
+2. **The tool-corpus freshness read races `build-documents`** (`scripts/build_tool_corpus.py`): the
+   check runs *before* the lock by design, so it can observe new `documents.json` beside the old
+   stamp and refuse spuriously. Also: its new `except OSError` in-build path is untested, the version
+   numbers in the refusal message are unpinned, and the CWD-anchor test is vacuous on a fresh clone
+   (`data/` is gitignored).
+3. **The BM25 lock covers the whole rebuild** (`src/pgrag/rag/bm25.py`): minutes of in-memory indexing
+   are held exclusively with no re-check inside, so a peer that finished while we waited has its work
+   redone; and nothing tests that the cache-hit path takes *no* lock.
+4. **Service-manager hardening** (`scripts/services.py`): an unprovenance port owner is tree-killed
+   (`taskkill /T /F`) on win32 while POSIX signals one pid; the pidfile `os.replace` can raise
+   `WinError 5`; `_wait_dead` reads `EPERM` as "gone"; one test still creates `<repo>/logs`.
+5. **Publish hardening** (`scripts/publish_store.py`): `_uri`/`_upload` default `bucket=BUCKET` binds
+   the import-time constant while the guards read the runtime one; a crash between the two `--docs`
+   uploads leaves a parsable stale pair the notebook cannot detect.
+6. **`execute_tool`'s errors-as-data is still partial** (`src/pgrag/agentic/tools.py`): only
+   `BuildLockError` is stringified; `FileNotFoundError`/`JSONDecodeError` from the same two call sites
+   still escape the seed at `loop.py:779`.
+7. **Curator scheduler** (`scripts/curator_scheduler.py`): its docstring's "every step is a live
+   command" contract is not asserted (the test compares a hand-copied argv list), the rc≠0 →
+   no-`save_state` path is uncovered, and its derived-corpus order differs from every `mise sync-*`
+   task without saying why.
+8. **Docstring debt about the deleted dense path**: `src/pgrag/documents/chunking.py` (module docstring
+   and the `bge-small`/`build_index` sentences are present-tense; one clause is garbled),
+   `tests/test_chunking.py:~321`, `tests/test_leveling.py:~206`, and `tests/conftest.py`'s "kept out of
+   the source dir" claim (false for `data/wiki/curated`, and a stale `data/wiki/.parsed.json` sits
+   inside the guarded dir).
+9. **Pre-hook miss list**: `git -c alias.s=!mise syf S` and `git rebase --exec 'mise syf'` run a writer
+   and pass the probe (documented class — the writer still locks); saying so in the header closes it.
+10. **Two `mise.toml` nits**: `golden-type` is pwsh-pinned while the file claims the task set is
+    POSIX-usable without PowerShell, and `golden-flaky-list`'s description renders a literal `%%`.
+
+
+
 ## Review protocol — how a pass is run now
 
 Three review passes ran in a row on this PR, each fixing the previous one's
