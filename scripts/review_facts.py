@@ -12,8 +12,9 @@ for machines) and paste the output into the *shared context* of every reviewer
 brief, with the instruction not to re-run the suite, ruff, drift or compliance.
 
 Read-only by construction: it inspects, it never writes, and it starts no
-service. `--counts` (the one slow section: a real `pytest --collect-only`) is on
-by default; the whole sheet is a handful of seconds.
+service. The gate rows (ruff / drift / compliance) are the slow part (~7 s) —
+`--no-gates` skips them, `--json` emits the same facts for a machine, and an
+interrupt exits 130 without a traceback (nothing was half-written).
 """
 
 from __future__ import annotations
@@ -89,6 +90,13 @@ def _git_lines(args: list[str]) -> list[str]:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
+def _tracked(paths: tuple[str, ...]) -> set[str]:
+    """Which of `paths` the git index knows, in **one** `ls-files` call: a call
+    per path spawned eleven gits per sheet and gave an interrupt eleven chances
+    to land inside one."""
+    return set(_git_lines(["ls-files", "--", *paths]))
+
+
 def counts() -> dict[str, int] | None:
     """The suite's live counts, via the drift gate's own collector — one source of
     truth for "how many tests", so this sheet and `mise drift` cannot disagree."""
@@ -101,8 +109,12 @@ def counts() -> dict[str, int] | None:
     return {"collected": collected, "deselected": deselected, "default": default}
 
 
-def gates() -> dict[str, str]:
-    """`name -> "rc <code> — <last line>"` for each repo-wide gate."""
+def gates(enabled: bool = True) -> dict[str, str]:
+    """`name -> "rc <code> — <last line>"` for each repo-wide gate. These three are
+    the slow part of the sheet (~7 s), so a caller that already knows the verdicts
+    can skip them."""
+    if not enabled:
+        return {"skipped": "--no-gates (the reviewer should ask for the verdicts, not re-run them)"}
     return {
         name: f"rc {rc} — {line}" if line else f"rc {rc}"
         for name, argv in GATE_COMMANDS
@@ -136,7 +148,7 @@ def tree() -> dict[str, object]:
         if status_rc == 0
         else [f"<git status failed: {status.strip()}>"]
     )
-    tracked = set(_git_lines(["ls-files", "--", *GATE_FILES]))
+    tracked = _tracked(GATE_FILES)
     return {
         "head": _git(["rev-parse", "--short", "HEAD"]),
         "frozen": not dirty,
@@ -184,20 +196,22 @@ def _self_liveness() -> str:
 
 def limits() -> list[str]:
     """Working-tree-only inputs, with their tracking state spelled out."""
+    tracked = _tracked(LIMIT_PATHS)
     rows = []
     for rel in LIMIT_PATHS:
         if not (ROOT / rel).exists():
             continue
-        tracked = bool(_git_lines(["ls-files", "--", rel]))
-        rows.append(f"{rel} — present, {'tracked' if tracked else 'gitignored (clone-invisible)'}")
+        rows.append(
+            f"{rel} — present, {'tracked' if rel in tracked else 'gitignored (clone-invisible)'}"
+        )
     return rows
 
 
-def collect() -> dict[str, object]:
+def collect(with_gates: bool = True) -> dict[str, object]:
     """The whole sheet, one key per section."""
     return {
         "counts": counts(),
-        "gates": gates(),
+        "gates": gates(with_gates),
         "tasks": tasks(),
         "tree": tree(),
         "liveness": liveness(),
@@ -223,8 +237,18 @@ def markdown(payload: dict[str, object]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Shared facts for a review pass (read-only).")
     parser.add_argument("--json", action="store_true", help="machine-readable payload")
+    parser.add_argument(
+        "--no-gates",
+        action="store_true",
+        help="skip the ruff/drift/compliance rows (~7 s of the run)",
+    )
     args = parser.parse_args(argv)
-    payload = collect()
+    try:
+        payload = collect(with_gates=not args.no_gates)
+    except KeyboardInterrupt:
+        # Read-only, so an interrupt leaves nothing half-done: exit quietly rather
+        # than dumping a traceback out of subprocess's pipe reader.
+        return 130
     print(json.dumps(payload, indent=2) if args.json else markdown(payload), end="")
     return 0
 

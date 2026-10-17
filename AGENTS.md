@@ -333,9 +333,9 @@ lock by hand-editing it; to clear a stuck one, delete `data/.omp-build.lock`.
 ## Testing & QA
 
 - **Framework**: pytest via `uv run pytest`; the counts this doc quotes are
-  **567 collected / 78 deselected / 489 default** (asserted by `mise drift`
+  **568 collected / 78 deselected / 490 default** (asserted by `mise drift`
   against a real collection) — the 78 being 16 data-heavy tests + the 62
-  parametrized golden cases, so the default offline run leaves **489** (one POSIX-only port-owner case skips on Windows) — all
+  parametrized golden cases, so the default offline run leaves **490** (one POSIX-only port-owner case skips on Windows) — all
   offline (temp-dir integration, mocked servers). The golden gate is the only
   suite that needs any server.
 - **Golden eval** (`tests/test_golden_check.py`): parametrized over

@@ -49,8 +49,22 @@ def test_the_sheet_is_read_only_and_self_consistent(capsys, monkeypatch):
 
 def test_the_runners_the_gates_need_are_tracked():
     """The sheet's tree section is what tells a reviewer whether a clone could run
-    the gates at all; it must read *every* `git ls-files` line, not the last."""
+    the gates at all; it must read *every* `git ls-files` line, not the last, and
+    it must ask git **once** for the whole set (a call per path spawned eleven
+    gits per sheet)."""
     assert rf._git_lines(["ls-files", "--", *rf.GATE_FILES]) == sorted(rf.GATE_FILES)
+    assert rf._tracked(rf.GATE_FILES) == set(rf.GATE_FILES)
+    assert rf._tracked(("scripts/nope_missing.py",)) == set()
     data = rf.tree()
     assert data["untracked_gate_files"] == []
     assert data["frozen"] is (not data["dirty"])
+
+
+def test_no_gates_skips_the_slow_rows(capsys):
+    """`--no-gates` is for the caller that already knows the verdicts: the sheet
+    still carries the facts, and says the rows were skipped rather than looking
+    green."""
+    assert rf.main(["--json", "--no-gates"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "skipped" in payload["gates"]
+    assert payload["tree"]["head"], "the rest of the sheet must still be measured"

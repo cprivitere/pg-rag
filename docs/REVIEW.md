@@ -354,7 +354,7 @@ in the first pass are addressed in the second.
 
 Sixteen reviewers covered the range `479b6bc..d048ce3` slice by slice; every
 finding below is fixed and pinned, and the suite is green
-(**567 collected / 78 deselected / 489 default**, one POSIX-only port-owner case
+(**568 collected / 78 deselected / 490 default**, one POSIX-only port-owner case
 skipping on Windows) with `mise lint`, `mise drift` (0 drift) and
 `mise compliance` clean.
 
