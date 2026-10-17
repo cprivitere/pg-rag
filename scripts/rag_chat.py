@@ -38,7 +38,7 @@ def respond(message, history):
     """Chat handler: status line -> blocking tool loop -> answer + Sources.
 
     history is ignored on purpose: the loop answers from the latest question
-    alone, matching the Open WebUI pipe.
+    alone.
     """
     yield "Searching the knowledge base…"
     try:
@@ -86,7 +86,8 @@ if __name__ == "__main__":
     demo.launch(
         server_name="0.0.0.0",
         server_port=7860,
-        # `mise start` (chat-start.ps1) sets PG_RAG_CHAT_NO_BROWSER=1 so the
-        # serving path doesn't pop a tab; interactive `mise chat` still opens one.
+        # `mise start` (scripts/services.py chat-start) sets
+        # PG_RAG_CHAT_NO_BROWSER=1 so the serving path doesn't pop a tab;
+        # interactive `mise chat` still opens one.
         inbrowser=not os.environ.get("PG_RAG_CHAT_NO_BROWSER"),
     )

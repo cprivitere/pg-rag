@@ -1,11 +1,8 @@
 [env]
-# Portable paths - update this if mywebui moves
-WEBUI_DIR = "F:/ProjectGorgon/mywebui"
 # Logs directory
 LOGS_DIR = "{{ config_root }}/logs"
 # Model identities — SINGLE SOURCE of truth. Every consumer reads these:
-#   - `mise debug-llm` (via {{ env.X }})
-#   - `.mise/tasks/llm-start.ps1` (via $env:X)
+#   - scripts/services.py (via os.environ; `mise debug-llm` and `mise llm-start`)
 #   - scripts/check_docs.py (via tomllib)
 # Swap a model (ref + its tuning flags) here; nothing else should change.
 # Launchers append their own host/port/-np/batch/log-file assembly.
@@ -32,7 +29,7 @@ run = "uv run -m pytest tests/"
 alias = "te"
 
 # --- Pipeline tasks ---
-[tasks.sync]
+[tasks."sync-fast"]
 description = "Fast sync: CDN data + rebuild documents + BM25 + tool corpus (skips slow wiki fetch)"
 run = [
   "uv run pgrag download-cdn",
@@ -40,7 +37,7 @@ run = [
   "uv run python -m pgrag.rag.bm25",
   "uv run python scripts/build_tool_corpus.py",
 ]
-alias = "sy, rf"
+alias = "sy"
 
 [tasks."sync-full"]
 description = "Full sync: CDN + wiki data + rebuild documents + BM25 + tool corpus"
@@ -52,14 +49,6 @@ run = [
   "uv run python scripts/build_tool_corpus.py",
 ]
 alias = "syf"
-
-[tasks."refresh-cdn"]
-description = "Download CDN data to data/cdn/"
-run = "uv run pgrag download-cdn"
-
-[tasks."refresh-wiki"]
-description = "Download wiki pages to data/wiki/ (slow)"
-run = "uv run pgrag download-wiki"
 
 [tasks."generate-docs"]
 description = "Regenerate data/documents.json from CDN + wiki source (idempotent; stamps the generator version)"
@@ -88,17 +77,6 @@ run = [
 ]
 alias = "syw"
 
-[tasks."sync-cdn"]
-description = "Converge CDN data to current source: fetch CDN, regenerate documents, BM25, then the tool corpus"
-run = [
-  "uv run pgrag download-cdn",
-  "uv run pgrag build-documents",
-  "uv run python -m pgrag.rag.bm25",
-  "uv run python scripts/build_tool_corpus.py",
-]
-alias = "syc"
-
-
 [tasks."sql-store"]
 description = "Build data/sqlite_gorgon.db (CDN + wiki + session + glogger primary sources) for the agentic tool loop"
 run = "uv run python scripts/build_sqlstore.py"
@@ -108,6 +86,11 @@ alias = "sq"
 description = "Publish data/sqlite_gorgon.db to the PRIVATE HF bucket (Nubula/paddock-private) for the molab tool loop; run `mise sql-store` first to refresh it"
 run = "uv run python scripts/publish_store.py"
 alias = "us"
+
+[tasks."upload-docs"]
+description = "Publish data/documents.json to the PUBLIC corpus HF bucket (Nubula/paddock) for the molab notebook; run `mise generate-docs` first"
+run = "uv run python scripts/publish_store.py --docs"
+alias = "ud"
 
 [tasks."agentic-chat"]
 description = "Agentic CLI chat over the SQLite store (tool loop; needs only LLM :8080)"
@@ -159,31 +142,37 @@ alias = "gfl"
 # --- LLM server ---
 
 [tasks."debug-llm"]
-description = "Start LLM server in foreground (debug)"
-run = "llama-server -hf {{ env.LLM_MODEL }} {{ env.LLM_FLAGS }} --host 0.0.0.0 --port 8080"
+description = "Start LLM server in foreground (debug; same launch args as llm-start)"
+run = "uv run python scripts/services.py start llm --foreground"
 alias = "dsl"
 
-[tasks."llm-pick"]
-description = "Pick the default LLM model from tested candidates"
-run = "uv run python scripts/llm_pick.py"
-alias = "lp"
+[tasks."llm-start"]
+description = "Start LLM server on :8080 with logging"
+run = "uv run python scripts/services.py start llm"
+alias = "sl"
 
-# --- Open WebUI ---
-
-[tasks."debug-webui"]
-description = "Start Open WebUI in foreground (debug)"
-run = "uv run --directory '{{ env.WEBUI_DIR }}' open-webui serve --port 3000"
-dir = "{{ env.WEBUI_DIR }}"
-alias = "dsw"
+[tasks."llm-stop"]
+description = "Stop LLM server (kills the process tree on :8080)"
+run = "uv run python scripts/services.py stop llm"
+alias = "xl"
 
 # --- Gradio chat ---
 
 [tasks.chat]
 description = "Run Gradio chat UI (refreshes the store at startup; requires the LLM service up). Port 7860"
 run = "uv run --with gradio python scripts/rag_chat.py"
-alias = "chat"
 
-# --- All services (background via file tasks in .mise/tasks/) ---
+[tasks."chat-start"]
+description = "Start Gradio chat on :7860 with logging (primary chat UI; refreshes the store at startup)"
+run = "uv run python scripts/services.py start chat"
+alias = "sc"
+
+[tasks."chat-stop"]
+description = "Stop Gradio chat (kills the process tree on :7860)"
+run = "uv run python scripts/services.py stop chat"
+alias = "xc"
+
+# --- All services (scripts/services.py; background, logged to logs/) ---
 
 [tasks."start-all"]
 description = "Start all services (llm + chat) with logging"
@@ -199,13 +188,13 @@ alias = "down"
 
 [tasks.status]
 description = "Check status of all services (llm, chat)"
-run = "uv run python scripts/check_services.py"
+run = "uv run python scripts/services.py status"
 alias = "st"
 
 [tasks.drift]
 description = "Check docs/skills against the repo: pointers resolve, contract constants match, TEST_CONTRACTS covers every test, golden counts are real"
 run = "uv run python scripts/check_docs.py"
-alias = "dr"
+alias = "dc"
 
 [tasks.compliance]
 description = "Compliance scan: pg-rag x Project Gorgon TOS/CoC hard lines (scripts/check_constraints.py; policy: docs/research/pg-rag-game-interaction-limits.md)"
@@ -224,11 +213,6 @@ description = "Tail LLM server log (live, last 20 lines)"
 run = "Get-Content '{{ env.LOGS_DIR }}/llm.log' -ErrorAction SilentlyContinue -Wait -Tail 20"
 alias = "tll"
 
-[tasks."tail-webui"]
-description = "Tail Open WebUI log (live, last 20 lines)"
-run = "Get-Content '{{ env.LOGS_DIR }}/webui.log' -ErrorAction SilentlyContinue -Wait -Tail 20"
-alias = "tlw"
-
 # --- Lint / format ---
 
 [tasks.lint]
@@ -236,7 +220,7 @@ description = "Ruff check: static analysis of src/, scripts/, tests/ (fails on r
 run = "uv run ruff check src scripts tests"
 alias = "li"
 
-[tasks.fmt]
+[tasks.format]
 description = "Ruff format + safe autofix (import sort, unused imports, f-strings)"
 run = [
   "uv run ruff format src scripts tests",

@@ -1,8 +1,14 @@
 # Ruff configuration — the repo linter. Single source: this file.
-# Run: `mise lint` (check), `mise fmt` (format), or `uv run ruff check . --fix`.
+# Run: `mise lint` (check), `mise format` (format), or `uv run ruff check . --fix`.
 # `tests/test_lint.py` gates this config: `mise test` fails on regressions.
 # LLM artifacts and generated files are excluded — never hand-lint those.
 line-length = 100
+
+# Lint/format as Python 3.13 — the molab sandbox kernel that ships src/ +
+# scripts/. Without this, ruff's default (>=3.14) target makes `ruff format`
+# rewrite `except (A, B):` into PEP 758 `except A, B:`, which Python 3.13
+# cannot parse (gate: tests/test_lint.py::test_shipped_source_stays_python_313_parseable).
+target-version = "py313"
 
 extend-exclude = ["data", ".tmp", ".venv", "logs", ".ruff_cache", ".pytest_cache"]      # LLM artifacts + gitignored build outputs
 
@@ -30,9 +36,6 @@ ignore = ["B008"]   # typer Click-style default=... patterns in cli.py
 ]
 # tests use bare asserts, broad catches, unused args by design
 "tests/**" = ["BLE001", "RUF059"]
-"scripts/pg_rag.py" = [
-    "E402",         # sys.path bootstrap precedes pgrag imports by design (AGENTS.md contract)
-]
 
 [lint.isort]
 case-sensitive = false

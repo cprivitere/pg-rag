@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import os
 import subprocess
 import sys
 import time
@@ -37,14 +38,12 @@ from pgrag.rag.llm import LLMServerError
 TUNE_DIR = Path("data/agentic_tune")
 DEFAULT_CASES = Path("data/eval/tune_cases.json")
 
-# CANDIDATES for --model sweep (subset relevant to the agentic path; flags
-# mirror scripts/llm_golden_bakeoff.py CANDIDATES).
+# CANDIDATES for --model sweep (the authoritative registry — the
+# llm_golden_bakeoff.py harness was deleted). The `ornith` row is the
+# production pair and is NOT a literal copy of mise.toml [env]: it is read from
+# the environment when used, so a model swap in [env] cannot leave the row
+# stale (scripts/check_docs.py gates this file as a consumer for that reason).
 CANDIDATES = {
-    "ornith": {
-        "model": "ornith-ai/Ornith-1.5-9B-GGUF:Q4_K_M",
-        "flags": "--no-mmproj -ngl 999 -fa on -c 65536 -ctk q8_0 -ctv q8_0 --reasoning-budget 4096",
-        "note": "current production (dense ~9B, qwen-style thinking)",
-    },
     "gemma-26b-qat": {
         "model": "unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL",
         "flags": "--spec-type draft-mtp --spec-draft-n-max 4 -ngl 999 -fa on -c 65536 -ctk q8_0 -ctv q8_0 --reasoning-budget 4096",
@@ -56,6 +55,24 @@ CANDIDATES = {
         "note": "65L dense Q2 (needs PG closed)",
     },
 }
+
+
+def candidate(key: str) -> dict[str, str] | None:
+    """Registry row for `key`; `ornith` is the live `[env]` production pair."""
+    if key == "ornith":
+        model = os.environ.get("LLM_MODEL", "").strip()
+        flags = os.environ.get("LLM_FLAGS", "").strip()
+        if not model or not flags:
+            raise SystemExit(
+                "LLM_MODEL/LLM_FLAGS not set — run `mise agentic-tune` (mise.toml "
+                "[env] is the single source for the production pair)"
+            )
+        return {
+            "model": model,
+            "flags": flags,
+            "note": "current production (read from mise.toml [env])",
+        }
+    return CANDIDATES.get(key)
 
 
 def _load_cases(eval_set: str, cases_path: str | None) -> list[dict]:
@@ -70,7 +87,9 @@ def _load_cases(eval_set: str, cases_path: str | None) -> list[dict]:
     return data["cases"] if isinstance(data, dict) else data
 
 
-def _run_id(eval_set: str, model: str, temperature: float, seed: int, budget: int, max_rounds: int) -> str:
+def _run_id(
+    eval_set: str, model: str, temperature: float, seed: int, budget: int, max_rounds: int
+) -> str:
     model_key = model.split("/")[-1].split(":")[0].replace(".", "-")[:28]
     return f"{eval_set}__{model_key}__t{temperature}_s{seed}_b{budget}_r{max_rounds}"
 
@@ -121,7 +140,14 @@ def run_once(args) -> dict:
     if args.eval_set == "golden-short" and (args.temperature or args.seed):
         print("golden-short parity set pins temperature=0 seed=0; overriding.")
         args.temperature, args.seed = 0, 0
-    run_id = _run_id(args.eval_set, args.model, args.temperature, args.seed, args.reasoning_budget, args.max_rounds)
+    run_id = _run_id(
+        args.eval_set,
+        args.model,
+        args.temperature,
+        args.seed,
+        args.reasoning_budget,
+        args.max_rounds,
+    )
     out = TUNE_DIR / f"{run_id}.json"
     if out.exists() and not args.force:
         print(f"[SKIP] {run_id} (exists)")
@@ -183,10 +209,17 @@ def _server_running() -> bool:
 
 
 def _spawn_server(model: str, flags: str) -> None:
-    """Launch llama-server directly (mise [env] would override our env vars)."""
-    args = ["llama-server", "-hf", model, *flags.split(), "--host", "0.0.0.0", "--port", "8080",
-            "-np", "1", "--log-file", "logs/llm.log"]
-    __import__("subprocess").Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    """Launch llama-server directly (mise [env] would override our env vars).
+
+    The argv comes from `scripts.services.llm_argv` — the same builder
+    `mise llm-start` uses, so the host/port/-np/log-file assembly has one owner
+    and a change to it lands in both launchers.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # `scripts/` sits at the repo root
+    from scripts.services import LOG_DIR, llm_argv
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    subprocess.Popen(llm_argv(model, flags), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def _maybe_restart_server(args) -> None:
@@ -194,7 +227,7 @@ def _maybe_restart_server(args) -> None:
     needs = args.model != "current" or args.reasoning_budget != 4096
     if not needs or not args.llm_restart:
         return
-    cand = CANDIDATES.get(args.model)
+    cand = candidate(args.model)
     if cand:
         flags = cand["flags"]
         if args.reasoning_budget != 4096:
@@ -262,7 +295,9 @@ def compare(paths: list[str]) -> int:
     print(hdr)
     print("-" * len(hdr))
     for row in sorted(rows, key=lambda x: (x[0].split("__")[0], x[1], x[5], -x[7])):
-        print(f"{row[0]:<44} {row[1]:>4} {row[2]:>2} {row[3]:>5} {row[4]:<24} {row[5]:>4} {row[6]:>3} {row[7]:>4} {row[8]:>5.0f}")
+        print(
+            f"{row[0]:<44} {row[1]:>4} {row[2]:>2} {row[3]:>5} {row[4]:<24} {row[5]:>4} {row[6]:>3} {row[7]:>4} {row[8]:>5.0f}"
+        )
     return 0
 
 
@@ -274,11 +309,24 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-rounds", type=int, default=6)
     parser.add_argument("--reasoning-budget", type=int, default=4096)
-    parser.add_argument("--model", default="current", help="candidate key from CANDIDATES")
-    parser.add_argument("--llm-restart", action="store_true", help="restart llama.cpp for --model/--reasoning-budget")
-    parser.add_argument("--sweep-temperature", default=None, help="comma list; sweep with fixed seed")
+    parser.add_argument(
+        "--model",
+        default="current",
+        help="model key: `current` (mise [env], untouched), `ornith` ([env] production, "
+        "re-read live), or a CANDIDATES key",
+    )
+    parser.add_argument(
+        "--llm-restart",
+        action="store_true",
+        help="restart llama.cpp for --model/--reasoning-budget",
+    )
+    parser.add_argument(
+        "--sweep-temperature", default=None, help="comma list; sweep with fixed seed"
+    )
     parser.add_argument("--sweep-seeds", default="0", help="comma list of seeds for the sweep")
-    parser.add_argument("--sweep-reasoning", default=None, help="comma list of budgets (needs --llm-restart)")
+    parser.add_argument(
+        "--sweep-reasoning", default=None, help="comma list of budgets (needs --llm-restart)"
+    )
     parser.add_argument("--force", action="store_true", help="re-run even if run-id exists")
     parser.add_argument("--store", default="data/sqlite_gorgon.db")
     parser.add_argument("--compare", nargs="*", metavar="JSON", help="tabulate run reports")

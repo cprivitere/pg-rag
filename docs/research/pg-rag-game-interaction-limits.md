@@ -11,7 +11,7 @@ justify exceptions. Where the TOS prohibits a category by name, pg-rag
 simply does not do it — regardless of what a court might allow.
 
 Rationale: a TOS violation by the knowledge base taints every downstream
-consumer (this repo, the OpenWebUI pipe, the glogger tab). These lines exist
+consumer (this repo, the glogger tab). These lines exist
 so no future session has to re-derive them — and so code review can check
 against them mechanically via `scripts/check_constraints.py`.
 
@@ -129,7 +129,7 @@ In full-compliance mode the scanner's candidate set is exactly `ALL_GLOBS`:
 `src/**/*.py`, `scripts/**/*.py`, `tests/**/*.py` for the code-shaped
 categories, plus `docs/**/*.md`, `.agents/**/*.md`, root `*.md` and root
 `*.toml` (`mise.toml`/`pyproject.toml`/`ruff.toml`) for artifacts and
-wire-protocol names. `notebooks/`, `.omp/`, `.mise/`, and any `*.ps1` file are
+wire-protocol names. `notebooks/`, `.omp/`, and any `*.ps1` file are
 outside the globs by construction.
 
 Verified 2026-10-13 on the clean repo: `compliance check: OK (101 files

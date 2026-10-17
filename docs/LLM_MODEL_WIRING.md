@@ -2,10 +2,11 @@
 
 Source of truth for how to launch the pg-rag LLM. The `LLM_MODEL` /
 `LLM_FLAGS` pair lives in `mise.toml [env]` and is consumed by
-`.mise/tasks/llm-start.ps1` (`llama-server -hf $env:LLM_MODEL $env:LLM_FLAGS
---host 0.0.0.0 --port 8080`), by `mise debug-llm` (via `{{ env.LLM_MODEL }}` /
-`{{ env.LLM_FLAGS }}`), and by `scripts/check_docs.py` (tomllib). `mise drift`
-fails if any consumer hardcodes a model literal.
+`scripts/services.py` (`llama-server -hf $LLM_MODEL $LLM_FLAGS
+--host 0.0.0.0 --port 8080 -np 1 --log-file logs/llm.log`, read via
+`os.environ` and shared by `mise llm-start`, `mise debug-llm` and
+`scripts/agentic_tune.py --llm-restart`), and by `scripts/check_docs.py`
+(tomllib). `mise drift` fails if any consumer hardcodes a model literal.
 
 A `mise.toml` entry always sets the **current** model; swap by editing the two
 vars there, then `mise llm-stop` → `mise llm-start` (stop tree-kills, verified
@@ -173,8 +174,9 @@ Same `mise golden*` commands; only the *server flags* differ.
   mise golden-short               # a FAIL now means a real change, not a coin flip
   ```
 
-  `.mise/tasks/llm-start.ps1` appends `--reasoning off` when `LLM_REASONING=off`
-  is set (it prints the switch so the log records which mode served the run).
+  `scripts/services.py` appends `--reasoning off` when `LLM_REASONING=off`
+  is set (it prints the switch so the task output records which mode served the
+  run).
   Cost: this is **not** the production config — with thinking off, per-case
   latency drops hard, but the run measures routing + plain generation, not the
   production answer. Use it to answer "did my change break something?", not

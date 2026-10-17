@@ -125,7 +125,9 @@ def main() -> int:
         # golden_check's `--type` choices, so nothing owns it.
         unknown = sorted(t for t in types if t not in known_types)
         if unknown:
-            mismatches.append("unroutable type(s): " + ", ".join(f"{t}={types[t]}" for t in unknown))
+            mismatches.append(
+                "unroutable type(s): " + ", ".join(f"{t}={types[t]}" for t in unknown)
+            )
         if f"{len(golden_files)} files exist today" not in text:
             mismatches.append(f"count ({len(golden_files)})")
         for t, n in sorted(types.items()):
@@ -195,11 +197,11 @@ def main() -> int:
             _report("OK", f"skill {name} present")
 
     # --- 6. Model refs are single-sourced in mise.toml [env] ---------------
-    # Every consumer (.mise/tasks/*-start.ps1, mise debug-* tasks, AGENTS.md,
-    # skills docs) must reference the *_MODEL/*_FLAGS variable / template —
-    # never the literal value. A swapped model without the SAME edit in all
-    # consumers is exactly the drift this catches (a bare literal in any
-    # consumer file = a leftover from before the swap).
+    # Every consumer (scripts/services.py, scripts/agentic_tune.py, AGENTS.md)
+    # must reference the *_MODEL/*_FLAGS variable — never the literal value. A
+    # swapped model without the SAME edit in all consumers is exactly the drift
+    # this catches (a bare literal in any consumer file = a leftover from before
+    # the swap).
     try:
         mise_env = tomllib.loads(_read("mise.toml")).get("env", {})
     except (OSError, tomllib.TOMLDecodeError) as exc:  # pragma: no cover
@@ -213,31 +215,21 @@ def main() -> int:
     if all(k in mise_env for k in model_keys):
         # Files where a literal model ref/flag WOULD be a leftover.
         consumers = {
-            "llm-start.ps1": ROOT / ".mise" / "tasks" / "llm-start.ps1",
-            "mise.toml debug-* tasks": ROOT / "mise.toml",
+            "scripts/services.py": ROOT / "scripts" / "services.py",
+            "scripts/agentic_tune.py": ROOT / "scripts" / "agentic_tune.py",
             "AGENTS.md": ROOT / "AGENTS.md",
         }
         for label, path in consumers.items():
             text = path.read_text(encoding="utf-8")
-            if label == "mise.toml debug-* tasks":
-                # mise.toml itself legitimately CONTAINS the values (it is
-                # the source) — only the debug-* task run-strings must
-                # reference {{ env.X }}. Only debug-llm exists.
-                leaks = [k for k in model_keys if f"{{{{ env.{k} }}}}" not in text]
-                if leaks:
-                    _drift("mise debug tasks missing env template", ", ".join(leaks))
-                else:
-                    _report("OK", "mise debug tasks reference env templates")
+            leaked = [k for k in model_keys if mise_env[k] in text]
+            if leaked:
+                _drift(
+                    f"{label} hardcodes model literal",
+                    ", ".join(f"{k}={mise_env[k]}" for k in leaked),
+                )
             else:
-                leaked = [k for k in model_keys if mise_env[k] in text]
-                if leaked:
-                    _drift(
-                        f"{label} hardcodes model literal",
-                        ", ".join(f"{k}={mise_env[k]}" for k in leaked),
-                    )
-                else:
-                    varref = [v for v in model_keys if v in text]
-                    _report("OK", f"{label} references env vars: {', '.join(varref) or 'none'}")
+                varref = [v for v in model_keys if v in text]
+                _report("OK", f"{label} references env vars: {', '.join(varref) or 'none'}")
 
     else:
         # A missing key silently skips all model checks — fail loudly instead.

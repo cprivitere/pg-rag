@@ -62,8 +62,7 @@ guardrail becomes a wrong guardrail that future runs trust.
   consistent.
 - **`scripts/` is operational documentation.** `golden_check.py` parses
   `{id, question, type, facts}` with any-variant-substring pass; `rag_chat.py`
-  (port 7860, LLM :8080) matches. `pg_rag.py`'s `PG_ROOT` is
-  `PG_RAG_ROOT` env-or-default, not "hardcoded".
+  (port 7860, LLM :8080) matches.
 - **Curator is a documented heuristic stub, not LLM curation** (chosen, not
   deferred): `curator.py` states its deterministic-template nature — stable,
   offline anchors. LLM curation is deliberately rejected (it would break the
@@ -245,8 +244,8 @@ guardrail that keeps it truthful.
   phrasing) and reasoning-ON single-sample variance. Both halves are now
   addressed: the hygiene class was refactored, the density class split (above),
   and the reasoning-off dev gate is **implemented** —
-  `.mise/tasks/llm-start.ps1` appends `--reasoning off` when `LLM_REASONING=off`
-  is set (it prints the mode so the log records it), documented in
+  `scripts/services.py` appends `--reasoning off` when `LLM_REASONING=off`
+  is set (it prints the mode so the task output records it), documented in
   `docs/LLM_MODEL_WIRING.md` ("Dev gate vs acceptance gate") and in the
   evaluation skill. Assembly verified (script parses; the command line gains the
   flag only in that mode); the live restart was not exercised because the

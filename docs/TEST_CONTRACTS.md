@@ -196,7 +196,7 @@ test (prove the source is fine) or recording a deliberate contract change
 ### L4 — SQLite store + source ingestion
 
 - **Tests**: `test_sqlstore_build.py`, `test_session_ingest.py`,
-  `test_glogger_ingest.py`, `test_preflight_sync.py`
+  `test_glogger_ingest.py`, `test_preflight_sync.py`, `test_publish_store.py`
 - **Source**: `src/pgrag/agentic/` (`store.py`, `session.py`, `glogger.py`),
   `scripts/build_sqlstore.py`, `scripts/agentic_chat.py`, `scripts/publish_store.py`
 - **Contracts**: `build_store` is idempotent (INSERT OR REPLACE + per-file
@@ -220,6 +220,10 @@ test (prove the source is fine) or recording a deliberate contract change
   (sizes, sha256, row counts) + a reproducible `git archive` of `src/`+`scripts/`
   from the working tree — it refuses to run against the public bucket and asserts
   `bucket_info(...).private` before the first byte.
+  `--docs` (`mise upload-docs`) publishes `data/documents.json` to the PUBLIC
+  corpus bucket with the same auth probe + remote-size verification, reading no
+  store data, and neither path may run when the two targets collapse onto one
+  bucket (each refuses the other's bucket).
 - **Change ⇒** `uv run pytest tests/test_sqlstore_build.py
   tests/test_session_ingest.py tests/test_glogger_ingest.py
   tests/test_preflight_sync.py` (+ the file you edited), then `mise sql-store`
@@ -302,16 +306,16 @@ test (prove the source is fine) or recording a deliberate contract change
 
 - **Tests**: `test_lint.py`
 - **Source**: `ruff.toml` (repo root — the single rule source), `mise.toml`
-  `[tasks.lint]/[tasks.fmt]`, `pyproject.toml` `[dependency-groups].dev`
+  `[tasks.lint]/[tasks.format]`, `pyproject.toml` `[dependency-groups].dev`
   (ruff pinned there, not in runtime deps)
 - **Contracts**: `uv run ruff check src scripts tests` returns 0 — any new
   finding in the linted trees fails `mise test`. `ruff.toml` `extend-exclude`
   (`data/`, caches) plus per-file-ignores (`scripts/**`:
-  BLE001/PLW1510/S110/S112/DTZ005/RUF059/F841; `scripts/pg_rag.py`: E402;
+  BLE001/PLW1510/S110/S112/DTZ005/RUF059/F841;
   `tests/**`: BLE001/RUF059) are deliberate, not drift.
 - **Change ⇒** `uv run pytest tests/test_lint.py -q`; adding a rule = clean the
   new findings in the same commit (never raise the gate then violate it
-  elsewhere). Format-only work is `mise fmt` — the gate does not check
+  elsewhere). Format-only work is `mise format` — the gate does not check
   formatting.
 - This layer replaces **none**: it guards hygiene across all layers; the
   functional layers above remain the authority on behavior.
@@ -338,10 +342,35 @@ test (prove the source is fine) or recording a deliberate contract change
   §7 says a prohibited category is argued to Elder Game, never to this repo.
 - This layer replaces **none**: it enforces the policy across every other layer.
 
+### L10 — Service control (`scripts/services.py`)
+
+- **Tests**: `test_services.py`
+- **Source**: `scripts/services.py`; consumers `mise.toml` (`llm-start`/`llm-stop`/`chat-start`/
+  `chat-stop`/`start-all`/`stop-all`/`status`/`debug-llm`), `scripts/agentic_tune.py` (stops/starts via
+  `mise run llm-stop`/`llm-start`, and builds its `--llm-restart` candidate server argv with
+  `services.llm_argv` — candidate model/flags from its sweep registry, not `[env]`)
+- **Contracts**: the LLM argv carries `LLM_MODEL` + `LLM_FLAGS` from `[env]` (never a literal),
+  `--reasoning off` is appended when `LLM_REASONING=off`; chat spawns `uv run --with gradio python
+  scripts/rag_chat.py` with `PG_RAG_CHAT_NO_BROWSER=1`; the port-owner fallback parses `netstat -ano`
+  (all families — `-p TCP` hides every IPv6 listener) / `ss -ltnpH` / `lsof -t -i TCP:<port>
+  -sTCP:LISTEN` (listener-scoped), so a client socket is never picked; the port probe covers both
+  loopbacks (`127.0.0.1` + `::1`), matching the owner scan's family coverage; a pidfile pid is only
+  signalled while its live image still matches the service's `process` **and** its recorded start
+  token (read at spawn; unknown on either side is not a veto) still matches the live process —
+  liveness is not identity, so a recycled pid must not be killed; `stop` reports a held port it cannot
+  attribute and exits 1 (keeping the pidfile) instead of a false "Not running"; stop tree-kills
+  (`taskkill /T /F` on Windows, `killpg` only when the pid is its own process-group leader, SIGTERM then
+  SIGKILL) and never killpg's a foreign group; a spawn that dies immediately leaves no pidfile;
+  status probes the per-service health URL (`:8080/health` for the LLM, `:7860/` for chat) and treats
+  HTTP 503 as **loading** (up), so `status` exits 0 on a healthy boot and 1 only when a service is
+  genuinely down.
+- **Change ⇒** `uv run pytest tests/test_services.py -q`, then a live `mise start` / `mise status` /
+  `mise down` smoke (the manager owns the real :8080/:7860 processes).
+
 ## Hard rules (no exceptions)
 
 1. A test that **changes an assertion** is a **contract change** — state the
-   new contract in the test and run the layer's sibling suite (L1–L9 above).
+   new contract in the test and run the layer's sibling suite (L1–L10 above).
 2. A test that **fails without a contract change** is a **regression in
    source** — fix the source, not the test.
 3. Never hand-edit a build artifact to satisfy a test (`documents.json`,

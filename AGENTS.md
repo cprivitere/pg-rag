@@ -25,8 +25,7 @@ store (`data/sqlite_gorgon.db`) holds the same CDN/wiki data plus live session
 and glogger play history. **All retrieval is the agentic tool loop**
 (`pgrag.agentic.loop.run_loop`, `src/pgrag/agentic/loop.py`) driving five tools
 over that store + the BM25 corpus. Ships a CLI (`pgrag`), the Gradio chat,
-agentic CLI chat, the legacy OpenWebUI pipe, curation tooling, and the golden
-eval.
+agentic CLI chat, curation tooling, and the golden eval.
 
 ## Architecture & Data Flow
 
@@ -135,7 +134,8 @@ corpus_search, player_state`.
   `sqlite_gorgon.db` (+ `sqlite_state.json`), `golden/`, `agentic_tune/`,
   `eval/`, and `retrieval_traces/` (loop traces: `PGRAG_TRACE=1` on
   `golden_check.py`, `--trace` on `golden_rerun.py`). Service logs live at project-root
-  `logs/` (`llm.log`, `chat.log`, and `webui.log` when run). The dense path's
+  `logs/` (`llm.log` + `llm-stdio.log` from the launcher, `chat.log` +
+  `chat-error.log`). The dense path's
   artifacts (`chroma/`, `bakeoff_*.json`, `embed_vram.json`,
   `rerank_stats.json`, `evaluation/queries.jsonl`) were deleted with the
   cutover — nothing reads them. `retrieval_traces/` is live (loop traces).
@@ -166,25 +166,26 @@ corpus_search, player_state`.
 ## Development Commands
 
 Python ≥3.15, managed with `uv`. `mise tasks` lists everything. The
-`mise.toml` `[tasks]` set is exactly: `test`, `sync`, `sync-full`,
-`refresh-cdn`, `refresh-wiki`, `generate-docs`, `build-bm25`,
-`build-tool-corpus`, `sync-wiki`, `sync-cdn`, `sql-store`, `upload-store`,
-`agentic-chat`, `agentic-tune`, `golden`, `golden-short`, `golden-one`,
-`golden-type`, `golden-flaky`, `golden-flaky-list`, `debug-llm`, `llm-pick`,
-`debug-webui`, `chat`, `start-all`, `stop-all`, `status`, `drift`,
-`compliance`, `logs`, `tail-llm`, `tail-webui`, `lint`, `fmt` — plus the
-`.mise/tasks/*.ps1` file tasks (`llm-start`/`llm-stop`, `chat-start`/`chat-stop`,
-`webui-start`/`webui-stop`, `upload-docs`, `ensure-logs-dir`).
+`mise.toml` `[tasks]` set is exactly: `test`, `sync-fast`, `sync-full`,
+`generate-docs`, `build-bm25`, `build-tool-corpus`, `sync-wiki`, `sql-store`,
+`upload-store`, `upload-docs`, `agentic-chat`, `agentic-tune`, `golden`,
+`golden-short`, `golden-one`, `golden-type`, `golden-flaky`,
+`golden-flaky-list`, `debug-llm`, `chat`, `llm-start`, `llm-stop`,
+`chat-start`, `chat-stop`, `start-all`, `stop-all`, `status`, `drift`,
+`compliance`, `logs`, `tail-llm`, `lint`, `format`. Service tasks
+(`llm-start`, `llm-stop`, `chat-start`, `chat-stop`) run
+`scripts/services.py`; the `.mise/tasks/` directory is gone.
 
 ```sh
 uv run pgrag download-wiki          # fetch wiki dumps
 uv run pgrag download-cdn           # fetch CDN json
 uv run pgrag build-documents        # regenerate documents.json (stamps version)
-mise sync / sync-full               # CDN (+wiki) → documents → BM25 → tool corpus (aliases sy/syf)
-mise sync-wiki / sync-cdn           # converge one source, then documents + BM25 (syw/syc)
+mise sync-fast / sync-full          # CDN (+wiki) → documents → BM25 → tool corpus (aliases sy/syf)
+mise sync-wiki                      # converge wiki to current source, then documents + BM25 (alias syw)
 mise generate-docs                  # bare idempotent documents rebuild (alias docs)
 mise build-bm25 / build-tool-corpus # rebuild the lexical index / tool-corpus variant (b25/btc)
 mise sql-store (alias sq)           # build data/sqlite_gorgon.db: CDN + wiki + session + glogger sources
+mise upload-docs (alias ud)         # publish data/documents.json to the PUBLIC corpus bucket for the molab notebook
 mise agentic-chat (alias ac)        # agentic CLI chat over the store (tool loop; needs only LLM :8080; pre-chat session+glogger refresh runs automatically, --no-sync skips)
 mise golden                         # full golden eval through the loop (LLM only; LONG — batch it in the background)
 mise golden-short                   # the 8-case fast tier (alias gds)
@@ -193,9 +194,9 @@ mise golden-type recipe             # golden subset by type (entity|recipe|compa
 mise golden-flaky / golden-flaky-list # focus on historically-troublesome cases / audit stats
 mise chat                           # Gradio chat (primary UI; started by `mise start`; refreshes the store first; needs only LLM up)
 mise lint                           # ruff check src scripts tests (alias li) — run after editing code
-mise fmt                            # ruff format + safe autofix (alias fo)
+mise format                         # ruff format + safe autofix (alias fo)
 uv run pytest                       # offline test suite
-mise drift                          # check docs/skills against the repo (alias dr)
+mise drift                          # check docs/skills against the repo (alias dc)
 mise compliance                     # TOS/CoC hard-line scan (alias comp) — also step 1 of mise test
 ```
 
@@ -203,9 +204,12 @@ mise compliance                     # TOS/CoC hard-line scan (alias comp) — al
 `agentic-chat`) need the LLM at :8080.
 
 **Concurrency gate.** `.omp/hooks/pre/00-repo-lock.ts` guards the destructive
-corpus commands (`build-*`, `generate-docs`, `mise sync-*`) with an atomic
-`O_EXCL` lock at `data/.omp-build.lock`, so two omp instances on this repo
-never rewrite the shared corpus at once. Never bypass it by hand-editing the
+corpus commands (`build-*`, `generate-docs`, `mise sync-*`, and the aliases that
+run those same tasks) with an atomic `O_EXCL` lock at `data/.omp-build.lock`, so
+two omp instances on this repo never rewrite the shared corpus at once.
+`mise sql-store` (private additive store, not corpus state) and the publish
+tasks are deliberately unguarded, and a pure read that only *names* a build task
+(`grep -rn build-documents .`) takes no lock. Never bypass it by hand-editing the
 lock; to clear a stuck lock, delete `data/.omp-build.lock`.
 
 ## Code Conventions & Common Patterns
@@ -256,10 +260,6 @@ lock; to clear a stuck lock, delete `data/.omp-build.lock`.
   `DEFAULT_GLOGGER_DB` = `%APPDATA%/glogger.Personal/glogger.db` (`RELEASE_GLOGGER_DB`
   is the fallback) is what moves if
   glogger relocates).
-- `scripts/pg_rag.py` — legacy OpenWebUI pipe, `PG_ROOT =
-  os.environ.get("PG_RAG_ROOT", r"F:\ProjectGorgon\pg-rag")` (env override,
-  Windows default) + `os.chdir()`, adds `PG_ROOT/src` to `sys.path` — the
-  default path is what moves if the repo relocates.
 - `scripts/rag_chat.py` — Gradio chat over the tool loop (port 7860).
 - `scripts/curator.py` + `curator_scheduler.py` — heuristic (non-LLM) curation:
   regex-detect fragmented knowledge (area_levels, skill_trainers,
@@ -271,13 +271,15 @@ lock; to clear a stuck lock, delete `data/.omp-build.lock`.
   rerun + flaky focus (`mise golden-one`/`golden-flaky`; appends miss history to
   `data/golden/history.jsonl`); `scripts/agentic_tune.py` — tuning sweeps.
 - `scripts/build_sqlstore.py` — SQLite store build; `scripts/build_tool_corpus.py`
-  — tool-corpus variant; `scripts/publish_store.py` — private-bucket publish;
+  — tool-corpus variant; `scripts/publish_store.py` — private-bucket publish
+  (`--docs` = `mise upload-docs`, the public corpus bucket);
   `scripts/agentic_chat.py` — agentic CLI chat (+ pre-chat sync).
 - `docs/TEST_CONTRACTS.md` — layer→tests→contract map + regression-triage
   protocol (read before changing behavior/tests); `docs/REVIEW.md` — audit
   findings + improvement backlog.
-- `scripts/check_services.py` — [OK]/[DOWN] probes for all services.
-- `mise.toml` `[env]`: `WEBUI_DIR`, `LOGS_DIR`, `LLM_MODEL`, `LLM_FLAGS` —
+- `scripts/services.py` — start/stop/status for the LLM + Gradio chat
+  (cross-platform; the `.mise/tasks/*.ps1` service scripts it replaced are gone).
+- `mise.toml` `[env]`: `LOGS_DIR`, `LLM_MODEL`, `LLM_FLAGS` —
   update if paths move.
 
 ## Runtime/Tooling Preferences
@@ -289,25 +291,29 @@ lock; to clear a stuck lock, delete `data/.omp-build.lock`.
   |-----|------|--------------|
   | LLM | 8080 | `LLM_MODEL` (`[env]`; `LLM_FLAGS` carries launch tuning) — the one hard dependency; the tool loop answers through it. A running instance OOMs before start → `mise down` (alias of `stop-all`) first |
   | Chat (Gradio) | 7860 | primary UI — part of `mise start` (alias of `start-all`); `mise chat` foreground; loop-driven, refreshes the store at startup, needs LLM :8080 |
-  | OpenWebUI | 3000 | optional (legacy) — `mise webui-start`/`webui-stop`; not in `start-all`/`stop-all` |
+
+  Service control is `scripts/services.py`: `mise llm-start`/`llm-stop`,
+  `chat-start`/`chat-stop`, `status`, `debug-llm` (cross-platform; the deleted
+  `.mise/tasks/*.ps1` launchers were Windows-only).
 
   Embed (:8081) and reranker (:8082) services are **retired** — start tasks
   and env keys were deleted with the dense path.
 - **Single-source models**: refs + tuning flags live once in `mise.toml [env]`
-  (`LLM_MODEL`/`LLM_FLAGS`); consumed by `.mise/tasks/llm-start.ps1` (`$env:`),
-  `mise debug-llm` (`{{ env.LLM_MODEL }}`/`{{ env.LLM_FLAGS }}`), and
-  `scripts/check_docs.py` (tomllib). `mise drift` fails if any consumer
-  hardcodes a model literal. Tuning rationale: `docs/LLM_MODEL_WIRING.md`.
+  (`LLM_MODEL`/`LLM_FLAGS`); consumed by `scripts/services.py` (`os.environ`,
+  the LLM launch path) and `scripts/check_docs.py` (tomllib). `mise drift`
+  fails if any consumer hardcodes a model literal. Tuning rationale:
+  `docs/LLM_MODEL_WIRING.md`.
 - Tests import the installed `pgrag` package — after changing `src/pgrag/`, no
   reinstall needed (editable install).
 
 ## Testing & QA
 
-- **Framework**: pytest via `uv run pytest`; the suite collects **412 tests**,
+- **Framework**: pytest via `uv run pytest`; the suite collects **451 tests**,
   of which **78 are deselected by the default `not slow` marker** (16
-  data-heavy tests + the 62 parametrized golden cases), leaving **334** in the
-  default offline run — all offline (temp-dir integration, mocked servers). The
-  golden gate is the only suite that needs any server.
+  data-heavy tests + the 62 parametrized golden cases), leaving **373** in the
+  default offline run (one POSIX-only port-owner case skips on Windows) — all
+  offline (temp-dir integration, mocked servers). The golden gate is the only
+  suite that needs any server.
 - **Golden eval** (`tests/test_golden_check.py`): parametrized over
   `data/golden/*.json`; the `require_servers` fixture skips unless the LLM
   (:8080) is up — **LLM only**, nothing else. Each case runs through
@@ -348,7 +354,7 @@ lock; to clear a stuck lock, delete `data/.omp-build.lock`.
   source, not the test.
 - **Lint gate** (`tests/test_lint.py`, layer L8 in `docs/TEST_CONTRACTS.md`):
   `uv run ruff check src scripts tests` must be clean — a failing check fails
-  `uv run pytest`. Run `mise lint` after editing code (`mise fmt` applies the
+  `uv run pytest`. Run `mise lint` after editing code (`mise format` applies the
   safe autofixes: import sort, unused imports, f-strings, formatting). Rules
   live solely in `ruff.toml`; the per-file-ignores there (scripts: broad
   excepts, unchecked subprocess; tests: broad catches) are deliberate. New rule
@@ -368,7 +374,8 @@ lock; to clear a stuck lock, delete `data/.omp-build.lock`.
   errors), `test_agentic_tools.py`/`test_agentic_loop.py` (the five tools + the
   round protocol), `test_sqlstore_build.py`/`test_session_ingest.py`/
   `test_glogger_ingest.py` (store ingestion), `test_golden_check.py` (the
-  golden gate), `test_download_wiki.py` (batching, redirects, orphan cleanup —
-  patches `META_FILE`+`WIKI_DIR` to tmp).
+  golden gate), `test_services.py`/`test_publish_store.py` (service control +
+  the two publish paths), `test_download_wiki.py` (batching, redirects, orphan
+  cleanup — patches `META_FILE`+`WIKI_DIR` to tmp).
 - **Coverage expectation**: one test defends each observable contract;
   integration tests use temp dirs and mocked servers rather than live ones.

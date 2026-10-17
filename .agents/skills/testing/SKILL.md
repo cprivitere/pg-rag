@@ -5,10 +5,11 @@ description: Regression-triage and test discipline for pg-rag — how to decide 
 
 # testing — regression triage & test discipline
 
-The suite collects 412 tests; the default `not slow` marker deselects 78 (16
-data-heavy tests + the 62 parametrized golden cases), leaving 334 in the default
-offline run. Everything is offline — the golden gate is the only suite that
-needs a server, and only the LLM (:8080). When a test fails, triage BEFORE
+The suite collects 451 tests; the default `not slow` marker deselects 78 (16
+data-heavy tests + the 62 parametrized golden cases), leaving 373 in the default
+offline run (one POSIX-only port-owner case skips on Windows). Everything is
+offline — the golden gate is the only suite that needs a server, and only the
+LLM (:8080). When a test fails, triage BEFORE
 editing. The full layer→test contract map is `docs/TEST_CONTRACTS.md` — READ IT
 (this skill is the decision procedure, not the map; the map is the single owner
 of which file defends which contract).
@@ -17,7 +18,7 @@ of which file defends which contract).
 
 1. **Identify the layer.** `docs/TEST_CONTRACTS.md` maps every test file to its
    layer (document-gen / bm25 / agentic loop / store / loaders-curation / golden
-   / llm-client / lint / compliance) and the source it protects.
+   / llm-client / lint / compliance / service control) and the source it protects.
 2. **Did the source legitimately change?**
    - Yes → update the test to the new contract (a CONTRACT CHANGE — see rules).
    - No → the failure is a real regression: **fix the source, never the test.**
@@ -62,8 +63,10 @@ sweep/compare, `test_golden_check.py` = the offline gate drives it via
   `test_agentic_loop.py`, `test_agentic_tune.py`), then a `mise agentic-chat`
   smoke (LLM only).
 - Store-ingestion change → L4 (`test_sqlstore_build.py`,
-  `test_session_ingest.py`, `test_glogger_ingest.py`, `test_preflight_sync.py`),
-  then `mise sql-store`.
+  `test_session_ingest.py`, `test_glogger_ingest.py`, `test_preflight_sync.py`,
+  `test_publish_store.py`), then `mise sql-store`.
+- Service-control change → L10 (`test_services.py`), then a live `mise start` /
+  `mise status` / `mise down` smoke (the manager owns real :8080/:7860).
 - Doc-gen change → inspect representative docs after `pgrag build-documents`.
 - Golden change → `test_golden_check.py` must collect it offline (it runs
   through the loop and skips without the LLM). A full `mise golden` run is a

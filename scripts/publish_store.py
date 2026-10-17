@@ -21,10 +21,17 @@ to run at all if ``BUCKET`` equals the public corpus bucket, and it asserts
 
 Run ``mise sql-store`` first so the snapshot reflects current sources. Re-runs
 are idempotent (snapshot + tarball are rebuilt from the current db and HEAD).
+
+``--docs`` (`mise upload-docs`) instead publishes ``data/documents.json`` to
+the PUBLIC corpus bucket ``Nubula/paddock`` for the molab notebook. Docs mode
+reads only the corpus file — the store is never opened, so it carries no
+privacy guard; the store mode below keeps its ``BUCKET == PUBLIC_BUCKET``
+refusal and ``_ensure_private_bucket``.
 """
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -50,11 +57,15 @@ REMOTE_STORE = "store/sqlite_gorgon.db"
 REMOTE_MANIFEST = "store/manifest.json"
 REMOTE_TARBALL = "store/pgrag-src.tar.gz"
 
+DOCS = Path("data/documents.json")
+REMOTE_DOCS = "documents.json"
+DOCS_BUCKET = PUBLIC_BUCKET
 
-def _uri(path: str) -> str:
+
+def _uri(path: str, bucket: str = BUCKET) -> str:
     """Bucket URIs need the explicit ``buckets/`` segment: bare
     ``hf://<ns>/<name>/...`` is resolved as a *model repo* and 404s."""
-    return f"hf://buckets/{BUCKET}/{path}"
+    return f"hf://buckets/{bucket}/{path}"
 
 
 def _token() -> str | None:
@@ -69,7 +80,7 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _auth_probe():
+def _auth_probe(bucket: str = BUCKET):
     """Fail before any work if there is no usable write token."""
     from huggingface_hub import HfApi
 
@@ -78,7 +89,7 @@ def _auth_probe():
         who = api.whoami()
     except Exception as exc:  # any HF failure is fatal here
         raise SystemExit(f"no HF write auth: {exc}") from exc
-    print(f"authenticated as {who.get('name')} (bucket {BUCKET})")
+    print(f"authenticated as {who.get('name')} (bucket {bucket})")
     return api
 
 
@@ -191,8 +202,8 @@ def _ensure_private_bucket(api) -> None:
     print(f"bucket private: {info.private} ({info.total_files} files, {info.size:,} B on the Hub)")
 
 
-def _upload(fs, local: Path, remote: str) -> None:
-    dest = _uri(remote)
+def _upload(fs, local: Path, remote: str, bucket: str = BUCKET) -> None:
+    dest = _uri(remote, bucket)
     with local.open("rb") as fin, fs.open(dest, "wb") as fout:
         shutil.copyfileobj(fin, fout)
     local_bytes = local.stat().st_size
@@ -202,9 +213,50 @@ def _upload(fs, local: Path, remote: str) -> None:
         raise SystemExit(f"size mismatch after upload: {dest} — re-run the upload")
 
 
-def main() -> int:
+def _publish_docs() -> int:
+    """Publish the corpus documents to the PUBLIC bucket (mise upload-docs)."""
+    if DOCS_BUCKET == BUCKET:
+        # The mirror of the store-path refusal: the two paths must never collapse
+        # onto one bucket, or a misrouted corpus publish would silently land in
+        # the private store bucket (or, worse, a store publish in the public one).
+        raise SystemExit(f"refusing: docs target {DOCS_BUCKET} equals the private store bucket")
+    if not DOCS.exists():
+        raise SystemExit(f"{DOCS} not found — run `mise generate-docs` first.")
+    _auth_probe(DOCS_BUCKET)
+
+    from huggingface_hub import HfFileSystem
+
+    mb = DOCS.stat().st_size / (1024 * 1024)
+    print(f"uploading {DOCS} ({mb:.1f} MB) -> hf://buckets/{DOCS_BUCKET}/{REMOTE_DOCS}")
+    fs = HfFileSystem(token=_token())
+    _upload(fs, DOCS, REMOTE_DOCS, DOCS_BUCKET)
+    print(
+        f"OK: hf://buckets/{DOCS_BUCKET}/{REMOTE_DOCS} matches local {mb:.1f} MB. "
+        "Next molab sandbox boot picks it up."
+    )
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="publish_store.py",
+        description=(
+            "Publish pg-rag data to HF buckets: the private store (default, "
+            "mise upload-store) or the public corpus documents (--docs, mise upload-docs)."
+        ),
+    )
+    parser.add_argument(
+        "--docs",
+        action="store_true",
+        help="publish data/documents.json to the PUBLIC corpus bucket instead of the store",
+    )
+    args = parser.parse_args(argv)
+    if args.docs:
+        return _publish_docs()
     if BUCKET == PUBLIC_BUCKET:
-        raise SystemExit(f"refusing: {BUCKET} is the PUBLIC corpus bucket (store data must not leak)")
+        raise SystemExit(
+            f"refusing: {BUCKET} is the PUBLIC corpus bucket (store data must not leak)"
+        )
 
     api = _auth_probe()
 
@@ -252,7 +304,9 @@ def main() -> int:
         temp.unlink(missing_ok=True)
     print(f"OK: {_uri('store/')} verified; temps removed.")
     print(f"bucket URL: https://huggingface.co/buckets/{BUCKET}")
-    print("Next molab sandbox run-all picks up the new snapshot (notebook store_access/store_snapshot).")
+    print(
+        "Next molab sandbox run-all picks up the new snapshot (notebook store_access/store_snapshot)."
+    )
     return 0
 
 

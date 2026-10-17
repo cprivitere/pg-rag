@@ -8,27 +8,101 @@
 // that genuinely coordinates across instances.
 //
 // Scope: block destructive corpus mutations (build-documents / generate-docs /
-// build-bm25 / build-tool-corpus / mise sync / refresh) when another live
-// instance holds the lock. All other commands pass through untouched.
-// Fail-closed only on proven contention — any hook runtime error logs and lets
-// the command through.
+// build-bm25 / build-tool-corpus, and the mise tasks/aliases that run exactly
+// those: sync-fast|sy, sync-full|syf, sync-wiki|syw, generate-docs|docs,
+// build-bm25|b25, build-tool-corpus|btc) when another live instance holds the
+// lock. `mise sql-store` | `sq` is deliberately NOT guarded: the store is a
+// private additive artifact (scripts/build_sqlstore.py states it), not shared
+// corpus state. `mise upload-docs` / `upload-store` only publish, so they take
+// no lock either — a publish racing a rebuild can still upload a torn
+// documents.json, and the post-upload remote-size check is the only defence.
+// All other commands pass through untouched. Fail-closed only on proven
+// contention: a non-EEXIST filesystem error falls through, and every hook
+// runtime error is swallowed silently — this hook never blocks a command it
+// cannot reason about.
 
 import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
 import { openSync, closeSync, unlinkSync, existsSync, readFileSync, writeSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const LOCK_REL = join("data", ".omp-build.lock");
-// Fallback staleness when pid-liveness cannot be determined (defensive only;
-// a live pid is never stolen regardless of age).
+// Staleness horizon: an owner older than this is stolen even while its pid is
+// still alive — the recovery path for a lock leaked by a holder that died
+// between acquiring and firing tool_result (a 3 h build is far outside this
+// repo's build times).
 const TTL_MS = 3 * 60 * 60 * 1000;
 
 // Destructive corpus commands. Match on the token that actually rewrites
-// shared build state; deliberately conservative so reads/greps pass.
+// shared build state.
 // The build-* alternation covers the mise tasks (build-documents, build-bm25,
 // build-tool-corpus) and the `pgrag build-` CLI prefix; the direct
-// `scripts/build_tool_corpus.py` invocation is guarded separately because it
-// is run via `python scripts/...`, not a `pgrag build-*` token.
-const DESTRUCTIVE = /(?:\b|_)(build-documents|build-bm25|build-tool-corpus|generate-docs)(?:\b|\s|\s-|$)|mise\s+sync\b|\b(?:uv\s+run\s+)?pgrag\s+build-|scripts[\\/]build_tool_corpus\.py/;
+// `python -m pgrag.rag.bm25` and `python scripts/build_tool_corpus.py`
+// invocations are guarded separately because they do not carry a `pgrag
+// build-*` token (the mise tasks run exactly those commands).
+// The `mise` clause names the corpus tasks and their aliases (`mise sy`/`syf`/
+// `syw`, `docs`, `b25`/`btc`), plus the `mise r <task>` shorthand and any
+// global flags before the task (`mise -C . syf`) — every spelling that reaches
+// the same artifacts must lock. `sq`/`sql-store` is deliberately absent (see
+// the header). Bare `mise sync` is mise's own tool-manager subcommand, not
+// ours, and is deliberately NOT matched.
+const DESTRUCTIVE = /(?:\b|_)(build-documents|build-bm25|build-tool-corpus|generate-docs)(?:\b|\s|\s-|$)|mise\s+(?:-{1,2}[A-Za-z][\w-]*(?:=\S+|\s+\S+)?\s+)*(?:(?:run|r)\s+)?(?:sync-(?:fast|full|wiki)|generate-docs|build-bm25|build-tool-corpus|syf|syw|docs|b25|btc|sy)\b|\b(?:uv\s+run\s+)?pgrag\s+build-|-m\s+pgrag\.rag\.bm25\b|scripts[\\/]build_tool_corpus\.py/;
+
+// Head of a segment that cannot rewrite corpus state. A lookup that merely
+// *mentions* a task name (`grep -rn build-documents .`) must not take the lock
+// — the old anywhere-match denied those reads with a "corpus build" reason.
+// Heuristic by construction: it is a deny-list of reader heads plus a
+// chaining/redirection disqualifier, not a shell parser.
+const READ_ONLY_HEAD =
+  /^\s*(?:git\s+(?:grep|log|show|diff|blame|ls-files)|rg|grep|egrep|fgrep|findstr|Select-String|awk|sed\s+-n|cat|bat|head|tail|less|more|wc|sort|uniq|jq|file|stat|du|ls|dir|type|echo|printf)\b/;
+
+// True when every segment of the command is a pure reader. Chaining (`&&`, `;`,
+// `&`, backticks, `$(…)`, subshells) and output redirection always disqualify:
+// `grep x && mise sync-fast` is a writer, and `printf '' > data/tool_documents.json`
+// rewrites a corpus artifact through a reader head. Quote-aware, so
+// `grep -E "sync|build"` is not read as a pipeline of two commands.
+function isReadOnly(command: string): boolean {
+  let cmd = command.trim();
+  for (;;) {
+    // leading `cd <dir> &&` hops do not touch corpus state
+    const hop = cmd.match(/^cd\s+(?:"[^"]*"|'[^']*'|\S+)\s*&&\s*/);
+    if (!hop) break;
+    cmd = cmd.slice(hop[0].length);
+  }
+  const segments: string[] = [];
+  let current = "";
+  let quote: string | null = null;
+  for (const ch of cmd) {
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      current += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === "|") {
+      segments.push(current);
+      current = "";
+      continue;
+    }
+    if (
+      ch === "&" ||
+      ch === ";" ||
+      ch === "`" ||
+      ch === "(" ||
+      ch === ")" ||
+      ch === "\n" ||
+      ch === ">"
+    ) {
+      return false;
+    }
+    current += ch;
+  }
+  segments.push(current);
+  return segments.every((segment) => READ_ONLY_HEAD.test(segment));
+}
 
 type Owner = { pid: number; startedAt: number };
 const EMPTY: Owner = { pid: -1, startedAt: 0 };
@@ -47,7 +121,9 @@ function projectRoot(cwd: string): string {
     } catch {
       /* keep walking */
     }
-    const parent = dir.slice(0, dir.lastIndexOf("/"));
+    // dirname, not string slicing: a backslash cwd (`F:\repo\src\pgrag`) has no
+    // `/` to cut at, and slicing would chop one character per hop.
+    const parent = dirname(dir);
     if (!parent || parent === dir) break;
     dir = parent;
   }
@@ -90,11 +166,18 @@ function removeLock(path: string) {
   }
 }
 
-function tryGrab(lockPath: string): "acquired" | "self" | "contended" {
+function tryGrab(lockPath: string): "acquired" | "self" | "contended" | "error" {
   let fd: number | null = null;
   try {
     fd = openSync(lockPath, "wx"); // O_CREAT|O_EXCL — atomic across instances
-    writeSync(fd, JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
+    try {
+      writeSync(fd, JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
+    } catch {
+      // A created-but-unwritten lock reads as contended (unreadable owner) to
+      // every later caller: drop it and report the failure instead.
+      removeLock(lockPath);
+      return "error";
+    }
     return "acquired";
   } catch (e: unknown) {
     const isEEXIST = e !== null && typeof e === "object" && "code" in e && e.code === "EEXIST";
@@ -105,8 +188,11 @@ function tryGrab(lockPath: string): "acquired" | "self" | "contended" {
         removeLock(lockPath);
         return tryGrab(lockPath);
       }
+      return "contended";
     }
-    return "contended"; // fail-open on any other error
+    // ENOENT/EACCES/EROFS/ENOSPC/… is a filesystem problem, not a competing
+    // build: report it so the caller lets the command through.
+    return "error";
   } finally {
     if (fd !== null) closeSync(fd);
   }
@@ -120,6 +206,8 @@ export default function (pi: HookAPI): void {
         ? String(event.input.command)
         : "";
     if (!DESTRUCTIVE.test(command)) return;
+    // A read that only names a build task takes no lock and is never denied.
+    if (isReadOnly(command)) return;
     try {
       const root = projectRoot(ctx.cwd ?? process.cwd());
       const lockPath = join(root, LOCK_REL);

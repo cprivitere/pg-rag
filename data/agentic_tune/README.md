@@ -73,10 +73,13 @@ already fixed loop-side, so future model swaps are unblocked.
 ## Golden-short post-sweep runs (reruns of the parity set, temp 0/seed 0)
 
 Two `mise golden-short` runs after the sweeps failed the same case
-(grow-field-mushrooms, fact "5 hours") — root cause: the reranker (:8082)
-was DOWN during those runs, degrading retrieval to the lexical fallback
+(grow-field-mushrooms, fact "5 hours") — root cause at the time: the reranker
+(:8082) was DOWN during those runs, degrading retrieval to the lexical fallback
 (the fact lives deep inside the Mushroom Farming wiki page chunk). With
 :8082 up the case passes immediately (`golden_rerun --id
-grow-field-mushrooms` → PASS). Takeaway: golden parity comparisons require
-ALL services up (LLM + embed + reranker), matching the mise golden
-contract; a down reranker is an eval-environment change, not a regression.
+grow-field-mushrooms` → PASS).
+
+**Historical — superseded by the dense-path cutover.** The embed (:8081) and
+reranker (:8082) services were deleted with the dense path, so the takeaway
+below no longer holds: `mise golden` needs the **LLM only** (no other service
+exists to be up).
