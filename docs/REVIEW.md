@@ -551,7 +551,10 @@ argument plumbing broken. Both defects are fixed, and the mechanics were **measu
 on this harness** (v18.12.0, `omp -p` with a throwaway command, the saved session
 transcript read back) rather than taken from a disassembly. The command was renamed
 `/frozen-review` → `/frozen` the same day (nothing else referenced the old name, and
-neither name shadows a built-in).
+neither name shadows a built-in), and it was retired 2026-10-17 in favour of the
+user-level `frozen-review` skill (`AGENTS.md` → **Code review loop**) — the mechanics
+below are kept because they are measurements of the harness and of the tag families,
+not of the file that held them.
 
 - **Only `$1` was read, so BASE and the focus never reached the prompt.** The
   expander appends the raw argument text *only when the body uses no inline
@@ -590,11 +593,11 @@ was report-only, so its findings are recorded here):
 | finding | disposition |
 |---|---|
 | **critical** — `src/pgrag/buildlock.py:143-150`: the `winerror 87 / errno EINVAL` arm is what *live* owners produce on this host (measured: `os.kill` raises 87 for the holder **and** for omp's own `node.exe`, while `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` opens both, exit code 259), so `read_owner` returns `None` for a live owner and the second builder steals the live lock — two concurrent corpus writers, silently | Pass B **deletes** the mechanism. Until it lands the stopgap is one line in `_pid_alive` (treat 87/EINVAL as ambiguous → alive, letting `TTL_S` be the only leaked-lock recovery) plus a **two-process** regression test: every existing lock test seeds `os.getpid()`, which is exactly why the suite is blind to it |
-| **high** — `.omp/commands/frozen.md:20-23`: the documented BASE derivation returns the target's previous *fix* tag (`review-pass8^` → `review-pass7`, 3 files) instead of the last reviewed state, silently shrinking a verification pass to its last commit | fix in Pass A's commit — it is the recipe both passes will be invoked with: derive against `review-base-*`, refuse when that marker is absent or not older, and relabel `review-pass6^ → review-pass5` as the case to *refuse* |
+| **high** — `.omp/commands/frozen.md:20-23`: the documented BASE derivation returns the target's previous *fix* tag (`review-pass8^` → `review-pass7`, 3 files) instead of the last reviewed state, silently shrinking a verification pass to its last commit | **superseded — nothing to patch**: the recipe is retired with the command, and `/skill:frozen-review` derives its base from the last `review-pass*` marker — the reviewed revision, not its parent — so the fix batch is what a verification pass gets. When no marker exists it falls back to the release tag *and says which fallback it used* (the "never assume silently" half; a hard refusal is unnecessary now that the marker path is the normal one). `review-pass6^ → review-pass5` is no longer selectable |
 | **medium** — `scripts/review_facts.py:89,96-98` (+ `docs/TEST_CONTRACTS.md:491-492`): a red `drift` row still names no drift (the gate prints its verdict *first*, so a fixed head+tail slice misses a mid-list `[DRIFT]`) | fix in Pass A's commit, with the drift shape added to the sheet's test |
 | **medium** — `scripts/review_facts.py:196-203`: an unanswerable git prints `frozen: False`, a positive "not frozen" verdict on the load-bearing key of a frozen-tree pass | fix in Pass A's commit (mirror the sibling sentinel) |
 | **medium** — `docs/TEST_CONTRACTS.md:475` + `docs/REVIEW.md:417`: the coverage clause claims the model-literal *leak* is asserted only under `mise drift`; it is unit-tested in `tests/test_check_docs.py:265-267` | fix both sentences in Pass A's commit |
-| **low / nit** (in-range one-liners) `frozen.md:12` empty-TARGET rule; the hook comment's quoted-*task* miss; `agentic_tune.py` sentinel vs. `[env]`; the two untested ownership-drift branches; the "working-tree-only" framing of the tracked `data/golden` | same commit where the line is one of the above; the rest is backlog |
+| **low / nit** (in-range one-liners) `frozen.md:12` empty-TARGET rule; the hook comment's quoted-*task* miss; `agentic_tune.py` sentinel vs. `[env]`; the two untested ownership-drift branches; the "working-tree-only" framing of the tracked `data/golden` | same commit where the line is one of the above; the rest is backlog — the `frozen.md:12` empty-TARGET item died with the command, retired this turn |
 
 **Pass A — notebook retirement (no behavior change).** Delete what is notebook-only,
 each item verified against its consumers:
@@ -661,14 +664,18 @@ below removes one of those costs.
 1. **Freeze first.** Commit the work in progress and tag it
    (`git tag review-base-<sha>`); reviewers get that SHA — never a dirty working
    tree, never `origin/HEAD...main`. Every fix is a new commit and a new tag.
-   The reviewer-side half of the same instruction lives as a project slash command —
-   `/frozen <tag|sha> [base tag or -] [focus...]` (`.omp/commands/frozen.md`) —
-   which hard-stops on an already-dirty tree. Its BASE defaults to
-   `git describe --tags --match 'review-*' --abbrev=0 <target>^` — the base marker step 1
-   created — and a checkout that is merely ahead of the tag is answered with
-   `git worktree add ../review-<tag> <tag>`, not with a report. The freeze/tag step
-   *above* stays the operator's, and the command does not carry it (nor §4's two
-   lenses): running the command on a dirty tree is a report, not a review.
+   The reviewer-side half of the same instruction now lives in the user-level skill
+   `frozen-review` (`/skill:frozen-review`; this repo's rows are `AGENTS.md` →
+   **Code review loop**) — the project slash command that carried it is retired. The
+   skill hard-stops on an already-dirty tree, derives its base from its own
+   `review-pass*` markers (the reviewed revision itself, so a verification pass gets
+   the fix batch) rather than from the retired
+   `git describe --tags --match 'review-*' --abbrev=0 <target>^` recipe — which
+   resolved the previous *fix* tag and shrank a verification pass to its last commit,
+   the carried-in high finding below — and answers a checkout that is merely ahead of
+   the tag with `git worktree add ../review-<tag> <tag>`, not with a report. The
+   freeze/tag step *above* stays the operator's: running a pass on a dirty tree is a
+   report, not a review.
    *Evidence*: the third pass's two high findings (a failed restart exiting `0`
    and leaving the production server down, `--sweep-reasoning` persisting
    mislabeled rows) and its untracked TS-gate runner all lived in the layer that

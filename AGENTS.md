@@ -140,14 +140,18 @@ corpus_search, player_state`.
   artifacts (`chroma/`, `bakeoff_*.json`, `embed_vram.json`,
   `rerank_stats.json`, `evaluation/queries.jsonl`) were deleted with the
   cutover — nothing reads them. `retrieval_traces/` is live (loop traces).
-- `.omp/` — oh-my-pi config: `RULES.md`, `config.yml`, `WATCHDOG.md`,
-  `hooks/pre/00-repo-lock.ts`, and `commands/frozen.md` (the review
-  protocol as a project slash command:
-  `/frozen <tag|sha> [base tag or -] [focus...]`).
+- `.omp/` — oh-my-pi config: `RULES.md`, `config.yml`, `WATCHDOG.md` and
+  `hooks/pre/00-repo-lock.ts`. The review protocol used to live here as a
+  project slash command (`commands/frozen.md`, `/frozen <tag|sha> [base tag or
+  -] [focus...]`); it is retired — a pass now runs from the shared skill, see
+  **Code review loop**.
 - `.agents/skills/` — all agent skills, discoverable by any agent harness:
   `pg-rag`, `pg-data`, `retrieval`, `evaluation`, `testing` (project skills) +
   `molab-notebook` (pairing on the molab-hosted marimo notebook). Skills live
   here only — commit changes here, never re-create `.omp/skills/` copies.
+  The one skill this repo does not own but does use is the user-level
+  `frozen-review` (`~/.agents/skills/frozen-review/SKILL.md`, the agents-standard
+  root, shared with the sibling glogger repo) — this repo's review call.
 - `notebooks/molab-agentic/` — the **tool-loop-only** molab notebook:
   `pgrag.agentic.loop.run_loop` against a snapshot of `data/sqlite_gorgon.db`
   published to the private `hf://buckets/Nubula/paddock-private` by
@@ -223,6 +227,72 @@ build finishes. `mise sql-store` (private additive store, not corpus state) and
 the publish tasks are deliberately unguarded, and a pure read that only *names*
 a build task (`grep -rn build-documents .`) is never blocked. Never bypass the
 lock by hand-editing it; to clear a stuck one, delete `data/.omp-build.lock`.
+
+## Code review loop
+
+**`/skill:frozen-review` is this repo's review call** — a user-level skill
+(`~/.agents/skills/frozen-review/SKILL.md`, the agents-standard root, shared with
+the sibling glogger repo) that owns the whole loop: the freeze invariant, the
+target grammar, facts-once, the three intake categories, the report contract and
+the closing rule. It takes its target from an argument when given one (a tag
+freezes the range that starts after it, a SHA that single commit, `worktree` the
+working tree) and otherwise derives it from this repo's pass markers, so a fix
+batch is reviewed by invoking it again with no argument: the delta since the last
+`review-pass*` tag, the working tree when the tree is dirty, and nothing at all
+when the marker already sits on HEAD. Skills are discovered at startup
+(`omp://skills.md`) — there is no file watcher — so a freshly written skill
+answers `Unknown skill` until a restart. The project command that used to carry
+this protocol (`.omp/commands/frozen.md`) is retired; `docs/REVIEW.md` →
+"Review protocol" keeps the pass history and the evidence behind each rule.
+
+- **Freeze the target, and never mix revisions.** The diff handed to a reviewer
+  and the files it reads must be the same revision. A checkout that is merely
+  ahead of the frozen tag is answered with `git worktree add ../review-<tag>
+  <tag>`, which puts every reviewer (and every path they execute) at that SHA
+  with the main checkout untouched — never review `origin/HEAD...main` unless it
+  resolves to the same commit.
+- **Measure the facts once, in the parent, and paste them into every brief.** The
+  row is `uv run python scripts/review_facts.py` (~4 s warm; `--no-gates` for
+  ~1.6 s, `--json` for machines). The sheet carries the suite *counts*, the
+  `ruff` / `mise drift` / `mise compliance` verdicts, the task set, the freeze
+  state and the platform's liveness answer — deliberately **not** the suite
+  verdict or `mise lint-ts`, which the one runner measures once on the frozen SHA
+  (`uv run pytest` and `node scripts/check_ts.mjs`) and reports alongside the
+  sheet. A red row is a fact to report once, not a per-file finding, and no slice
+  re-derives a row.
+- **Intake is three categories.** (1) behaviour nobody intended, (2) a claim the
+  code or its docs make that the code does not honour, (3) a gate whose
+  documentation is stronger than its check. Anything else is out of scope: say so
+  in the request. `docs/REVIEW.md` → "Leftovers for the next pass" is the
+  **accepted backlog** — never re-raise those items, and do not widen scope to
+  untouched files except where one makes a claim about a file that changed.
+- **Report to the fixed contract.** Severity (critical / high / medium / low /
+  nit) · `file:line` · the defect · evidence (an exact quote or command output) ·
+  the fix · `verified` or `[INFERENCE]`; then one verdict — **ship** /
+  **ship-with-fixes** / **blocked** — an explicit fix-now vs backlog split
+  (fix-now = a defect in code this range changed), and what could not be verified
+  and why.
+- **Close-out needs the suite green on the frozen SHA.** A pass closes the review
+  when it returns 0 critical, 0 high and 0 fix-now mediums in the changed code
+  **and** the runner's suite verdict is green on that revision — the numeric rule
+  alone would close a pass whose suite never ran on the frozen revision. There is
+  no CI here, so a red suite is a **blocked** pass, not a finding. Everything else
+  is backlog, i.e. ordinary work; at most one further verification-only pass is
+  allowed (verify the fixes, no new scope).
+- **Fan out by risk tier, at most 8 concurrent agents.** Changed *logic* (deep,
+  and allowed to run code paths — both highs of the third pass came from an agent
+  executing the path rather than reading it), wiring/config (`mise.toml`, hooks,
+  gates), docs/data (one batched agent, or leave it to `mise drift`). Eight is a
+  round's budget, not a host ceiling: beyond it the host parks agents mid-flight,
+  and a parked agent must be revived one message at a time. The parent is the only
+  runner.
+- **The pass writes its own marker** at the revision it reviewed: annotated
+  `review-pass<N>`, its message the reviewed revision's own (so the tag reads as
+  the work it froze), `N` taken by `sort -n` *after* stripping the prefix — never
+  `sort` on the tag names, which is lexicographic and puts `review-pass10` before
+  `review-pass5`. It is local bookkeeping and is never pushed; the next pass
+  derives its base from it, never from `<target>^`, which resolves the previous
+  *fix* tag and silently shrinks a verification pass to its last commit.
 
 ## Code Conventions & Common Patterns
 
