@@ -134,17 +134,16 @@ def test_unusable_records_are_stolen(tmp_path, record):
 def test_the_steal_deletes_only_the_file_it_judged(tmp_path, monkeypatch):
     """A peer that re-created the lock while we were judging it keeps its lock.
 
-    The steal is read-then-delete, so the delete is gated on the file's identity
-    being unchanged: without that, a lagging stealer removes a *live* owner's
-    lock and both writers proceed (the interleaved corpus write the lock exists
-    to prevent).
-    """
+    The verdict is read, then the file is claimed: both halves are gated on the
+    file's identity being unchanged. Without that, a lagging stealer removes a
+    *live* owner's lock and both writers proceed (the interleaved corpus write
+    the lock exists to prevent)."""
     lock = buildlock.lock_path(tmp_path)
     _hold(lock)  # a live owner's record, as the peer will leave behind
     peer = json.dumps({"pid": os.getpid() + 1, "startedAt": int(time.time() * 1000)})
 
     def judge_stale_and_let_the_peer_win(path):
-        """Simulate the race: we judged the file stale, and before our delete a
+        """Simulate the race: we judged the file stale, and before our claim a
         peer finished its own steal (unlink) and re-created the lock."""
         path.unlink()
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -156,6 +155,46 @@ def test_the_steal_deletes_only_the_file_it_judged(tmp_path, monkeypatch):
     with pytest.raises(buildlock.BuildLocked), buildlock.corpus_lock(tmp_path):
         pytest.fail("stole a lock a peer had just re-created")
     assert json.loads(lock.read_text())["pid"] == os.getpid() + 1, "the peer's lock was deleted"
+    assert not [p for p in tmp_path.iterdir() if p.name != lock.name], "left a claim aside"
+
+
+def test_a_peer_winning_inside_the_claim_window_keeps_its_lock(tmp_path, monkeypatch):
+    """A peer that re-creates the lock *between* the stale verdict and our claim
+    keeps it, and no writer ends up thinking it holds the lock.
+
+    This is the window a compare-then-unlink cannot close: the peer's unlink +
+    re-create lands after the identity compare and before the delete, so the
+    delete removes the peer's fresh, live lock — and the stealer then wins the
+    `O_EXCL` into the vacated name with the peer still building. The claim must
+    therefore be a rename (atomic: whoever renames the judged file owns it) whose
+    result is judged again before it is deleted.
+    """
+    lock = buildlock.lock_path(tmp_path)
+    lock.write_text(json.dumps({"pid": 2147483646, "startedAt": int(time.time() * 1000)}))
+    # `os.getpid()` is the only pid guaranteed alive here; the start time is
+    # recent enough to stay inside the TTL, and the peer dict is what the
+    # restore must reproduce byte for byte.
+    peer = {"pid": os.getpid(), "startedAt": int(time.time() * 1000) - 1000}
+    real_replace = os.replace
+    raced = False
+
+    def peer_wins_then_claim(src, dst, **kwargs):
+        """Inject the peer's win at the claim itself — the observe→claim gap."""
+        nonlocal raced
+        if not raced and str(src) == str(lock):
+            raced = True
+            os.unlink(lock)
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(peer))
+        return real_replace(src, dst, **kwargs)
+
+    monkeypatch.setattr(os, "replace", peer_wins_then_claim)
+    monkeypatch.setattr(os, "rename", peer_wins_then_claim)  # either rename spelling
+    with pytest.raises(buildlock.BuildLocked), buildlock.corpus_lock(tmp_path):
+        pytest.fail("claimed a lock a peer re-created inside the claim window")
+    assert json.loads(lock.read_text()) == peer, "the peer's live lock was not restored"
+    assert not [p for p in tmp_path.iterdir() if p.name != lock.name], "left a claim aside"
 
 
 def test_a_refused_release_unlink_does_not_crash(tmp_path, monkeypatch):

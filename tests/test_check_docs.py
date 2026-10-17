@@ -33,6 +33,17 @@ def test_captures_every_script_class():
     assert (
         cd._doc_refs("`discover-servers.ps1` / `notebooks/x.py` / `data/documents.json`") == set()
     )
+    # A selector after the path (`::test_name`, `:12-40`, ` --flag`) is not part
+    # of it: the pointer still has to resolve, which is how the two real
+    # selector-carrying refs in AGENTS.md/skills are covered.
+    assert cd._doc_refs(
+        "`tests/test_lint.py::test_shipped_source_stays_python_313_parseable`, "
+        "`scripts/golden_check.py --diagnose`, `scripts/golden_rerun.py:12-40`"
+    ) == {
+        "tests/test_lint.py",
+        "scripts/golden_check.py",
+        "scripts/golden_rerun.py",
+    }
 
 
 def test_a_vanished_pointer_is_reported(tmp_path, monkeypatch):

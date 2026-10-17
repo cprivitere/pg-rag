@@ -32,6 +32,13 @@ class _Args:
     store = "data/sqlite_gorgon.db"
 
 
+@pytest.fixture(autouse=True)
+def _fresh_served_state(monkeypatch):
+    """`_served` is module state: a test that moved the server must not decide
+    the next test's restart verdict."""
+    monkeypatch.setattr(agentic_tune, "_served", None)
+
+
 def test_load_cases_golden_short(monkeypatch):
     monkeypatch.setattr(agentic_tune, "SHORT_TIER_IDS", ["bacon-for-joeh"])
     cases = _load_cases("golden-short", None)
@@ -204,7 +211,9 @@ def test_failed_restart_aborts_without_recording_a_run(tmp_path, monkeypatch):
 
 def test_reasoning_sweep_restores_the_production_pair(monkeypatch):
     """CONTRACT: a --sweep-reasoning run ends by re-asserting the production pair
-    (a forced restart), so the harness never leaves a swept model/budget serving."""
+    through the same guard, so the harness never leaves a swept model/budget
+    serving. The guard is what decides — the restore passes no `force`, because
+    the pair the sweep left serving is the reason it restarts."""
     monkeypatch.setenv("LLM_MODEL", "org/Prod-1.5-9B:Q4_K_M")
     monkeypatch.setenv("LLM_FLAGS", "-ngl 999 --reasoning-budget 4096")
     calls = []
@@ -228,7 +237,53 @@ def test_reasoning_sweep_restores_the_production_pair(monkeypatch):
         ],
     )
     assert agentic_tune.main() == 0
-    assert calls == [("current", 2048, False), ("current", 256, False), ("current", 4096, True)]
+    assert calls == [("current", 2048, False), ("current", 256, False), ("current", 4096, False)]
+
+
+def test_an_ascending_budget_sweep_re_asserts_the_default(monkeypatch):
+    """CONTRACT: the restart verdict is the pair the harness last put on :8080,
+    not the default sentinel. `--sweep-reasoning 2048,4096` must come back to the
+    production budget for the second row instead of measuring the leftover 2048
+    server under a `b4096` run-id — the row would look like the 4096 setting's
+    result and quietly misdirect the tuning. A sentinel-keyed guard cannot see
+    it, because that row's `args` describe the default pair.
+
+    Also pins the restore: after 4096 is serving again it is a no-op (no third
+    spawn), so a sweep costs no needless restart."""
+    monkeypatch.setenv("LLM_MODEL", "org/Prod-1.5-9B:Q4_K_M")
+    monkeypatch.setenv("LLM_FLAGS", "--no-mmproj -ngl 999 --reasoning-budget 4096")
+    running = {"now": True}
+    spawned, ran = [], []
+
+    def fake_spawn(model, flags):
+        spawned.append(flags)
+        running["now"] = True
+
+    def fake_run(argv, **kwargs):
+        ran.append(argv)
+        running["now"] = False  # llm-stop released the port
+
+    monkeypatch.setattr(agentic_tune, "_server_running", lambda: running["now"])
+    monkeypatch.setattr(agentic_tune, "_spawn_server", fake_spawn)
+    monkeypatch.setattr(agentic_tune.subprocess, "run", fake_run)
+    monkeypatch.setattr(agentic_tune.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(agentic_tune, "run_once", lambda a: {"passed": 6})
+    monkeypatch.setattr(
+        _sys,
+        "argv",
+        [
+            "agentic_tune.py",
+            "--model",
+            "current",
+            "--sweep-reasoning",
+            "2048,4096",
+            "--llm-restart",
+        ],
+    )
+
+    assert agentic_tune.main() == 0
+    # one move per non-productive step, and none for the restore
+    assert [flags.split()[-1] for flags in spawned] == ["2048", "4096"]
 
 
 def test_server_probe_builds_its_url_from_the_shared_port(monkeypatch):

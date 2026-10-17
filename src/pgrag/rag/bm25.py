@@ -4,6 +4,7 @@ import math
 import os
 import pickle
 import re
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -12,6 +13,12 @@ from pgrag.buildlock import corpus_lock
 CACHE_VERSION = 1
 DEFAULT_INDEX_PATH = "data/documents.json"
 DEFAULT_PICKLE_PATH = "data/bm25_index.pkl"
+
+# How long the cache publish retries a win32 sharing violation before giving up
+# (see `_publish_pickle`): 30 x 0.1 s covers a peer's in-flight `pickle.load` of
+# the index without stalling a build behind a genuinely wedged reader.
+PUBLISH_RETRIES = 30
+PUBLISH_RETRY_S = 0.1
 
 # A lazy rebuild happens inside a request (the loop's corpus_search), so it
 # polls for a peer's build step this long before raising BuildLocked instead of
@@ -137,13 +144,37 @@ def _documents_mtime(source_path):
         return None
 
 
+def _publish_pickle(tmp: str, path: str) -> None:
+    """Rename `tmp` over `path`, retrying a win32 sharing violation.
+
+    `os.replace` onto a file another process holds open fails on Windows with
+    WinError 32 — a CPython `open` shares read/write but not delete — and the
+    overlap is normal rather than exotic: `load_bm25_index` reads the cache
+    *before* it takes the lock, so any `corpus_search` in flight pins the
+    pickle for the whole multi-second `pickle.load` of a ~100 MB index. A
+    single-shot rename there turns the persist into a silent no-op, so retry a
+    bounded time; the reader is on its way out. The final failure is raised
+    (not swallowed) so a caller that promised to write the cache can say so.
+    """
+    last: OSError | None = None
+    for _ in range(PUBLISH_RETRIES):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError as exc:  # win32: the target is open by a reader
+            last = exc
+            time.sleep(PUBLISH_RETRY_S)
+    raise last  # type: ignore[misc]  # set by the loop above
+
+
 def save_bm25_index(model, documents, path=DEFAULT_PICKLE_PATH, source_path=DEFAULT_INDEX_PATH):
     """Persist an indexed BM25 + the doc store to `path`, keyed by the
     documents.json mtime so `load_bm25_index` can detect staleness.
 
     Written to a sibling temp file and renamed: the cache-hit read in
     `load_bm25_index` happens *before* the build lock, so an in-place write
-    could hand a concurrent reader a torn pickle.
+    could hand a concurrent reader a torn pickle. The rename itself retries a
+    reader-held target (`_publish_pickle`).
     """
     payload = {
         "__version": CACHE_VERSION,
@@ -164,7 +195,7 @@ def save_bm25_index(model, documents, path=DEFAULT_PICKLE_PATH, source_path=DEFA
     try:
         with open(tmp, "wb") as f:
             pickle.dump(payload, f)
-        os.replace(tmp, path)
+        _publish_pickle(tmp, path)
     finally:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
@@ -174,6 +205,7 @@ def load_bm25_index(
     path=DEFAULT_INDEX_PATH,
     pkl_path=DEFAULT_PICKLE_PATH,
     lock_wait: float | None = None,
+    strict_persist: bool = False,
 ):
     """Return (BM25, docs).
 
@@ -184,6 +216,12 @@ def load_bm25_index(
     finish before raising `BuildLocked`: the lazy in-request default
     (`LAZY_REBUILD_WAIT_S`) is wrong for an explicit `python -m pgrag.rag.bm25`
     build, which should fail fast like every other corpus writer.
+
+    `strict_persist` re-raises a failed cache write instead of swallowing it.
+    A lazy in-request rebuild treats the write as best-effort — the answer must
+    not fail because the cache could not be rewritten — but the explicit
+    pre-warm exists *only* to write that cache, so it must not report success
+    when the publish did not land.
     """
     mtime = _documents_mtime(path)
     if os.path.exists(pkl_path):
@@ -235,7 +273,9 @@ def load_bm25_index(
                 os.makedirs(dirname, exist_ok=True)
             save_bm25_index(model, docs, pkl_path, path)
         except OSError:
-            pass  # cache write is best-effort
+            if strict_persist:
+                raise
+            # cache write is best-effort here: the rebuild's answer stands
     return model, docs
 
 
@@ -249,5 +289,7 @@ if __name__ == "__main__":
     sys.stdout.reconfigure(line_buffering=True)
     # lock_wait=0: an explicit build fails fast on a peer's lock, like the
     # other corpus writers — waiting is only right for the in-request rebuild.
-    load_bm25_index(lock_wait=0.0)
+    # strict_persist=True: this command's *job* is the cache write, so a publish
+    # that did not land must fail the command instead of printing success.
+    load_bm25_index(lock_wait=0.0, strict_persist=True)
     print("BM25 index ready (rebuilt if documents.json changed)")

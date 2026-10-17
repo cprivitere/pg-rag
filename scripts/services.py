@@ -2,7 +2,7 @@
 :7860); cross-platform (Windows + POSIX), stdlib only.
 
 This module replaces the `.mise/tasks/*.ps1` service scripts and
-`scripts/check_services.py` — the single owner of the *managed* services'
+`scripts/check_services.py` (deleted) — the single owner of the *managed* services'
 ports, argv, log paths and pidfiles. Log paths follow `mise.toml [env]`
 `LOGS_DIR` when it is set (mise exports it to every task, so it is the single
 source AGENTS.md names as "the knob if paths move") and fall back to
@@ -143,10 +143,16 @@ def _chat_env() -> dict[str, str]:
 def _port_open(port: int) -> bool:
     """True when something accepts a connection on `port` on either loopback.
 
-    Both families are probed because `_port_owner` deliberately covers IPv6
-    listeners: an IPv4-only probe would let `start` spawn a second server behind
-    a v6-bound squatter and would judge `stop`'s post-kill verdict on the wrong
-    family.
+    Both families are probed for the reason `start`/`stop` care about: matching
+    `_port_owner`'s family coverage, so an IPv4-only probe cannot let `start`
+    spawn a second server behind a v6-bound squatter, nor judge `stop`'s
+    post-kill verdict on the wrong family.
+
+    Family coverage is not address coverage: a listener bound to one specific
+    non-loopback address (a hand-started `llama-server --host 192.168.1.5`) is
+    reachable on neither probe, so `start` would spawn a second server that then
+    cannot bind, and `stop` falls back to `_port_owner` — which is
+    address-agnostic and still names the holder.
     """
     for host in ("127.0.0.1", "::1"):
         try:
@@ -415,11 +421,14 @@ def _kill_tree(pid: int, ours: bool) -> bool:
     pid and warns, naming the reason.
 
     The verdict is what the caller's grace window hangs on: True when a signal
-    was handed to a live process **or** the process was already gone (nothing
-    left to stop), False when nothing could be sent at all — an unattributable
-    pid <= 1, a `getpgid`/`kill` refused for lack of permission, or a `taskkill`
-    that failed. `stop` waits out `STOP_GRACE_S` only on True: with no signal
-    sent, no amount of waiting can free the port.
+    was handed to a live process — on POSIX also when the process was already
+    gone, since `getpgid`/`kill` say so, while the Windows arm reads `taskkill`'s
+    exit code, where an already-exited pid is an indistinguishable failure —
+    False when nothing could be sent at all: an unattributable pid <= 1, a
+    `getpgid`/`kill` refused for lack of permission, or a failed `taskkill`.
+    `stop` waits out `STOP_GRACE_S` only on True: with no signal sent, no amount
+    of waiting can free the port (an already-gone Windows pid reads as free
+    anyway).
     """
     if os.name == "nt":
         # Windows has no process groups to reason about, but it must not be

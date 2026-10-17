@@ -55,11 +55,18 @@ def _exists(*parts: str) -> bool:
 # deleted `scripts/*.ps1` and `scripts/*.sh` files, and a `.py`-only scan
 # cannot see a surviving pointer to one of them. The character class carries
 # `-` because the deleted names are hyphenated (`execute-code.ps1`,
-# `dxgi_vram.ps1`, `molab_llama_launch.sh`); a class without it passes exactly
+# `chat-start.ps1`, `ensure-logs-dir.ps1`); a class without it passes exactly
 # the pointers this scan exists for. `.mise/tasks/` is a prefix because that
 # whole tree was deleted with the same audit.
 _DOC_PATH_RE = re.compile(
-    r"`((?:scripts|src|tests|docs|\.mise/tasks)/[A-Za-z0-9_./-]+\.(?:py|sh|ps1))`"
+    r"`((?:scripts|src|tests|docs|\.mise/tasks)/[A-Za-z0-9_./-]+\.(?:py|sh|ps1|mjs))"
+    # A pointer may carry a selector after the path — `::test_name`, `:12-40`,
+    # ` --flag`. The path is what must resolve, so the selector is matched and
+    # dropped rather than excluding the pointer from the scan (which is how
+    # `tests/test_lint.py::test_shipped_source_stays_python_313_parseable` and
+    # `scripts/golden_check.py --diagnose` went unvalidated).
+    r"(?:(?:::|:[\d-]+|\s+--?)[A-Za-z0-9_=.\[\]-]*)*"
+    r"`"
 )
 
 
@@ -92,7 +99,9 @@ def _doc_sources() -> list[Path]:
 # deliberate: a tree-only list silently drops a skill that was deleted outright
 # (globbing cannot report what is gone), while a canonical-only list silently
 # drops a new skill (nothing names it until someone remembers this tuple).
-CANONICAL_SKILLS = ("pg-data", "pg-rag", "retrieval", "evaluation", "testing")
+# `molab-notebook` is shipped (AGENTS.md → Key Directories) and must be here, or
+# deleting its directory reports no drift at all.
+CANONICAL_SKILLS = ("pg-data", "pg-rag", "retrieval", "evaluation", "testing", "molab-notebook")
 
 
 def _expected_skills() -> list[str]:

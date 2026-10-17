@@ -225,6 +225,16 @@ alias = "tll"
 
 # --- Lint / format ---
 
+[tasks.lint-ts]
+description = "JS/TS parse gate for .omp/hooks/** + scripts/*.mjs (needs `mise run ts-deps` once)"
+run = "node scripts/check_ts.mjs"
+alias = "tsl"
+
+[tasks.ts-deps]
+description = "Install the TS parser devDependency the lint-ts gate uses (npm install)"
+run = "npm install --no-audit --no-fund"
+alias = "tsd"
+
 [tasks.lint]
 description = "Ruff check: static analysis of src/, scripts/, tests/ (fails on regression)"
 run = "uv run ruff check src scripts tests"
@@ -241,3 +251,12 @@ alias = "fo"
 [tools]
 python = "3.15"
 ruff = "latest"
+# Runtime for the `.omp/hooks` TypeScript gate (`mise run lint-ts`), pinned here
+# like python/ruff. The parser is a *library* the check imports (typescript +
+# @types/node), so it lives in package.json/package-lock.json installed by
+# `mise run ts-deps` — the same split as python/ruff (mise tools) vs pyproject
+# (libraries). mise's own `npm:` backend is for CLIs and says so: it shims
+# executables and warns "add a library to your project's package.json instead",
+# and its copy is not on node's resolution path; two pins of one compiler would
+# also drift.
+node = "24"

@@ -244,20 +244,41 @@ def _publish_docs() -> int:
             f"{DOCS_STAMP} not found — run `mise generate-docs` first (it stamps the version "
             "the sandbox's tool-corpus build checks)."
         )
+    # The stamp is read *first*, the corpus next, the stamp again last. A read
+    # order alone cannot make the pair coherent — `build-documents` writes the
+    # corpus before the stamp, so any interleaving of two reads can pair one
+    # file with the other's predecessor, and the version check cannot see it
+    # (the constant is the same before and after a rebuild). The re-read is
+    # what closes that: the stamp's `updated` field changes on every build, so
+    # a changed stamp proves the tree moved under us. Abort closed and let the
+    # caller re-run rather than shipping a pair nothing produced.
+    try:
+        stamp_text = DOCS_STAMP.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SystemExit(f"{DOCS_STAMP} is unreadable: {exc}") from exc
     try:
         docs = json.loads(DOCS.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise SystemExit(f"{DOCS} is not valid JSON: {exc}") from exc
     if not isinstance(docs, list) or not docs:
         raise SystemExit(f"{DOCS} does not hold a non-empty list of documents")
+    try:
+        stamp_now = DOCS_STAMP.read_text(encoding="utf-8")
+    except OSError:
+        stamp_now = None  # gone or unreadable mid-publish counts as changed
+    if stamp_now != stamp_text:
+        raise SystemExit(
+            f"{DOCS_STAMP} changed while {DOCS} was read — a build ran during this publish; "
+            "re-run `mise upload-docs`."
+        )
     # The stamp is the one artifact a human may hand-edit (it is plain JSON, not a
     # build output), so a truncated or wrong-shape file must abort with the same
     # actionable message as a stale one instead of a raw JSONDecodeError — and it
     # must abort *closed*: publishing without a verified version match would ship a
     # corpus the sandbox's tool-corpus build cannot stamp.
     try:
-        stamp_doc = json.loads(DOCS_STAMP.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+        stamp_doc = json.loads(stamp_text)
+    except ValueError as exc:
         raise SystemExit(
             f"{DOCS_STAMP} is not valid JSON: {exc} — run `mise generate-docs` first."
         ) from exc
@@ -299,7 +320,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--docs",
         action="store_true",
-        help="publish data/documents.json to the PUBLIC corpus bucket instead of the store",
+        help="publish data/documents.json + its version stamp to the PUBLIC corpus bucket "
+        "instead of the store",
     )
     args = parser.parse_args(argv)
     if args.docs:

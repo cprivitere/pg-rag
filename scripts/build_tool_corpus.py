@@ -39,13 +39,18 @@ SRC = Path("data/documents.json")
 OUT = Path("data/tool_documents.json")
 PKL = Path("data/tool_bm25.pkl")
 
-# The freshness stamp and the corpus are a *pair*, both addressed from the CWD:
-# `SRC`/`OUT`/`PKL` are CWD-relative, `build.py` stamps this same repo-relative
-# path, and a CWD-rooted data tree (the molab sandbox's `corpus_docs` cell,
-# whose package lives in `pg-rag-src/`) therefore resolves both. Addressing it
-# from the imported package root instead — `pgrag.config` anchors it at
-# `PROJECT_ROOT` — looks for `pg-rag-src/data/derived/documents_version.json`
-# there and aborts every build on a missing stamp.
+# The freshness stamp and the corpus it guards both resolve under the CWD:
+# `SRC`/`OUT`/`PKL` are CWD-relative, and the stamp is re-anchored to
+# `PROJECT_ROOT` (the imported package root) only to render `pgrag.config`'s
+# absolute path relative to the tree — so a CWD-rooted data tree builds.
+# `build.py` writes the *absolute*, PROJECT_ROOT-anchored
+# `DOCUMENTS_VERSION_FILE`, though, so the two agree only when the CWD *is* the
+# repo root: a run from any other CWD refuses a tree that same build just
+# stamped. The CWD-relative stamp is what makes the molab sandbox work — its
+# cell runs in a CWD-rooted data tree while the package lives in `pg-rag-src/`,
+# so addressing the stamp from the imported package root instead would look for
+# `pg-rag-src/data/derived/documents_version.json` there and abort every build
+# on a missing stamp.
 DOCUMENTS_VERSION_FILE = _ABS_STAMP.relative_to(PROJECT_ROOT)
 
 # Stage-1 drop list (plan): per-row renderings of tables whose facts are
@@ -148,7 +153,18 @@ def _build() -> int:
     # corpus lock (main), and the loader would try to take it again in this
     # process — no re-entrancy, so that "simplification" would deadlock the
     # build against itself.
-    save_bm25_index(model, kept, str(PKL), str(OUT))
+    try:
+        save_bm25_index(model, kept, str(PKL), str(OUT))
+    except OSError as exc:
+        # OUT is already written, so the pair is torn until the next
+        # `corpus_search --corpus tool` rebuilds the index from it (the mtime
+        # mismatch is the same self-heal as a stale cache). Say that instead of
+        # dying on a raw traceback that names neither file.
+        raise SystemExit(
+            f"BM25 cache -> {PKL} FAILED: {exc}\n"
+            f"{OUT} was already written; the next tool-corpus query rebuilds "
+            f"{PKL} (re-run `mise build-tool-corpus` to persist it now)."
+        ) from exc
     print(f"BM25 cache -> {PKL} (built in {time.time() - start:.0f}s total)")
     return 0
 

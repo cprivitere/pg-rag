@@ -313,17 +313,28 @@ test (prove the source is fine) or recording a deliberate contract change
   assert these types, never a live server.
 - **Change ⇒** `uv run pytest tests/test_llm.py tests/test_connectivity.py`.
 
-### L8 — Lint gate (`ruff`)
+### L8 — Lint gate (`ruff`) + TypeScript parse gate
 
 - **Tests**: `test_lint.py`
 - **Source**: `ruff.toml` (repo root — the single rule source), `mise.toml`
   `[tasks.lint]/[tasks.format]`, `pyproject.toml` `[dependency-groups].dev`
-  (ruff pinned there, not in runtime deps)
+  (ruff pinned there, not in runtime deps); for TypeScript: `mise.toml`
+  `[tools] node` + `[tasks.lint-ts]/[tasks.ts-deps]`, `scripts/check_ts.mjs`,
+  and `package.json` (the `typescript` devDependency, installed into gitignored
+  `node_modules/`)
 - **Contracts**: `uv run ruff check src scripts tests` returns 0 — any new
   finding in the linted trees fails `mise test`. `ruff.toml` `extend-exclude`
   (`data/`, caches) plus per-file-ignores (`scripts/**`:
   BLE001/PLW1510/S110/S112/DTZ005/RUF059/F841;
-  `tests/**`: BLE001/RUF059) are deliberate, not drift.
+  `tests/**`: BLE001/RUF059) are deliberate, not drift. And `mise lint-ts`
+  (`node scripts/check_ts.mjs`) must parse every JS/TS file the repo ships
+  (`.omp/hooks/**` + `scripts/*.mjs`) clean: `TS2307` for the
+  `@oh-my-pi/pi-coding-agent` import is an expected *note* (that API's types
+  exist only inside the compiled `omp` binary), every other diagnostic fails —
+  including a planted syntax error, which the layer self-tests. No node / no
+  `node_modules` (a checkout that never ran `mise install` + `mise ts-deps`) ⇒
+  the two TS tests skip loudly (developer tooling, not a runtime dep of this
+  repo).
 - **Change ⇒** `uv run pytest tests/test_lint.py -q`; adding a rule = clean the
   new findings in the same commit (never raise the gate then violate it
   elsewhere). Format-only work is `mise format` — the gate does not check

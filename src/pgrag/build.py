@@ -18,9 +18,10 @@ with contextlib.suppress(AttributeError, ValueError):
 def generate_documents() -> None:
     """Build the full corpus: load CDN + wiki into a GameDatabase, run
     build_documents(), atomically write data/documents.json (tmp +
-    os.replace), and stamp DOCUMENTS_VERSION_FILE so the derived builders
-    (`scripts/build_tool_corpus.py`, `rag/bm25.py`) can refuse a stale
-    generation. Prints the document count."""
+    os.replace), and stamp DOCUMENTS_VERSION_FILE so the derived builder
+    (`scripts/build_tool_corpus.py`) can refuse a stale generation. Prints the
+    document count. (`rag/bm25.py` is not a stamp consumer — it keys its cache
+    on data/documents.json's mtime.)"""
     db = GameDatabase()
 
     load_database(db)

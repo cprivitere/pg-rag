@@ -96,7 +96,9 @@ def run_curator_with_scheduler():
     # corpus_search searches, then the full BM25 index (pre-warming it here
     # keeps the first query from paying the multi-minute inline rebuild).
     # Both are corpus writers and take the cross-instance build lock
-    # themselves, so a concurrent instance serializes instead of interleaving.
+    # themselves at the default `wait=0`: a peer instance holding it makes this
+    # one abort loudly instead of interleaving — fail-fast, and no state is
+    # saved (save_state is below).
     print("Rebuilding tool corpus...")
     tool_corpus_result = subprocess.run(
         [sys.executable, "-m", "scripts.build_tool_corpus"], capture_output=True, text=True

@@ -789,13 +789,19 @@ def test_port_owner_lsof_fallback_is_listener_scoped(monkeypatch):
 
 def _stub_service(monkeypatch, tmp_path, name):
     """Point one service's log + pidfile at tmp: SERVICES paths are bound at
-    import, so patching LOG_DIR alone would not redirect the log handle."""
+    import, so patching LOG_DIR alone would not redirect the log handle — and a
+    spec that only redirected `stdout` left chat's `stderr` (its own
+    `chat-error.log`) pointed at the repo's real `logs/`, which a background
+    start then opened for append: an isolation break, and on a checkout without
+    `logs/` a FileNotFoundError out of `start` instead of an assertion."""
     monkeypatch.setattr(services, "LOG_DIR", tmp_path)
-    monkeypatch.setitem(
-        services.SERVICES,
-        name,
-        {**services.SERVICES[name], "stdout": tmp_path / f"{name}-stdio.log"},
-    )
+    spec = dict(services.SERVICES[name])
+    spec["stdout"] = tmp_path / f"{name}-stdio.log"
+    if spec["stderr"] is not None:
+        # Left None for the LLM: that is the spec's "share stdout's handle", and
+        # the spawn-contract test pins it.
+        spec["stderr"] = tmp_path / f"{name}-error.log"
+    monkeypatch.setitem(services.SERVICES, name, spec)
 
 
 def _record_kills(monkeypatch) -> tuple[list[int], list[bool]]:

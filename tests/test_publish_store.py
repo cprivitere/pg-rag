@@ -5,10 +5,12 @@ need pinning: the docs path must reach the PUBLIC corpus bucket and must never
 open the store, and the two paths must never collapse onto one bucket. Everything
 here is offline — the HF client is replaced by a fake module."""
 # contract: docs mode publishes data/documents.json to the PUBLIC bucket and
-# reads no store data; store mode refuses the public bucket before any HF call;
-# docs mode validates the corpus AND its version stamp before the first byte, so
-# a corrupt, missing or stale stamp (including a non-dict payload) aborts with an
-# actionable message and touches no bucket.
+# reads no store data; store mode refuses the public bucket before any HF call
+# and publishes the snapshot/tarball/manifest to the PRIVATE bucket with the
+# privacy guard ahead of the first upload; docs mode validates the corpus AND
+# its version stamp before the first byte, so a corrupt, missing or stale stamp
+# (including a non-dict payload) aborts with an actionable message and touches
+# no bucket.
 
 import json
 import sys
@@ -174,9 +176,94 @@ def test_docs_mode_needs_the_corpus_file(monkeypatch, tmp_path):
     assert "generate-docs" in str(exc.value)
 
 
+def test_docs_mode_refuses_a_build_landing_between_its_two_reads(monkeypatch, tmp_path):
+    """A build that lands while the pair is being read must abort the publish.
+
+    `build-documents` writes the corpus, then the stamp, so any interleaving of
+    the publish's two reads can pair one file with the other's predecessor — and
+    the version check cannot see it, because a rebuild does not change
+    `DOCUMENTS_VERSION`. The stamp is therefore read again after the corpus.
+    """
+    _write_corpus(tmp_path, monkeypatch)
+    stamp_file = tmp_path / "documents_version.json"
+    monkeypatch.setattr(pub, "_auth_probe", lambda *a, **k: pytest.fail("touched the Hub"))
+    _fake_hub(monkeypatch, {})
+    real_loads = json.loads
+    landed: list[int] = []
+
+    def loads_then_a_build_lands(text, *args, **kwargs):
+        if not landed:  # the first parse is the corpus (the stamp is text-compared)
+            landed.append(1)
+            stamp_file.write_text(
+                json.dumps({"version": pub.DOCUMENTS_VERSION, "updated": 1}), encoding="utf-8"
+            )
+        return real_loads(text, *args, **kwargs)
+
+    monkeypatch.setattr(pub.json, "loads", loads_then_a_build_lands)
+
+    with pytest.raises(SystemExit) as exc:
+        pub.main(["--docs"])
+    assert "changed while" in str(exc.value)
+
+
 def test_store_mode_refuses_the_public_bucket_before_any_hf_call(monkeypatch):
     monkeypatch.setattr(pub, "BUCKET", pub.PUBLIC_BUCKET)
     monkeypatch.setattr(pub, "_auth_probe", lambda *a, **k: pytest.fail("touched the Hub"))
     with pytest.raises(SystemExit) as exc:
         pub.main([])
     assert "must not leak" in str(exc.value)
+
+
+def test_store_mode_publishes_to_the_private_bucket(monkeypatch, tmp_path):
+    """The store path's *direction*: the snapshot, source tarball and manifest
+    all land under the private bucket, and the privacy guard runs before the
+    first byte. The manifest the sandbox trusts is checked as uploaded, not on
+    disk — the run deletes its temporaries.
+
+    Without this the docs direction was the only one pinned, so a default-arg
+    slip in `_uri`/`_upload` could have sent the store to the public bucket with
+    the suite still green."""
+    snapshot = tmp_path / "sqlite_gorgon.db"
+    tarball = tmp_path / "pgrag-src.tar.gz"
+    manifest_file = tmp_path / "manifest.json"
+    live_db = tmp_path / "live.db"
+    live_db.write_bytes(b"live")
+    monkeypatch.setattr(pub, "SNAPSHOT", snapshot)
+    monkeypatch.setattr(pub, "TARBALL", tarball)
+    monkeypatch.setattr(pub, "MANIFEST", manifest_file)
+    monkeypatch.setattr(pub, "DB", live_db)
+    monkeypatch.setattr(pub, "_token", lambda: "tok")
+    monkeypatch.setattr(pub, "_table_counts", lambda: {"items": 3})
+    monkeypatch.setattr(pub, "_snapshot", lambda: snapshot.write_bytes(b"snapshot-bytes"))
+
+    def fake_tarball():
+        tarball.write_bytes(b"tar-bytes")
+        return "deadbeef", False
+
+    monkeypatch.setattr(pub, "_source_tarball", fake_tarball)
+    calls: list[str] = []
+    monkeypatch.setattr(pub, "_auth_probe", lambda: calls.append("auth") or object())
+    monkeypatch.setattr(pub, "_ensure_private_bucket", lambda api: calls.append("guard"))
+    objects: dict[str, int] = {}
+    _fake_hub(monkeypatch, objects)
+    uploaded_manifests: list[dict] = []
+    real_upload = pub._upload
+
+    def upload_spy(fs, path, dest):
+        if str(path) == str(manifest_file):
+            uploaded_manifests.append(json.loads(path.read_text(encoding="utf-8")))
+        return real_upload(fs, path, dest)
+
+    monkeypatch.setattr(pub, "_upload", upload_spy)
+
+    assert pub.main([]) == 0
+    assert pub.BUCKET != pub.PUBLIC_BUCKET  # the default is the private store bucket
+    assert calls == ["auth", "guard"]  # privacy is enforced before any upload
+    assert set(objects) == {
+        pub._uri(pub.REMOTE_STORE),
+        pub._uri(pub.REMOTE_TARBALL),
+        pub._uri(pub.REMOTE_MANIFEST),
+    }
+    assert all(uri.startswith(f"hf://buckets/{pub.BUCKET}/") for uri in objects)
+    assert [m["bucket"] for m in uploaded_manifests] == [pub.BUCKET]
+    assert not manifest_file.exists(), "the published temporaries are removed"

@@ -9,10 +9,14 @@ Runs are keyed (run-id from eval-set + parameters) into
 data/agentic_tune/<run-id>.json and are skip-if-exists, so interrupted
 sweeps resume. --compare tabulates run-ids.
 
-Server control: --llm-restart only fires when --model is not `current` OR
---reasoning-budget is not the 4096 default (those change what the server must
-load); otherwise the harness never touches the server. Every restart stops the
-old server with `mise run llm-stop`, then spawns `llama-server` directly with
+Server control: --llm-restart fires when the requested (model, budget) pair is
+not the one the harness last put on :8080 — with nothing moved yet it means the
+production pair (`current` @ 4096), which the operator's own `mise llm-start`
+is assumed to serve. So the default pair never restarts by itself, and every
+step of a sweep that asks for a pair the previous step did not serve restarts
+even when that step asks for a *default* value (a budget sweep reaching 4096
+after 2048 must come back to 4096, not measure the 2048 server). Every restart
+stops the old server with `mise run llm-stop`, then spawns `llama-server` directly with
 `scripts.services.llm_argv` — the same builder `mise run llm-start` uses,
 spawned directly because that task would re-apply `[env]` and override the
 candidate. `current` and `ornith` are the same row: both read the live `[env]`
@@ -254,18 +258,33 @@ def _spawn_server(model: str, flags: str) -> None:
     )
 
 
+# The (model, budget) pair this run last moved the server to — None until a
+# restart happens, i.e. "the server is whatever was already running" (the
+# production pair, by the operator's own `mise llm-start`). Guarding on this
+# rather than on the default sentinel is what keeps a sweep step from being
+# measured against the previous step's server.
+_served: tuple[str, int] | None = None
+
+
 def _maybe_restart_server(args, force: bool = False) -> bool:
     """Stop/start llama.cpp when the sweep needs a different model or budget.
 
     True when the server serves the requested pair (or no restart was needed);
     False when the requested state was not reached, in which case the caller
     aborts instead of running the sweep under a label nothing served. `force`
-    re-asserts the pair even when `args` already describe the default one — the
-    post-sweep restore knows the server was moved off it.
+    re-asserts the pair even when `args` already describe the default one.
+
+    The decision is the *served* pair, not the default sentinel: with nothing
+    moved yet the server is assumed to be the production pair, so a sweep step
+    that asks for a default value after a non-default step (ascending
+    --sweep-reasoning, say) restarts instead of measuring the leftover server.
     """
-    needs = force or args.model != "current" or args.reasoning_budget != 4096
-    if not needs or not args.llm_restart:
+    global _served
+    target = (args.model, args.reasoning_budget)
+    if not args.llm_restart:
         return True
+    if not force and (_served or ("current", 4096)) == target:
+        return True  # already serving it (or never moved off the production pair)
     cand = candidate(args.model)
     if not cand:
         print(f"[warn] unknown model key {args.model}; skipping restart")
@@ -291,10 +310,22 @@ def _maybe_restart_server(args, force: bool = False) -> bool:
         if _server_running():
             time.sleep(2)  # settle
             print("[server] up")
+            _served = target
             return True
         time.sleep(1)
     print("[warn] :8080 not up after 240s")
     return False
+
+
+def _restore_production_pair(args) -> int:
+    """Return the production model/budget to the server after a sweep.
+
+    `_served` makes it a no-op when the sweep never moved the server (an
+    ordinary temperature-only run against the default pair), so the restore
+    costs a restart only when one is owed.
+    """
+    args.model, args.reasoning_budget = "current", 4096
+    return 0 if _maybe_restart_server(args) else 1
 
 
 def compare(paths: list[str]) -> int:
@@ -362,22 +393,30 @@ def main() -> int:
     if args.sweep_temperature:
         temps = [float(t) for t in args.sweep_temperature.split(",")]
         seeds = [int(s) for s in args.sweep_seeds.split(",")]
+        # A temperature row does not change what the server *loads*, but it must
+        # still be served the pair the run-id records: with --model/--sweep
+        # this moves the server before the first row, so a move that fails
+        # aborts the sweep instead of persisting rows under a label nothing
+        # served (and the restore below still runs).
+        if not _maybe_restart_server(args):
+            return _restore_production_pair(args)
         for t, s in itertools.product(temps, seeds):
             args.temperature, args.seed = t, s
             run_once(args)
-        return 0
+        return _restore_production_pair(args)
     if args.sweep_reasoning:
+        status = 0
         for b in [int(x) for x in args.sweep_reasoning.split(",")]:
             args.reasoning_budget = b
             if not _maybe_restart_server(args):
-                return 1  # never persist rows for a pair the server did not serve
+                status = 1  # never persist rows for a pair the server did not serve
+                break
             run_once(args)
-        # The sweep left a candidate model/budget serving: put the production
-        # pair back through the same direct spawn path (the registry row
-        # re-reads [env]). Forced, because `args` now describes the default pair
-        # the guard above would skip.
-        args.model, args.reasoning_budget = "current", 4096
-        return 0 if _maybe_restart_server(args, force=True) else 1
+        # The sweep may have left a candidate model/budget serving: put the
+        # production pair back through the same direct spawn path (the registry
+        # row re-reads [env]). An abort above still restores — the move that
+        # preceded the failing step is exactly what needs undoing.
+        return _restore_production_pair(args) or status
 
     if not _maybe_restart_server(args):
         return 1

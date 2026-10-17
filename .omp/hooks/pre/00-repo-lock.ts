@@ -33,8 +33,12 @@
 // post-upload remote-size check is the only defence. Bare `mise sync` is
 // mise's own tool-manager subcommand, not ours, and is deliberately not
 // matched. A read that merely names a build task (`grep -rn build-bm25 .`,
-// `git commit -m 'fix build-documents stamp'`) passes untouched: the probe is
-// only reached for commands that could rewrite corpus state. The probed root
+// `git commit -m 'fix build-documents stamp'`) passes untouched, and so does a
+// pipeline that names one as an argument (`mise tasks | grep docs`, `mise exec
+// -- ls docs/`): the probe is reached only for commands whose shape can rewrite
+// corpus state — a corpus task in task position, or a writer's own spelling.
+// A rare spelling that puts the name in task position (`mise which docs`) is
+// still probed, which is the fail-safe direction. The probed root
 // is the repo the *call* runs in, not necessarily the session's: a bash call's
 // own non-empty `cwd` (another checkout) wins over the session cwd, which is
 // only the fallback. Every hook runtime error is swallowed silently — this
@@ -74,13 +78,19 @@ const TTL_MS = 3 * 60 * 60 * 1000;
 // A `:::`-separated chain element (`mise run golden ::: syf`) is matched by the
 // trailing bare-alias clause. `sq`/`sql-store` is deliberately absent (see the
 // header).
+// The skip's token class excludes the shell's word separators (`|`, `&`, `;`,
+// `<`, `>`, parens): without that, `mise tasks | grep docs` skips the pipe as
+// if it were a token and matches the neighbouring command's word, probing (and
+// blocking) a command that cannot rewrite anything. The task token is bounded
+// by `(?![\w/.\-])`, not `\b`: `docs` is also a directory (`mise exec -- ls
+// docs/`, any word ending in a task alias), and `\b` matches before the slash.
 const CORPUS_TASKS = "sync-(?:fast|full|wiki)|generate-docs|build-bm25|build-tool-corpus|syf|syw|docs|b25|btc|sy";
-const MISE_SKIP = "(?:[^\\s]+\\s+){0,12}?";
+const MISE_SKIP = "(?:[^\\s|&;<>()]+\\s+){0,12}?";
 const DESTRUCTIVE = new RegExp(
   "(?:\\b|_)(build-documents|build-bm25|build-tool-corpus|generate-docs)(?:\\b|\\s|\\s-|$)" +
     `|mise\\s+${MISE_SKIP}` +
-    `(?:${CORPUS_TASKS})\\b` +
-    `|:::\\s*(?:${CORPUS_TASKS})\\b` +
+    `(?:${CORPUS_TASKS})(?![\\w/.\\-])` +
+    `|:::\\s*(?:${CORPUS_TASKS})(?![\\w/.\\-])` +
     "|\\b(?:uv\\s+run\\s+)?pgrag\\s+build-" +
     "|-m\\s*pgrag\\.rag\\.bm25\\b" +
     "|scripts[\\\\/]build_tool_corpus\\.py",
@@ -103,7 +113,11 @@ const READ_ONLY_HEAD =
 // substitution stays a substitution even inside quotes (`echo "$(mise syf)"`
 // runs it), so those are rejected directly.
 function isReadOnly(command: string): boolean {
-  if (/["'][^"']*(?:\$\(|`)/.test(command)) return false; // quoted command substitution
+  // Strip single-quoted spans first: in sh they are literal, so
+  // `git commit -m 'fix: rerun `mise syf`'` runs nothing. What remains is the
+  // double-quoted and unquoted text, where `$(`/backticks really do run
+  // (`echo "$(mise syf)"`), so a substitution there is rejected.
+  if (/(?:\$\(|`)/.test(command.replace(/'[^']*'/g, ""))) return false; // command substitution
   let cmd = command.trim();
   for (;;) {
     // leading `cd <dir> &&` hops do not touch corpus state

@@ -173,7 +173,7 @@ Python ≥3.15, managed with `uv`. `mise tasks` lists everything. The
 `golden-short`, `golden-one`, `golden-type`, `golden-flaky`,
 `golden-flaky-list`, `debug-llm`, `chat`, `llm-start`, `llm-stop`,
 `chat-start`, `chat-stop`, `start-all`, `stop-all`, `status`, `drift`,
-`compliance`, `logs`, `tail-llm`, `lint`, `format`. Service tasks
+`compliance`, `logs`, `tail-llm`, `lint-ts`, `ts-deps`, `lint`, `format`. Service tasks
 (`llm-start`, `llm-stop`, `chat-start`, `chat-stop`) run
 `scripts/services.py`; the `.mise/tasks/` directory is gone.
 
@@ -195,6 +195,7 @@ mise golden-type recipe             # golden subset by type (entity|recipe|compa
 mise golden-flaky / golden-flaky-list # focus on historically-troublesome cases / audit stats
 mise chat                           # Gradio chat (primary UI; started by `mise start`; refreshes the store first; needs only LLM up)
 mise lint                           # ruff check src scripts tests (alias li) — run after editing code
+mise lint-ts                        # TypeScript parse gate for .omp/hooks/** (alias tsl; needs `mise ts-deps` once)
 mise format                         # ruff format + safe autofix (alias fo)
 uv run pytest                       # offline test suite
 mise drift                          # check docs/skills against the repo (alias dc)
@@ -297,7 +298,9 @@ lock by hand-editing it; to clear a stuck one, delete `data/.omp-build.lock`.
 ## Runtime/Tooling Preferences
 
 - **Runtime**: Python ≥3.15 via `uv`; model binaries fetched with `hf` global
-  CLI (cache `F:\AI\models\hub\`; GGUF via `-hf org/repo:quant`).
+  CLI (cache `F:\AI\models\hub\`; GGUF via `-hf org/repo:quant`). Node (mise
+  `[tools]`, with `npm`) exists for one thing: the `.omp/hooks` TypeScript gate
+  (`mise lint-ts`, parser from `mise ts-deps`) — the repo ships no JavaScript.
 - **Local services** (running on Windows host):
   | svc | port | model / note |
   |-----|------|--------------|
@@ -377,6 +380,18 @@ lock by hand-editing it; to clear a stuck one, delete `data/.omp-build.lock`.
   live solely in `ruff.toml`; the per-file-ignores there (scripts: broad
   excepts, unchecked subprocess; tests: broad catches) are deliberate. New rule
   ⇒ fix all findings in the same commit.
+- **TypeScript gate** (same `tests/test_lint.py` / L8 layer): every JS/TS file
+  the repo ships must parse — the pre-command hook (`.omp/hooks/**`) and the
+  gate's own `scripts/*.mjs`. `mise lint-ts` (`node scripts/check_ts.mjs`) exits
+  1 on any diagnostic; the one expected *note* is `TS2307` for the
+  `@oh-my-pi/pi-coding-agent` import, whose types ship only inside the compiled
+  `omp` binary, so the hook's own API use cannot be typed here. `mise install`
+  provides node (`[tools]`, pinned like python/ruff) and `mise ts-deps`
+  (`npm install`) the parser devDependency
+  (`node_modules/` is gitignored; without it the layer's two TS tests skip
+  loudly instead of failing). The hook is the cross-instance lock's early
+  warning, so a `.ts` edit that stops it loading is a real regression — nothing
+  else in the suite reads TypeScript.
 - **Compliance gate** (`tests/test_constraints.py`, layer L9 in
   `docs/TEST_CONTRACTS.md`; policy doc `docs/research/pg-rag-game-interaction-limits.md`):
   `scripts/check_constraints.py` must scan

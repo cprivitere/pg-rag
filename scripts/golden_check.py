@@ -7,7 +7,7 @@ answer. Needs the LLM server (:8080) and nothing else.
 
 Usage:
     mise golden                  # every case, exit 1 on any missing fact
-    mise golden-short            # representative fast tier + store-only cases
+    mise golden-short            # the 8 fast-tier list cases only
     mise golden-one -- fireball-ability
     uv run python scripts/golden_check.py --tier short --diagnose
     uv run python scripts/golden_check.py --ids bacon-for-joeh --type entity --max-facts 3
@@ -114,7 +114,7 @@ def main() -> None:
         "--tier",
         choices=["short", "all"],
         default="all",
-        help="short = representative fast tier + store-only cases; all = every golden",
+        help="short = the 8 fast-tier list cases (eval.SHORT_TIER_IDS); all = every golden",
     )
     parser.add_argument(
         "--ids",
