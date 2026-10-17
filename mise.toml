@@ -3,9 +3,11 @@
 LOGS_DIR = "{{ config_root }}/logs"
 # Model identities — SINGLE SOURCE of truth. Every consumer reads these:
 #   - scripts/services.py (via os.environ; `mise debug-llm` and `mise llm-start`)
+#   - scripts/agentic_tune.py (via os.environ; its `ornith` sweep row and the
+#     --llm-restart argv)
 #   - scripts/check_docs.py (via tomllib)
 # Swap a model (ref + its tuning flags) here; nothing else should change.
-# Launchers append their own host/port/-np/batch/log-file assembly.
+# Launchers append their own host/port/-np/log-file assembly.
 # `mise drift` fails if any consumer hardcodes a model literal.
 # Tuning rationale lives in docs/LLM_MODEL_WIRING.md — do not duplicate
 # per-model prose here.
@@ -15,8 +17,10 @@ LLM_MODEL = "ornith-ai/Ornith-1.5-9B-GGUF:Q4_K_M"
 LLM_FLAGS = "--no-mmproj -ngl 999 -fa on -c 65536 -ctk q8_0 -ctv q8_0 --reasoning-budget 4096"
 
 [task_config]
-# Default to PowerShell on Windows with -NoProfile (mise default)
-shell = "pwsh -NoProfile -Command"
+# No global shell: the default per-OS shell (`sh -c` / `cmd /c`) runs every
+# `uv run …` task, so the task set is usable on POSIX without PowerShell. The
+# tasks that are genuinely PowerShell (`logs`, `tail-llm`, `golden-type`) pin
+# pwsh themselves.
 # Run tasks from project root by default
 dir = "{{ config_root }}"
 # Cascade to any child mise.toml files
@@ -120,6 +124,8 @@ alias = "go"
 
 [tasks."golden-type"]
 description = "Run golden subset by type: `mise golden-type recipe` or `mise golden-type entity recipe` (LLM only)"
+# PowerShell: the run block loops with `foreach`.
+shell = "pwsh -NoProfile -Command"
 usage = 'arg "<types>" var=#true help="Golden type(s): entity|recipe|comparison|general"'
 run = '''
 foreach ($t in @('{{ usage.types | join(sep='\',\'') }}')) {
@@ -206,10 +212,14 @@ alias = "comp"
 
 [tasks.logs]
 description = "List all log files in logs directory"
+# PowerShell: Get-ChildItem/Format-Table (viewer helper; Windows-oriented).
+shell = "pwsh -NoProfile -Command"
 run = "Get-ChildItem '{{ env.LOGS_DIR }}' -ErrorAction SilentlyContinue | Select-Object Name, Length, LastWriteTime | Format-Table -AutoSize"
 
 [tasks."tail-llm"]
 description = "Tail LLM server log (live, last 20 lines)"
+# PowerShell: Get-Content -Wait (viewer helper; Windows-oriented).
+shell = "pwsh -NoProfile -Command"
 run = "Get-Content '{{ env.LOGS_DIR }}/llm.log' -ErrorAction SilentlyContinue -Wait -Tail 20"
 alias = "tll"
 

@@ -5,11 +5,13 @@ the launch contract the mise tasks (`llm-start`/`llm-stop`/`chat-start`/
 Gradio) is ever spawned — the only subprocesses are a throwaway
 `sys.executable -c pass` and the real `tasklist`/`ps` identity probes."""
 
+import importlib.util
 import os
 import subprocess
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -152,6 +154,33 @@ def test_netstat_scan_survives_a_malformed_row():
     assert _pid_from_netstat(text, 8080) == 4242
 
 
+@pytest.mark.parametrize("cell", ["-1", "0", "+5", "n/a", "1_0"])
+def test_netstat_rejects_a_pid_cell_that_is_not_a_positive_integer(cell):
+    """contract: a pid cell is decimal digits only and strictly positive —
+    `netstat`/`ss`/`lsof` never print a sign, so `-1`/`+5`/`0` are malformed
+    rows. `int()` alone would accept `-1` and `+5` and hand `stop` a pid no row
+    ever named."""
+    text = (
+        f"  TCP    0.0.0.0:8080           0.0.0.0:0              LISTENING       {cell}\n"
+        "  TCP    0.0.0.0:8080           0.0.0.0:0              LISTENING       4242\n"
+    )
+    assert _pid_from_netstat(text, 8080) == 4242  # skipped, scan continued
+    only_malformed = (
+        f"  TCP    0.0.0.0:8080           0.0.0.0:0              LISTENING       {cell}\n"
+    )
+    assert _pid_from_netstat(only_malformed, 8080) is None  # never returned
+
+
+def test_ss_rejects_a_zero_pid():
+    """`ss` prints `pid=0` for a socket it cannot attribute; that is not an owner
+    and must not be signalled (the later row is)."""
+    text = (
+        'LISTEN 0 511 0.0.0.0:8080 0.0.0.0:* users:(("x",pid=0,fd=3))\n'
+        'LISTEN 0 511 0.0.0.0:8080 0.0.0.0:* users:(("llama-server",pid=4242,fd=3))\n'
+    )
+    assert _pid_from_ss(text, 8080) == 4242
+
+
 def test_pidfile_round_trip_and_staleness(monkeypatch, tmp_path):
     monkeypatch.setattr(services, "LOG_DIR", tmp_path)
     assert _read_pid("llm") is None  # missing pidfile
@@ -218,6 +247,65 @@ def test_pid_instance_gate(monkeypatch, recorded, live, expected):
     assert _pid_instance_matches(4242, recorded) is expected
 
 
+def test_partial_pidfile_reads_as_absent(monkeypatch, tmp_path):
+    """contract: the reader never raises on a torn record. `_write_pid` writes a
+    sibling temp file and `os.replace`s it precisely so this cannot happen in
+    practice, but a `stop` that landed inside the old truncate+write window saw
+    exactly this: an empty or half-written file. It must read as "no record"
+    rather than raise (the false "Not running" it used to print came from the
+    same window)."""
+    monkeypatch.setattr(services, "LOG_DIR", tmp_path)
+    for torn in ("", '{"pid": 4242', '{"pid"', "\n"):
+        _pidfile("llm").write_text(torn)
+        assert _read_pidfile("llm") == (None, None)
+
+
+def test_write_pid_leaves_no_temp_file_behind(monkeypatch, tmp_path):
+    """The temp file is a means, not an artifact: `os.replace` consumes it, so a
+    `stop` scanning the log dir sees only the real pidfile."""
+    monkeypatch.setattr(services, "LOG_DIR", tmp_path)
+    _write_pid("llm", 4242, "tok")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["llm.pid"]
+    assert _read_pidfile("llm") == (4242, "tok")
+
+
+def _import_fresh_services(monkeypatch, logs_dir: str | None):
+    """Import a *second* copy of the module under a scratch name.
+
+    `LOGS_DIR` is resolved once, at import, so honoring the env override can only
+    be observed on a fresh import — and `importlib.reload` would rebind
+    `services.LOG_DIR` for every later test in the session.
+    """
+    if logs_dir is None:
+        monkeypatch.delenv("LOGS_DIR", raising=False)
+    else:
+        monkeypatch.setenv("LOGS_DIR", logs_dir)
+    spec = importlib.util.spec_from_file_location("services_fresh", services.__file__)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_log_dir_honors_logs_dir_env(monkeypatch, tmp_path):
+    """contract: log paths and pidfiles follow `mise.toml [env] LOGS_DIR` when it
+    is set (mise exports it to every task, and AGENTS.md names it as the knob "if
+    paths move") and fall back to `<repo>/logs`, so a bare
+    `uv run python scripts/services.py` still works."""
+    repo_logs = Path(services.__file__).resolve().parents[1] / "logs"
+    override = _import_fresh_services(monkeypatch, str(tmp_path))
+    resolved = override.LOG_DIR
+    assert resolved == tmp_path
+    assert override.SERVICES["llm"]["stdout"] == tmp_path / "llm-stdio.log"  # SERVICES binds it too
+    fallback = _import_fresh_services(monkeypatch, None).LOG_DIR
+    assert fallback == repo_logs
+
+
+def test_log_dir_ignores_a_blank_logs_dir(monkeypatch):
+    """`LOGS_DIR=""` (an empty export) is not a path — the repo default wins."""
+    blank = _import_fresh_services(monkeypatch, "").LOG_DIR
+    assert blank == Path(services.__file__).resolve().parents[1] / "logs"
+
+
 def test_port_open_probes_both_loopbacks(monkeypatch):
     """An IPv6-only listener must count as open: `_port_owner` covers IPv6, so an
     IPv4-only probe would let `start` spawn a second server behind a v6-bound
@@ -254,15 +342,29 @@ class _Signals:
     SIGKILL = _SIGKILL
 
 
-def _posix_kill_env(monkeypatch, *, leader: bool, killpg_error: type[Exception] | None = None):
+def _posix_kill_env(
+    monkeypatch,
+    *,
+    leader: bool,
+    own_group: int | None = None,
+    killpg_error: type[Exception] | None = None,
+):
     """Force the POSIX branch of `_kill_tree` on any host (Windows lacks
-    `os.killpg`/`os.getpgid`, hence `raising=False`)."""
+    `os.killpg`/`os.getpgid`, hence `raising=False`). `own_group` is the pgid
+    reported for *this* test process, i.e. the caller's own group."""
     signals: list[tuple[str, int, int]] = []
+    caller = os.getpid()
     monkeypatch.setattr(services, "signal", _Signals, raising=False)
     monkeypatch.setattr(services.os, "name", "posix", raising=False)
-    monkeypatch.setattr(
-        services.os, "getpgid", lambda pid: pid if leader else pid + 1, raising=False
-    )
+
+    def fake_getpgid(pid):
+        # Non-caller target: its own group iff `leader`; the caller's group is
+        # whatever `own_group` says (default: a group of its own, i.e. distinct).
+        if pid == caller:
+            return caller if own_group is None else own_group
+        return pid if leader else pid + 1
+
+    monkeypatch.setattr(services.os, "getpgid", fake_getpgid, raising=False)
 
     def fake_killpg(pid, sig):
         signals.append(("killpg", pid, sig))
@@ -283,15 +385,16 @@ def test_kill_tree_windows_uses_taskkill_tree(monkeypatch):
     calls: list[list[str]] = []
     monkeypatch.setattr(services.os, "name", "nt", raising=False)
     monkeypatch.setattr(services.subprocess, "run", lambda argv, **kw: calls.append(list(argv)))
-    services._kill_tree(4242)
+    services._kill_tree(4242, ours=True)
     assert calls == [["taskkill", "/PID", "4242", "/T", "/F"]]
 
 
 def test_kill_tree_posix_group_leader_escalates(monkeypatch):
-    """A pid leading its own group (we spawned it with start_new_session) is
-    killed as a group, SIGTERM first, SIGKILL after the grace."""
+    """A pidfile-verified pid (`ours`) leading its own group (we spawned it with
+    start_new_session) is killed as a group, SIGTERM first, SIGKILL after the
+    grace."""
     signals = _posix_kill_env(monkeypatch, leader=True)
-    services._kill_tree(4242)
+    services._kill_tree(4242, ours=True)
     assert signals == [("killpg", 4242, _SIGTERM), ("killpg", 4242, _SIGKILL)]
 
 
@@ -299,14 +402,50 @@ def test_kill_tree_posix_never_killpgs_a_foreign_group(monkeypatch, capsys):
     """contract: a pid that is not its own group leader is signalled alone — a
     killpg there would take out everything sharing that group."""
     signals = _posix_kill_env(monkeypatch, leader=False)
-    services._kill_tree(4242)
+    services._kill_tree(4242, ours=True)
+    assert [kind for kind, *_ in signals] == ["kill", "kill"]
+    assert "only the top process was signalled" in capsys.readouterr().out
+
+
+def test_kill_tree_posix_port_owner_never_killpgs(monkeypatch, capsys):
+    """contract: a pid from `_port_owner` has no provenance — nothing recorded
+    it, so the script cannot know what the process group is for. Even when that
+    pid leads its own group (a container PID 1, any `setsid`/`nohup` daemon, a
+    terminal job all do), the group kill would take out a foreign group, so only
+    the single pid is signalled."""
+    signals = _posix_kill_env(monkeypatch, leader=True)
+    services._kill_tree(4242, ours=False)
+    assert [kind for kind, *_ in signals] == ["kill", "kill"]
+    out = capsys.readouterr().out
+    assert "only the top process was signalled" in out
+    assert "port owner" in out
+
+
+def test_kill_tree_posix_own_group_is_never_killpged(monkeypatch, capsys):
+    """contract: a pid whose group is the *caller's* group is never killpg'd —
+    even a pidfile-verified leader. The socket may be held by a `stop` invoked
+    from inside that group (`mise` runs us in it), and killpg would SIGTERM this
+    script too."""
+    signals = _posix_kill_env(monkeypatch, leader=True, own_group=4242)
+    services._kill_tree(4242, ours=True)
+    assert [kind for kind, *_ in signals] == ["kill", "kill"]
+    out = capsys.readouterr().out
+    assert "only the top process was signalled" in out
+    assert "own group" in out
+
+
+def test_kill_tree_posix_pid_one_is_never_killpged(monkeypatch, capsys):
+    """contract: pid 1 is init/the caller's container entrypoint, never a service
+    this script spawned — no `killpg` for it under any reading."""
+    signals = _posix_kill_env(monkeypatch, leader=True)
+    services._kill_tree(1, ours=True)
     assert [kind for kind, *_ in signals] == ["kill", "kill"]
     assert "only the top process was signalled" in capsys.readouterr().out
 
 
 def test_kill_tree_posix_tolerates_a_process_dying_mid_escalation(monkeypatch):
     signals = _posix_kill_env(monkeypatch, leader=True, killpg_error=ProcessLookupError)
-    services._kill_tree(4242)  # must not raise
+    services._kill_tree(4242, ours=True)  # must not raise
     assert signals == [("killpg", 4242, _SIGTERM), ("killpg", 4242, _SIGKILL)]
 
 
@@ -320,12 +459,101 @@ def test_kill_tree_posix_gone_process_is_a_no_op(monkeypatch):
     monkeypatch.setattr(
         services, "_wait_dead", lambda *a, **k: pytest.fail("waited for a dead pid")
     )
-    services._kill_tree(4242)
+    services._kill_tree(4242, ours=True)
 
 
 class _FakeRun:
-    def __init__(self, stdout: str = ""):
+    # `stdout` may be None: that is what `subprocess.run` returns when a strict
+    # decode kills the reader thread — the failure mode these tests cover.
+    def __init__(self, stdout: str | None = ""):
         self.stdout = stdout
+
+
+def test_process_image_parses_a_windows_tasklist_row(monkeypatch):
+    """contract: the Windows identity probe returns the `tasklist /FO CSV /NH`
+    image cell with its extension; `_pid_matches_service` compares it with the
+    `.`-tolerant rule, so `llama-server.exe` still matches the spec's
+    `llama-server`."""
+    monkeypatch.setattr(services.os, "name", "nt", raising=False)
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **_kwargs):
+        calls.append(list(argv))
+        return _FakeRun('"llama-server.exe","41344","Console","1","1,234 K"\n')
+
+    monkeypatch.setattr(services.subprocess, "run", fake_run)
+    assert services._process_image(41344) == "llama-server.exe"
+    assert calls == [["tasklist", "/FI", "PID eq 41344", "/NH", "/FO", "CSV"]]
+    assert _pid_matches_service("llm", 41344) is True
+
+
+def test_process_image_basenames_a_posix_ps_path(monkeypatch):
+    """contract: BSD `ps -o comm=` prints the full executable path where Linux
+    prints a bare name — the probe basenames, so one `process` spec matches both
+    against the pidfile's recorded number."""
+    monkeypatch.setattr(services.os, "name", "posix", raising=False)
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **_kwargs):
+        calls.append(list(argv))
+        return _FakeRun("/usr/local/bin/llama-server\n")
+
+    monkeypatch.setattr(services.subprocess, "run", fake_run)
+    assert services._process_image(41344) == "llama-server"
+    assert calls == [["ps", "-p", "41344", "-o", "comm="]]
+    assert _pid_matches_service("llm", 41344) is True
+
+
+def test_identity_probes_read_decoded_text(monkeypatch):
+    """contract: the identity probes parse other apps' text (image names, start
+    times), which is not guaranteed UTF-8. Under Python 3.15 the strict default
+    turns one bad byte into a reader-thread failure whose `subprocess.run` returns
+    `stdout=None` — and the caller's `.strip()`/`.splitlines()` raised
+    `AttributeError` on it. Every parsed read asks for `errors="replace"`, and a
+    None stdout reads as "unknown" (None), never as a crash."""
+    calls: list[dict] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(kwargs)
+        return _FakeRun(None)  # what a killed reader thread leaves behind
+
+    monkeypatch.setattr(services.subprocess, "run", fake_run)
+    for os_name in ("nt", "posix"):
+        monkeypatch.setattr(services.os, "name", os_name, raising=False)
+        assert services._process_image(4242) is None  # process unknown
+        assert services._process_start(4242) is None  # token unknown
+    assert len(calls) == 4
+    assert all(kw.get("errors") == "replace" for kw in calls)
+
+
+def test_port_owner_survives_a_probe_that_could_not_decode(monkeypatch):
+    """contract: a probe whose stdout failed to decode names nobody. It must fall
+    through to the next probe (and finally to None), never raise on the None and
+    never return a bogus pid."""
+    calls: list[dict] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(kwargs)
+        return _FakeRun(None)
+
+    monkeypatch.setattr(services.subprocess, "run", fake_run)
+    monkeypatch.setattr(services.os, "name", "posix", raising=False)
+    assert _port_owner(8080) is None  # ss -> lsof, both unknown
+    monkeypatch.setattr(services.os, "name", "nt", raising=False)
+    assert _port_owner(8080) is None  # netstat
+    assert all(kw.get("errors") == "replace" for kw in calls)
+
+
+def test_port_owner_lsof_skips_a_bogus_pid_line(monkeypatch):
+    """`lsof -t` prints one pid per line: a malformed line is skipped, not
+    returned as the kill target."""
+    monkeypatch.setattr(services.os, "name", "posix", raising=False)
+
+    def fake_run(argv, **_kwargs):
+        return _FakeRun("n/a\n0\n4242\n" if argv[0] == "lsof" else "")
+
+    monkeypatch.setattr(services.subprocess, "run", fake_run)
+    assert _port_owner(8080) == 4242
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows netstat scan")
@@ -379,6 +607,21 @@ def _stub_service(monkeypatch, tmp_path, name):
     )
 
 
+def _record_kills(monkeypatch) -> tuple[list[int], list[bool]]:
+    """Record `stop`'s kill calls with the provenance it passed: `ours` is False
+    when the pid came from `_port_owner` rather than a verified pidfile, which is
+    what forbids `_kill_tree`'s POSIX group kill."""
+    killed: list[int] = []
+    provenance: list[bool] = []
+
+    def fake_kill_tree(pid, *, ours):
+        killed.append(pid)
+        provenance.append(ours)
+
+    monkeypatch.setattr(services, "_kill_tree", fake_kill_tree)
+    return killed, provenance
+
+
 def test_failed_start_clears_pidfile(monkeypatch, tmp_path):
     """A spawn that dies immediately must not leave a pidfile behind: `stop` would
     otherwise trust a dead number that the OS may have recycled."""
@@ -403,11 +646,10 @@ def test_failed_start_clears_pidfile(monkeypatch, tmp_path):
 def test_stop_ignores_a_pidfile_that_lost_its_identity(monkeypatch, tmp_path):
     _stub_service(monkeypatch, tmp_path, "llm")
     _write_pid("llm", 4242)
-    killed: list[int] = []
+    killed, _ = _record_kills(monkeypatch)
     monkeypatch.setattr(services, "_pid_matches_service", lambda name, pid: False)
     monkeypatch.setattr(services, "_port_owner", lambda port: None)
     monkeypatch.setattr(services, "_port_open", lambda port: False)
-    monkeypatch.setattr(services, "_kill_tree", killed.append)
     assert services.stop("llm") == 0
     assert killed == []
     assert _read_pid("llm") is None
@@ -415,17 +657,18 @@ def test_stop_ignores_a_pidfile_that_lost_its_identity(monkeypatch, tmp_path):
 
 def test_stop_ignores_a_pidfile_whose_start_token_disproves_it(monkeypatch, tmp_path):
     """Same number, same image, different process (a recycled pid): the recorded
-    start token vetoes the kill and the listener becomes the kill target."""
+    start token vetoes the kill and the listener becomes the kill target — with
+    `ours=False`, so the port-derived pid cannot authorize a group kill."""
     _stub_service(monkeypatch, tmp_path, "llm")
     _write_pid("llm", 4242, "the-process-we-started")
-    killed: list[int] = []
+    killed, provenance = _record_kills(monkeypatch)
     monkeypatch.setattr(services, "_pid_matches_service", lambda name, pid: True)
     monkeypatch.setattr(services, "_process_start", lambda pid: "some-other-process")
     monkeypatch.setattr(services, "_port_owner", lambda port: 777)
     monkeypatch.setattr(services, "_port_open", lambda port: False)
-    monkeypatch.setattr(services, "_kill_tree", killed.append)
     services.stop("llm")
     assert killed == [777]
+    assert provenance == [False]
 
 
 def test_stop_reports_a_held_port_with_no_known_owner(monkeypatch, tmp_path, capsys):
@@ -445,12 +688,26 @@ def test_stop_reports_a_held_port_with_no_known_owner(monkeypatch, tmp_path, cap
 def test_stop_kills_the_matching_pidfile(monkeypatch, tmp_path):
     _stub_service(monkeypatch, tmp_path, "llm")
     _write_pid("llm", 4242)
-    killed: list[int] = []
+    killed, provenance = _record_kills(monkeypatch)
     monkeypatch.setattr(services, "_pid_matches_service", lambda name, pid: True)
     monkeypatch.setattr(services, "_port_open", lambda port: False)
-    monkeypatch.setattr(services, "_kill_tree", killed.append)
     assert services.stop("llm") == 0
     assert killed == [4242]
+    assert provenance == [True]  # the pidfile is the provenance a killpg needs
+
+
+def test_stop_survives_identity_probes_that_could_not_decode(monkeypatch, tmp_path, capsys):
+    """End to end: a pidfile whose image/start probes cannot decode (None stdout)
+    fails the identity gate, `_port_owner` names nobody, and `stop` reports "Not
+    running" — it must not raise `AttributeError` on the None stdout it was
+    handed."""
+    _stub_service(monkeypatch, tmp_path, "llm")
+    _write_pid("llm", 4242, "the-process-we-started")
+    monkeypatch.setattr(services.subprocess, "run", lambda argv, **kw: _FakeRun(None))
+    monkeypatch.setattr(services, "_port_open", lambda port: False)
+    assert services.stop("llm") == 0
+    assert "Not running" in capsys.readouterr().out
+    assert _read_pid("llm") is None
 
 
 class _FakeResp:
@@ -490,8 +747,9 @@ def test_status_mapping_and_help_block(monkeypatch, capsys):
     assert "[DOWN] Chat (Gradio) (:7860): Stopped" in out
     for cmd in ("mise start", "mise down", "mise sl", "mise sc", "mise xc"):
         assert cmd in out
-    assert "OpenWebUI" not in out
-    assert "webui" not in out.lower()
+    # No `OpenWebUI`/`webui` assertion here: `status` prints neither string, so
+    # such a check was vacuously true. The no-dead-reference contract for the
+    # retired UI is a repo-wide grep, not a property of this output.
 
 
 def test_unknown_service_rejected():

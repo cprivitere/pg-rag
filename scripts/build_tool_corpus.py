@@ -79,6 +79,20 @@ def _require_fresh_documents() -> None:
 
 
 def main() -> int:
+    """Hold the corpus-build lock around the whole derive.
+
+    The lock lives with the artifacts (`SRC.parent`, i.e. `data/` by default),
+    which is where the pre-hook probes for a live owner — this script is a
+    corpus writer, so it *owns* the lock for the duration of the build rather
+    than relying on the hook (whose lifetime is one tool call).
+    """
+    from pgrag.buildlock import corpus_lock
+
+    with corpus_lock(SRC.parent):
+        return _build()
+
+
+def _build() -> int:
     start = time.time()
     _require_fresh_documents()
     docs = json.loads(SRC.read_text(encoding="utf-8"))

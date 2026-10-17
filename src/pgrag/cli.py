@@ -38,8 +38,14 @@ def _download_wiki(args) -> int:
 
 def _build_documents(args) -> int:
     from pgrag.build import generate_documents
+    from pgrag.buildlock import corpus_lock
+    from pgrag.config import DATA_DIR
 
-    generate_documents()
+    # The documents rebuild is a corpus write: hold the cross-instance lock so
+    # a second instance (any invocation spelling — mise task, alias, this CLI)
+    # serializes instead of interleaving. See pgrag.buildlock.
+    with corpus_lock(DATA_DIR):
+        generate_documents()
     return 0
 
 

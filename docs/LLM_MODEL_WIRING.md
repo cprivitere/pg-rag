@@ -40,6 +40,10 @@ template renders correctly, **no** `--jinja`) with a vision projector bundled
 in repo (dropped via `--no-mmproj`). No MTP head (dense — Qwen3.5-9B-MTP's
 spec-decode does NOT apply); native thinking via `--reasoning-budget 4096`.
 
+The two lines below are a **copy for reading** of the `mise.toml [env]` pair —
+`LLM_MODEL`/`LLM_FLAGS` there are the authority; if this block and `[env]`
+disagree, `[env]` wins.
+
 ```toml
 LLM_MODEL = "ornith-ai/Ornith-1.5-9B-GGUF:Q4_K_M"
 LLM_FLAGS = "--no-mmproj -ngl 999 -fa on -c 65536 -ctk q8_0 -ctv q8_0 --reasoning-budget 4096"
@@ -169,9 +173,16 @@ Same `mise golden*` commands; only the *server flags* differ.
 
   ```powershell
   mise llm-stop
-  $env:LLM_REASONING = 'off'      # bash: LLM_REASONING=off mise llm-start
+  $env:LLM_REASONING = 'off'
   mise llm-start
   mise golden-short               # a FAIL now means a real change, not a coin flip
+  ```
+
+  POSIX form — the var is read at spawn, so an inline assignment reaches the
+  server just as well:
+
+  ```bash
+  LLM_REASONING=off mise llm-start
   ```
 
   `scripts/services.py` appends `--reasoning off` when `LLM_REASONING=off`
@@ -186,8 +197,9 @@ Same `mise golden*` commands; only the *server flags* differ.
   single-sample noise is expected and absorbed by the retry-once; treat a failure
   as a triage item (GEN-side vs RET-side via `--diagnose`), not as proof.
 
-Revert with `mise llm-stop; $env:LLM_REASONING = ''; mise llm-start` (or remove
-`--reasoning off` from `LLM_FLAGS` if you added it there instead).
+Revert with `mise llm-stop; $env:LLM_REASONING = ''; mise llm-start` — POSIX:
+`mise llm-stop && mise llm-start` (the inline assignment never persisted) (or
+remove `--reasoning off` from `LLM_FLAGS` if you added it there instead).
 
 ### Deterministic re-baseline (identical conditions: reasoning OFF, temp 0,
 seed 0)

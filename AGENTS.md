@@ -181,7 +181,7 @@ uv run pgrag download-wiki          # fetch wiki dumps
 uv run pgrag download-cdn           # fetch CDN json
 uv run pgrag build-documents        # regenerate documents.json (stamps version)
 mise sync-fast / sync-full          # CDN (+wiki) → documents → BM25 → tool corpus (aliases sy/syf)
-mise sync-wiki                      # converge wiki to current source, then documents + BM25 (alias syw)
+mise sync-wiki                      # converge wiki to current source, then documents + BM25 + tool corpus (alias syw)
 mise generate-docs                  # bare idempotent documents rebuild (alias docs)
 mise build-bm25 / build-tool-corpus # rebuild the lexical index / tool-corpus variant (b25/btc)
 mise sql-store (alias sq)           # build data/sqlite_gorgon.db: CDN + wiki + session + glogger sources
@@ -203,14 +203,22 @@ mise compliance                     # TOS/CoC hard-line scan (alias comp) — al
 **Build/refresh needs no servers**; only Q&A/eval (`golden*`, `chat`,
 `agentic-chat`) need the LLM at :8080.
 
-**Concurrency gate.** `.omp/hooks/pre/00-repo-lock.ts` guards the destructive
-corpus commands (`build-*`, `generate-docs`, `mise sync-*`, and the aliases that
-run those same tasks) with an atomic `O_EXCL` lock at `data/.omp-build.lock`, so
-two omp instances on this repo never rewrite the shared corpus at once.
-`mise sql-store` (private additive store, not corpus state) and the publish
-tasks are deliberately unguarded, and a pure read that only *names* a build task
-(`grep -rn build-documents .`) takes no lock. Never bypass it by hand-editing the
-lock; to clear a stuck lock, delete `data/.omp-build.lock`.
+**Concurrency gate (two layers).** The corpus *writers* own an atomic
+`O_EXCL` lock at `data/.omp-build.lock` for the duration of a build —
+`pgrag build-documents` (`src/pgrag/cli.py`), the BM25 persist/rebuild
+(`src/pgrag/rag/bm25.py`) and `scripts/build_tool_corpus.py`, all through
+`pgrag.buildlock.corpus_lock` — so two omp instances on this repo never rewrite
+the shared corpus at once, whatever the invocation spelling (mise task, alias,
+`mise run --force …`, `… ::: syf`, direct CLI or direct script; a held lock
+fails the second builder loudly). The pre-command hook
+(`.omp/hooks/pre/00-repo-lock.ts`) is the *early warning* in front of that: it
+probes the same file and blocks a destructive corpus command (`build-*`,
+`generate-docs`, `mise sync-*` and their aliases) while a live owner holds it —
+it never takes the lock itself, because a hook's tool call returns long before a
+build finishes. `mise sql-store` (private additive store, not corpus state) and
+the publish tasks are deliberately unguarded, and a pure read that only *names*
+a build task (`grep -rn build-documents .`) is never blocked. Never bypass the
+lock by hand-editing it; to clear a stuck one, delete `data/.omp-build.lock`.
 
 ## Code Conventions & Common Patterns
 
@@ -278,8 +286,11 @@ lock; to clear a stuck lock, delete `data/.omp-build.lock`.
   protocol (read before changing behavior/tests); `docs/REVIEW.md` — audit
   findings + improvement backlog.
 - `scripts/services.py` — start/stop/status for the LLM + Gradio chat
-  (cross-platform; the `.mise/tasks/*.ps1` service scripts it replaced are gone).
-- `mise.toml` `[env]`: `LOGS_DIR`, `LLM_MODEL`, `LLM_FLAGS` —
+  (cross-platform: stdlib only, `os.name`-gated, `ss`/`lsof`/`killpg` on POSIX.
+  The `.mise/tasks/*.ps1` service scripts it replaced are gone — but `logs`,
+  `tail-llm` and `golden-type` are still PowerShell run blocks and need pwsh).
+- `mise.toml` `[env]`: `LOGS_DIR` (read by `scripts/services.py` via
+  `os.environ`, falling back to `<root>/logs`), `LLM_MODEL`, `LLM_FLAGS` —
   update if paths move.
 
 ## Runtime/Tooling Preferences
@@ -293,33 +304,36 @@ lock; to clear a stuck lock, delete `data/.omp-build.lock`.
   | Chat (Gradio) | 7860 | primary UI — part of `mise start` (alias of `start-all`); `mise chat` foreground; loop-driven, refreshes the store at startup, needs LLM :8080 |
 
   Service control is `scripts/services.py`: `mise llm-start`/`llm-stop`,
-  `chat-start`/`chat-stop`, `status`, `debug-llm` (cross-platform; the deleted
-  `.mise/tasks/*.ps1` launchers were Windows-only).
+  `chat-start`/`chat-stop`, `status`, `debug-llm`. The manager itself is
+  cross-platform (the deleted `.mise/tasks/*.ps1` launchers were Windows-only)
+  and every service task is a plain `uv run python …`, so the task set runs on
+  POSIX too; only `logs`/`tail-llm`/`golden-type` pin `pwsh`.
 
   Embed (:8081) and reranker (:8082) services are **retired** — start tasks
   and env keys were deleted with the dense path.
 - **Single-source models**: refs + tuning flags live once in `mise.toml [env]`
   (`LLM_MODEL`/`LLM_FLAGS`); consumed by `scripts/services.py` (`os.environ`,
-  the LLM launch path) and `scripts/check_docs.py` (tomllib). `mise drift`
-  fails if any consumer hardcodes a model literal. Tuning rationale:
+  the LLM launch path), `scripts/agentic_tune.py` (`os.environ` — its `ornith`
+  sweep row and `--llm-restart` argv) and `scripts/check_docs.py` (tomllib).
+  `mise drift` fails if any consumer hardcodes a model literal. Tuning rationale:
   `docs/LLM_MODEL_WIRING.md`.
 - Tests import the installed `pgrag` package — after changing `src/pgrag/`, no
   reinstall needed (editable install).
 
 ## Testing & QA
 
-- **Framework**: pytest via `uv run pytest`; the suite collects **451 tests**,
+- **Framework**: pytest via `uv run pytest`; the suite collects **483 tests**,
   of which **78 are deselected by the default `not slow` marker** (16
-  data-heavy tests + the 62 parametrized golden cases), leaving **373** in the
+  data-heavy tests + the 62 parametrized golden cases), leaving **405** in the
   default offline run (one POSIX-only port-owner case skips on Windows) — all
   offline (temp-dir integration, mocked servers). The golden gate is the only
   suite that needs any server.
 - **Golden eval** (`tests/test_golden_check.py`): parametrized over
-  `data/golden/*.json`; the `require_servers` fixture skips unless the LLM
+  `data/golden/*.json`; the `require_llm` fixture skips unless the LLM
   (:8080) is up — **LLM only**, nothing else. Each case runs through
   `pgrag.agentic.eval.run_case` → `run_loop`; retries once (2 attempts) to damp
   reasoning-ON nondeterminism; both attempts fail = regression.
-  `GENERATION = {"temperature":0,"seed":0}` is wired into every run; reasoning-ON
+  `EVAL_GENERATION = {"temperature": 0, "seed": 0}` is wired into every run; reasoning-ON
   decoding is not greedy-pinned even at temp 0 + seed (observed 7/8/10
   single-run variance was **LLM-side**, not a harness miss), so the retry-once
   is the harness's defense. For a byte-reproducible comparison, launch the

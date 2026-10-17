@@ -5,8 +5,8 @@ description: Regression-triage and test discipline for pg-rag — how to decide 
 
 # testing — regression triage & test discipline
 
-The suite collects 451 tests; the default `not slow` marker deselects 78 (16
-data-heavy tests + the 62 parametrized golden cases), leaving 373 in the default
+The suite collects 483 tests; the default `not slow` marker deselects 78 (16
+data-heavy tests + the 62 parametrized golden cases), leaving 405 in the default
 offline run (one POSIX-only port-owner case skips on Windows). Everything is
 offline — the golden gate is the only suite that needs a server, and only the
 LLM (:8080). When a test fails, triage BEFORE
@@ -18,7 +18,7 @@ of which file defends which contract).
 
 1. **Identify the layer.** `docs/TEST_CONTRACTS.md` maps every test file to its
    layer (document-gen / bm25 / agentic loop / store / loaders-curation / golden
-   / llm-client / lint / compliance / service control) and the source it protects.
+   / llm-client / lint / compliance / service control / corpus-build lock) and the source it protects.
 2. **Did the source legitimately change?**
    - Yes → update the test to the new contract (a CONTRACT CHANGE — see rules).
    - No → the failure is a real regression: **fix the source, never the test.**
@@ -67,6 +67,9 @@ sweep/compare, `test_golden_check.py` = the offline gate drives it via
   `test_publish_store.py`), then `mise sql-store`.
 - Service-control change → L10 (`test_services.py`), then a live `mise start` /
   `mise status` / `mise down` smoke (the manager owns real :8080/:7860).
+- Corpus-lock change → L11 (`test_buildlock.py`), then hold the lock from a
+  second shell and confirm `mise build-tool-corpus` refuses (the pre-hook probes
+  the same file, so an agent-issued run is blocked before it starts).
 - Doc-gen change → inspect representative docs after `pgrag build-documents`.
 - Golden change → `test_golden_check.py` must collect it offline (it runs
   through the loop and skips without the LLM). A full `mise golden` run is a

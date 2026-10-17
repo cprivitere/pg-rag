@@ -5,8 +5,9 @@
 line-length = 100
 
 # Lint/format as Python 3.13 — the molab sandbox kernel that ships src/ +
-# scripts/. Without this, ruff's default (>=3.14) target makes `ruff format`
-# rewrite `except (A, B):` into PEP 758 `except A, B:`, which Python 3.13
+# scripts/. Without this pin, ruff infers the target from
+# `requires-python = ">=3.15"` in pyproject.toml, and `ruff format` then
+# rewrites `except (A, B):` into PEP 758 `except A, B:`, which Python 3.13
 # cannot parse (gate: tests/test_lint.py::test_shipped_source_stays_python_313_parseable).
 target-version = "py313"
 

@@ -14,4 +14,18 @@ Hard requirements for pg-rag sessions. Sticky: re-attached near the current turn
 10. **Bump `DOCUMENTS_VERSION` (`src/pgrag/config.py`) whenever document shape changes**, then re-stamp via `build-documents` — a shape change that skips the bump ships facts rendered by an older generator and can silently build a derived corpus from the wrong shape.
 11. **Wiki names come from `data/wiki/.meta.json`.** Filenames are `{safe_title}_<sha256-8>.txt` — never derive display names from filenames, and never let tests write the real meta file (tmp dirs only).
 12. **A test edit that changes what it asserts is a CONTRACT CHANGE, not a workaround.** State the new contract in the test, run the layer's sibling suite, and never weaken an assertion to dodge a real regression (see `docs/TEST_CONTRACTS.md`). No test edit "to make it pass" without proving the source is fine. Watch shared-function facet coverage: `run_loop` is asserted across `test_agentic_loop.py`, `test_agentic_tune.py`, and `test_golden_check.py`; `execute_tool` across `test_agentic_tools.py`/`test_agentic_loop.py` (see `docs/TEST_CONTRACTS.md` L3).
-13. **Cross-instance build lock.** `.omp/hooks/pre/00-repo-lock.ts` guards destructive corpus commands (`build-*`, `generate-docs`, the `mise` corpus tasks and the aliases that run them — `sy`/`syf`/`syw`/`docs`/`b25`/`btc`, incl. `mise r <alias>` and global flags before the task — plus the direct `python -m pgrag.rag.bm25` / `scripts/build_tool_corpus.py` invocations) with an `O_EXCL` lock at `data/.omp-build.lock`. `mise sql-store`/`sq` is *not* guarded (private additive store, not corpus state) and neither are publishes (`upload-docs`/`upload-store`). A pure read that merely *names* a task (`grep -rn build-bm25 .`) takes no lock; chaining or output redirection in such a command does. Never bypass it by hand-editing the lock; to clear a stuck lock, delete `data/.omp-build.lock`.
+13. **Cross-instance build lock — the writers own it, the hook only probes.**
+    The corpus writers hold an atomic `O_EXCL` lock at `data/.omp-build.lock`
+    for the whole build: `pgrag build-documents` (`src/pgrag/cli.py`), the BM25
+    persist/rebuild (`src/pgrag/rag/bm25.py`) and `scripts/build_tool_corpus.py`
+    (via `pgrag.buildlock.corpus_lock`). That covers every spelling —
+    `mise sync-*`/aliases, `mise run --force …`, `… ::: syf`, the direct CLI, the
+    direct scripts — and a second builder fails loudly instead of interleaving.
+    `.omp/hooks/pre/00-repo-lock.ts` is only the early warning: it probes the
+    same file and blocks destructive corpus commands while a live owner holds it
+    (never taking the lock itself — a hook's tool call ends long before a build
+    does). `mise sql-store`/`sq` is *not* guarded (private additive store, not
+    corpus state) and neither are publishes (`upload-docs`/`upload-store`). A
+    pure read that merely *names* a task (`grep -rn build-bm25 .`) is never
+    blocked. Never bypass the lock by hand-editing it; to clear a stuck one,
+    delete `data/.omp-build.lock`.

@@ -80,6 +80,7 @@ Two `mise golden-short` runs after the sweeps failed the same case
 grow-field-mushrooms` → PASS).
 
 **Historical — superseded by the dense-path cutover.** The embed (:8081) and
-reranker (:8082) services were deleted with the dense path, so the takeaway
-below no longer holds: `mise golden` needs the **LLM only** (no other service
-exists to be up).
+reranker (:8082) services were deleted with the dense path, so the old takeaway
+— a downed reranker (:8082) degraded retrieval to the lexical fallback — no
+longer holds: `mise golden` needs the **LLM only** (no other service exists to
+be up).

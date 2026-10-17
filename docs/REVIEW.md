@@ -251,3 +251,45 @@ guardrail that keeps it truthful.
   flag only in that mode); the live restart was not exercised because the
   running server serves the chat UI. Post-split full run: 50/54 → see the next
   run for the 58-file number.
+
+---
+
+## Follow-up fix pass (2026-10-17) — the `479b6bc` task/script audit
+
+Reviewed `479b6bc` ("audit mise tasks + scripts") and fixed everything the review
+found except two items deliberately deferred (below).
+
+- **Corpus-build lock redesigned** (the review's only P1 pair). The pre-hook
+  (`.omp/hooks/pre/00-repo-lock.ts`) is now **probe-only**; the *writers* own
+  `data/.omp-build.lock` through the new `src/pgrag/buildlock.py` —
+  `pgrag build-documents` (`src/pgrag/cli.py`), the BM25 rebuild/persist in
+  `src/pgrag/rag/bm25.py`, and `scripts/build_tool_corpus.py`. Two reasons: a
+  hook's lifetime is one tool call while a backgrounded build outlives it
+  (observed live — the old lock was released at the ~60 s auto-background while
+  the build kept running), and the matcher missed *documented* spellings
+  (`mise run --force syf`, `mise run <task> ::: syf`, glued `-m pgrag.rag.bm25`)
+  which the writer-side lock now covers regardless of invocation. Layer **L11**
+  in `docs/TEST_CONTRACTS.md`; `tests/test_buildlock.py` +
+  `tests/test_build_tool_corpus.py` pin it (cross-process refusal verified live).
+- **`scripts/services.py` hardened**: strict-UTF-8 child output read with
+  `errors="replace"` (a non-UTF-8 process name previously killed `stop`/`start`
+  with `AttributeError` — reproduced), POSIX `killpg` gated on pidfile
+  provenance (a port-derived pid, `pid <= 1`, or the caller's own group is
+  signalled alone with a warning), atomic pidfile write, non-positive pid cells
+  rejected, `LOGS_DIR` honored via `os.environ`.
+- **Docs/config made truthful**: `mise.toml` no longer pins pwsh globally (only
+  `logs`/`tail-llm`/`golden-type` do, so the service tasks really are runnable
+  on POSIX), the `[env]` consumer lists include `scripts/agentic_tune.py`,
+  AGENTS/TEST_CONTRACTS/testing-skill names and counts were corrected
+  (483 collected / 78 deselected / 405 default), the L4 Change ⇒ command runs
+  its new `test_publish_store.py`, and the orphan
+  `tests/fixtures/retrieval_cases.json` (a dense-path leftover) was deleted.
+
+**Deferred (open backlog).**
+
+1. `scripts/check_docs.py` resolves only backticked **`.py`** pointers, so a
+   stale `.sh`/`.ps1`/`.mise/tasks` reference in AGENTS.md/skills passes
+   `mise drift` silently — 12 of `479b6bc`'s deletions were that class. Widen
+   the regex *after* fixing item 2, or the gate fails immediately.
+2. `.agents/skills/molab-notebook/scripts/execute-code.ps1:10,35` name
+   `discover-servers.ps1`, which is not in the tree and never was tracked.

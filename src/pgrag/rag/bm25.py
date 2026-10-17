@@ -4,10 +4,18 @@ import os
 import pickle
 import re
 from collections import Counter
+from pathlib import Path
+
+from pgrag.buildlock import corpus_lock
 
 CACHE_VERSION = 1
 DEFAULT_INDEX_PATH = "data/documents.json"
 DEFAULT_PICKLE_PATH = "data/bm25_index.pkl"
+
+# A lazy rebuild happens inside a request (the loop's corpus_search), so it
+# polls for a peer's build step this long before raising BuildLocked instead of
+# rebuilding over it.
+LAZY_REBUILD_WAIT_S = 30.0
 
 # Query-side stopwords (the index itself keeps every token, so the persisted
 # pickle stays valid). A long natural-language question otherwise ranks docs
@@ -181,17 +189,24 @@ def load_bm25_index(path=DEFAULT_INDEX_PATH, pkl_path=DEFAULT_PICKLE_PATH):
         ):
             pass  # stale/corrupt cache -> rebuild below
 
-    with open(path, encoding="utf-8") as f:
-        docs = json.load(f)
-    model = BM25()
-    model.index([doc["text"] for doc in docs])
-    try:
-        dirname = os.path.dirname(pkl_path)
-        if dirname:
-            os.makedirs(dirname, exist_ok=True)
-        save_bm25_index(model, docs, pkl_path, path)
-    except OSError:
-        pass  # cache write is best-effort
+    # A rebuild rewrites the persisted index, i.e. it is a corpus write: hold
+    # the lock that lives beside the cache (data/.omp-build.lock for the
+    # defaults) so two instances never rebuild over each other. Unlike an
+    # explicit build this can run inside a request, so it waits briefly for a
+    # peer's step to finish before failing loudly (BuildLocked reaches the
+    # caller as a tool error, never as a concurrent rebuild).
+    with corpus_lock(Path(pkl_path).resolve().parent, wait=LAZY_REBUILD_WAIT_S):
+        with open(path, encoding="utf-8") as f:
+            docs = json.load(f)
+        model = BM25()
+        model.index([doc["text"] for doc in docs])
+        try:
+            dirname = os.path.dirname(pkl_path)
+            if dirname:
+                os.makedirs(dirname, exist_ok=True)
+            save_bm25_index(model, docs, pkl_path, path)
+        except OSError:
+            pass  # cache write is best-effort
     return model, docs
 
 

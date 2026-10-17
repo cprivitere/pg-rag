@@ -3,7 +3,11 @@
 
 This module replaces the `.mise/tasks/*.ps1` service scripts and
 `scripts/check_services.py` — the single owner of the *managed* services'
-ports, argv, log paths and pidfiles. Model identity still comes exclusively
+ports, argv, log paths and pidfiles. Log paths follow `mise.toml [env]`
+`LOGS_DIR` when it is set (mise exports it to every task, so it is the single
+source AGENTS.md names as "the knob if paths move") and fall back to
+`<repo>/logs`, so a bare `uv run python scripts/services.py` still works.
+Model identity still comes exclusively
 from `mise.toml [env]` (`LLM_MODEL`/`LLM_FLAGS`), read via `os.environ`.
 (`scripts/agentic_tune.py --llm-restart` launches a candidate model/flags pair
 from its sweep registry instead of `[env]`, but builds the argv with
@@ -26,7 +30,10 @@ import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-LOG_DIR = REPO_ROOT / "logs"
+# `mise.toml [env] LOGS_DIR` is the single source (AGENTS.md names it as the knob
+# "if paths move"); the repo-relative default keeps a direct
+# `uv run python scripts/services.py` working with no mise env at all.
+LOG_DIR = Path(os.environ.get("LOGS_DIR", "").strip() or (REPO_ROOT / "logs"))
 LLM_PORT = 8080
 CHAT_PORT = 7860
 START_GRACE_S = 5.0  # accept-connection wait after a spawn
@@ -176,7 +183,18 @@ def _read_pid(name: str) -> int | None:
 
 
 def _write_pid(name: str, pid: int, start: str | None = None) -> None:
-    _pidfile(name).write_text(json.dumps({"pid": pid, "start": start}) + "\n")
+    """Record `(pid, start)` for `name`, atomically.
+
+    A truncate-then-write lands a partial record in the window a concurrent
+    `stop` reads it in: the reader would see a broken JSON record, print a false
+    "Not running", and unlink the pidfile `start` has just created. Writing a
+    sibling temp file and `os.replace`-ing it makes the new record appear whole
+    or not at all.
+    """
+    path = _pidfile(name)
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text(json.dumps({"pid": pid, "start": start}) + "\n")
+    os.replace(tmp, path)
 
 
 def _clear_pid(name: str) -> None:
@@ -193,6 +211,12 @@ def _process_start(pid: int) -> str | None:
     `tasklist`, so it goes through PowerShell; POSIX (`Linux` + BSD `lstart`) is
     a plain `ps`. Any failure yields None, which the gate reads as "unknown",
     i.e. no weaker than the image check.
+
+    `errors="replace"` is load-bearing: the child's text is another app's and is
+    not guaranteed UTF-8, and the strict default turns one bad byte into a
+    reader-thread failure whose `subprocess.run` returns `stdout=None` — which
+    the `.strip()` below would raise `AttributeError` on. The `or ""` covers the
+    None stdout that can still happen if the spawn itself fails oddly.
     """
     if os.name == "nt":
         argv = [
@@ -205,34 +229,46 @@ def _process_start(pid: int) -> str | None:
     else:
         argv = ["ps", "-p", str(pid), "-o", "lstart="]
     try:
-        out = subprocess.run(argv, capture_output=True, text=True).stdout.strip()
+        proc = subprocess.run(argv, capture_output=True, text=True, errors="replace")
     except OSError:
         return None
-    return out or None
+    return (proc.stdout or "").strip() or None
 
 
 def _process_image(pid: int) -> str | None:
-    """Lowercase image name of the live process at `pid`, or None if it is gone."""
+    """Lowercase image name of the live process at `pid`, or None if it is gone.
+
+    Both branches parse text this repo does not control — image names come from
+    other apps — so both ask for `errors="replace"`; under the strict default one
+    non-UTF-8 byte kills the reader thread and `subprocess.run` returns
+    `stdout=None`, which the scans below would raise on. A None stdout is read as
+    "process unknown" (None), never as a crash.
+    """
     if os.name == "nt":
         try:
-            out = subprocess.run(
+            proc = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
                 capture_output=True,
                 text=True,
-            ).stdout
+                errors="replace",
+            )
         except OSError:
             return None
-        for line in out.splitlines():
+        for line in (proc.stdout or "").splitlines():
             fields = [field.strip().strip('"') for field in line.split(",")]
             if len(fields) >= 2 and fields[1] == str(pid):
                 return fields[0].lower()
         return None
     try:
-        out = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "comm="], capture_output=True, text=True
-        ).stdout.strip()
+        proc = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "comm="],
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
     except OSError:
         return None
+    out = (proc.stdout or "").strip()
     # BSD `ps -o comm=` prints the full executable path, Linux a bare name:
     # basename keeps the compare portable across both.
     return os.path.basename(out.splitlines()[0]).lower() if out else None
@@ -268,6 +304,22 @@ def _pid_instance_matches(pid: int, recorded_start: str | None) -> bool:
 
 
 _PID_RE = re.compile(r"pid=(\d+)")
+_POSITIVE_PID_RE = re.compile(r"\d+")
+
+
+def _pid_cell(cell: str) -> int | None:
+    """`cell` as a pid, or None when it is not one.
+
+    A pid cell is decimal digits only and strictly positive: `netstat`/`ss`/
+    `lsof` never print a sign, so `n/a`, `-1`, `+5` and `0` are malformed rows.
+    Left unchecked, `int("-1")` would hand `stop` a pid to signal that no row
+    ever named — and a negative/recycled number is not a service of ours.
+    """
+    if not _POSITIVE_PID_RE.fullmatch(cell):
+        return None
+    pid = int(cell)
+    return pid if pid > 0 else None
+
 
 # A listening socket is the only TCP row whose peer is the null address, so the
 # listener test keys on that instead of the state column: `netstat` localizes
@@ -287,10 +339,11 @@ def _pid_from_netstat(text: str, port: int) -> int | None:
             and parts[2] in _NULL_PEERS
             and parts[1].endswith(f":{port}")
         ):
-            try:
-                return int(parts[4])
-            except ValueError:
-                continue  # one malformed row must not blind the whole scan
+            pid = _pid_cell(parts[4])
+            if pid is not None:
+                return pid
+            # keep scanning: one malformed pid cell must not blind the whole
+            # scan, and a malformed one is never the owner.
     return None
 
 
@@ -302,23 +355,34 @@ def _pid_from_ss(text: str, port: int) -> int | None:
         if len(parts) >= 5 and parts[0] == "LISTEN" and parts[3].endswith(f":{port}"):
             match = _PID_RE.search(line)
             if match:
-                return int(match.group(1))
+                pid = _pid_cell(match.group(1))
+                if pid is not None:
+                    return pid
     return None
 
 
 def _port_owner(port: int) -> int | None:
+    """Pid holding the listening socket on `port`, or None.
+
+    Every probe's stdout is text this repo does not control, so each read asks
+    for `errors="replace"` (the strict default returns a None stdout, not an
+    error, when a byte does not decode) and a None stdout means "this probe named
+    nobody" — never a crash on `.splitlines()`, and never a bogus pid.
+    """
     if os.name == "nt":
         # No `-p TCP`: that filter drops every `[::]` row (measured: `-p TCP`
         # listed 0 IPv6 rows where plain `-ano` listed 20), so an IPv6-bound
         # listener would be invisible and `stop` would no-op on a held port.
         try:
-            out = subprocess.run(["netstat", "-ano"], capture_output=True, text=True).stdout
+            proc = subprocess.run(
+                ["netstat", "-ano"], capture_output=True, text=True, errors="replace"
+            )
         except OSError:
             return None
-        return _pid_from_netstat(out, port)
+        return _pid_from_netstat(proc.stdout or "", port)
     try:
-        out = subprocess.run(["ss", "-ltnpH"], capture_output=True, text=True).stdout
-        pid = _pid_from_ss(out, port)
+        proc = subprocess.run(["ss", "-ltnpH"], capture_output=True, text=True, errors="replace")
+        pid = _pid_from_ss(proc.stdout or "", port)
         if pid is not None:
             return pid
     except OSError:
@@ -327,19 +391,19 @@ def _port_owner(port: int) -> int | None:
         # `-sTCP:LISTEN` keeps this listener-scoped: plain `-i TCP:<port>` also
         # matches a *client* socket on that port, and `stop` would then signal
         # the client instead of the listener.
-        out = subprocess.run(
+        proc = subprocess.run(
             ["lsof", "-t", "-i", f"TCP:{port}", "-sTCP:LISTEN"],
             capture_output=True,
             text=True,
-        ).stdout.strip()
+            errors="replace",
+        )
     except OSError:
         return None
-    if not out:
-        return None
-    try:
-        return int(out.splitlines()[0])
-    except (ValueError, IndexError):
-        return None
+    for line in (proc.stdout or "").splitlines():
+        pid = _pid_cell(line.strip())
+        if pid is not None:
+            return pid
+    return None
 
 
 def _wait_dead(pid: int, timeout: float = STOP_GRACE_S) -> None:
@@ -352,34 +416,61 @@ def _wait_dead(pid: int, timeout: float = STOP_GRACE_S) -> None:
         time.sleep(0.2)
 
 
-def _kill_tree(pid: int) -> None:
-    """Kill a service process tree. Windows: `taskkill /T /F`. POSIX: killpg
-    only when the pid leads its own process group (this script started it via
-    start_new_session); otherwise signal just the top process and warn."""
+def _kill_tree(pid: int, ours: bool) -> None:
+    """Kill a service process tree.
+
+    Windows: `taskkill /PID <pid> /T /F` — unchanged; `/T` reaches the children
+    holding the port whatever their process group.
+
+    POSIX: a group kill needs *both* provenance and a group that is ours to kill.
+    `ours` is that provenance — True only for a pid from a pidfile record whose
+    image and start token still matched, i.e. a process this script spawned with
+    `start_new_session`. The group-leader test alone proves nothing about
+    provenance (`_port_owner` has none at all): a container PID 1, any
+    `setsid`/`nohup` daemon, and a terminal job all lead their own group, so a
+    `killpg` there would SIGTERM a foreign group — and, when that group is the
+    caller's own, this script with it. Anything short of both signals the single
+    pid and warns, naming the reason.
+    """
     if os.name == "nt":
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
         return
-    try:
-        group_leader = os.getpgid(pid) == pid
-    except ProcessLookupError:
-        return  # already gone
-    if group_leader:
-        try:
-            os.killpg(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        _wait_dead(pid)
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(pid, signal.SIGKILL)
+    if pid <= 1:
+        reason = "a pid <= 1 is never a service we spawned"
+    elif not ours:
+        reason = "its pid came from the port owner, not a pidfile we recorded"
     else:
         try:
-            os.kill(pid, signal.SIGTERM)
+            pgid = os.getpgid(pid)
         except ProcessLookupError:
-            return
-        _wait_dead(pid)
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(pid, signal.SIGKILL)
-        print(f"warning: {pid} was not started by this script; only the top process was signalled")
+            return  # already gone
+        if pgid != pid:
+            reason = "it does not lead its own process group"
+        else:
+            own_group: int | None = None
+            with contextlib.suppress(OSError):
+                own_group = os.getpgid(os.getpid())
+            # An unreadable own group counts as "may be ours": signalling the
+            # single pid still frees the port, a wrong killpg could be a
+            # self-kill.
+            reason = (
+                "its group is this script's own group"
+                if own_group is None or pgid == own_group
+                else None
+            )
+    kill = os.killpg if reason is None else os.kill
+    try:
+        kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    _wait_dead(pid)
+    with contextlib.suppress(ProcessLookupError):
+        kill(pid, signal.SIGKILL)
+    if reason is not None:
+        print(
+            f"warning: {pid} was not started by this script ({reason}); "
+            "only the top process was signalled"
+        )
 
 
 def _tail(path: Path, lines: int = 20) -> str:
@@ -469,9 +560,14 @@ def stop(name: str) -> int:
     svc = SERVICES[name]
     port = int(svc["port"])
     pid, recorded_start = _read_pidfile(name)
-    if pid is not None and not (
+    # Provenance for the POSIX group kill (`_kill_tree`): True only for a pidfile
+    # record that passed both gates — a process this script spawned with its own
+    # session. `_port_owner` below names whatever holds the socket right now and
+    # proves nothing about who started it, so it never authorizes a killpg.
+    ours = pid is not None and (
         _pid_matches_service(name, pid) and _pid_instance_matches(pid, recorded_start)
-    ):
+    )
+    if not ours:
         # Stale pidfile: the process is gone, that number now belongs to
         # something else, or its start token disproves it is the same process.
         # Either way it proves nothing — fall through to the listener, which is
@@ -489,7 +585,7 @@ def stop(name: str) -> int:
         print("Not running")
         _clear_pid(name)
         return 0
-    _kill_tree(pid)
+    _kill_tree(pid, ours=ours)
     deadline = time.monotonic() + STOP_GRACE_S
     while time.monotonic() < deadline and _port_open(port):
         time.sleep(0.2)

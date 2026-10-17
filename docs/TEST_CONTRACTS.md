@@ -18,8 +18,10 @@ wrong guardrail that future runs trust.
 embeddings, Chroma, the reranker, RRF fusion, the query classifier, the
 synthesis/pipeline layer, and the pre-LLM IR-metric harness. The layers below
 are what survives; the old retrieval-regression set (L3/L4 in previous
-revisions) no longer exists. Every test file in `tests/` is named exactly once
-below (`scripts/check_docs.py` asserts this).
+revisions) no longer exists. Every test file in `tests/` is covered by exactly
+one layer below (`scripts/check_docs.py` asserts that each is *named
+somewhere*; layers repeat their files in the Change ⇒ line, so a name is not
+unique by construction).
 
 ---
 
@@ -226,8 +228,8 @@ test (prove the source is fine) or recording a deliberate contract change
   bucket (each refuses the other's bucket).
 - **Change ⇒** `uv run pytest tests/test_sqlstore_build.py
   tests/test_session_ingest.py tests/test_glogger_ingest.py
-  tests/test_preflight_sync.py` (+ the file you edited), then `mise sql-store`
-  and `mise lint`.
+  tests/test_preflight_sync.py tests/test_publish_store.py` (+ the file you
+  edited), then `mise sql-store` and `mise lint`.
 - **Fixture hazard**: the `build_store` defaults are LIVE sources (real game
   dir, real glogger DB) — a fixture that omits `session_dir=`/`glogger_db=`
   tmp paths ingests live data and races it.
@@ -359,18 +361,50 @@ test (prove the source is fine) or recording a deliberate contract change
   token (read at spawn; unknown on either side is not a veto) still matches the live process —
   liveness is not identity, so a recycled pid must not be killed; `stop` reports a held port it cannot
   attribute and exits 1 (keeping the pidfile) instead of a false "Not running"; stop tree-kills
-  (`taskkill /T /F` on Windows, `killpg` only when the pid is its own process-group leader, SIGTERM then
-  SIGKILL) and never killpg's a foreign group; a spawn that dies immediately leaves no pidfile;
+  (`taskkill /T /F` on Windows; on POSIX `killpg` **only** for a pid that came from a token-matched
+  pidfile entry *and* leads its own group — a pid derived from the port owner, `pid <= 1`, or the
+  caller's own group is signalled alone with a warning — SIGTERM then SIGKILL), so a foreign group
+  is never killpg'd; a spawn that dies immediately leaves no pidfile;
   status probes the per-service health URL (`:8080/health` for the LLM, `:7860/` for chat) and treats
   HTTP 503 as **loading** (up), so `status` exits 0 on a healthy boot and 1 only when a service is
   genuinely down.
 - **Change ⇒** `uv run pytest tests/test_services.py -q`, then a live `mise start` / `mise status` /
   `mise down` smoke (the manager owns the real :8080/:7860 processes).
 
+### L11 — Corpus-build lock (`src/pgrag/buildlock.py`)
+
+- **Tests**: `test_buildlock.py`
+- **Source**: `src/pgrag/buildlock.py`; consumers `src/pgrag/cli.py`
+  (`build-documents`), `src/pgrag/rag/bm25.py` (the rebuild/persist branch of
+  `load_bm25_index`) and `scripts/build_tool_corpus.py` (`main`). The
+  pre-command probe `.omp/hooks/pre/00-repo-lock.ts` reads the same file and
+  never takes it.
+- **Contracts**: the lock is `<artifact dir>/.omp-build.lock` — the writers all
+  default to `data/`, i.e. the path the hook probes — and holds
+  `{pid, startedAt}`. Acquisition is `O_EXCL`, so exactly one live owner exists
+  per artifact dir; a *live* owner is never stolen and the error names it
+  (`BuildLocked`). A record that is corrupt, dead-pid, past `TTL_S`, or an
+  **empty** file older than `EMPTY_GRACE_S` (a crashed creator) is stolen, while
+  an empty *fresh* file belongs to its creator (the create→write window, which
+  must not be stolen from under it). Exit unlinks only our own record. A held
+  lock makes `pgrag build-documents` refuse (the generator is never called), the
+  chat-time BM25 rebuild spend `LAZY_REBUILD_WAIT_S` polling and then raise
+  instead of rebuilding over a peer, and the tool-corpus derive abort before
+  deriving.
+- **Why the writers own it**: a hook's lifetime is one tool call, and a build
+  outlives it (an auto-backgrounded command returns at the ~60 s foreground
+  threshold and keeps running), so the hook can only probe.
+- **Change ⇒** `uv run pytest tests/test_buildlock.py tests/test_bm25_persist.py
+  tests/test_build_tool_corpus.py`, then hold the lock from a second shell
+  (`uv run python -c "from pgrag.buildlock import corpus_lock; import pathlib,time;
+  c=corpus_lock(pathlib.Path('data')); c.__enter__(); time.sleep(30)"`) and run
+  `mise build-tool-corpus`: an agent-issued run is blocked by the pre-hook
+  probe, a plain-shell run fails with *corpus build already running*.
+
 ## Hard rules (no exceptions)
 
 1. A test that **changes an assertion** is a **contract change** — state the
-   new contract in the test and run the layer's sibling suite (L1–L10 above).
+   new contract in the test and run the layer's sibling suite (L1–L11 above).
 2. A test that **fails without a contract change** is a **regression in
    source** — fix the source, not the test.
 3. Never hand-edit a build artifact to satisfy a test (`documents.json`,
