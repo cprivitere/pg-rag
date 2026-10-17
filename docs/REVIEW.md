@@ -575,6 +575,83 @@ neither name shadows a built-in).
   hatch for a checkout that is merely ahead of the tag; and closure now requires the
   one runner's suite verdict green on the frozen SHA.
 
+## Next pass (planned 2026-10-17) — retire the molab notebook, then move the corpus into the store
+
+**Decisions taken this turn (operator).** The molab notebook is **retired** — the
+hosted marimo sandbox is old-style delivery and the product is the local agentic
+method (`agentic-chat`, the Gradio chat, `golden*`, the loop over
+`data/sqlite_gorgon.db`). Nothing is deleted yet; this section is the plan. The
+corpus→store move is a **separate frozen pass**: it changes `corpus_search`'s
+ranking, so the suite alone cannot gate it.
+
+**Carried in from the pass that reviewed `review-pass5..review-pass8`** (that pass
+was report-only, so its findings are recorded here):
+
+| finding | disposition |
+|---|---|
+| **critical** — `src/pgrag/buildlock.py:143-150`: the `winerror 87 / errno EINVAL` arm is what *live* owners produce on this host (measured: `os.kill` raises 87 for the holder **and** for omp's own `node.exe`, while `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` opens both, exit code 259), so `read_owner` returns `None` for a live owner and the second builder steals the live lock — two concurrent corpus writers, silently | Pass B **deletes** the mechanism. Until it lands the stopgap is one line in `_pid_alive` (treat 87/EINVAL as ambiguous → alive, letting `TTL_S` be the only leaked-lock recovery) plus a **two-process** regression test: every existing lock test seeds `os.getpid()`, which is exactly why the suite is blind to it |
+| **high** — `.omp/commands/frozen.md:20-23`: the documented BASE derivation returns the target's previous *fix* tag (`review-pass8^` → `review-pass7`, 3 files) instead of the last reviewed state, silently shrinking a verification pass to its last commit | fix in Pass A's commit — it is the recipe both passes will be invoked with: derive against `review-base-*`, refuse when that marker is absent or not older, and relabel `review-pass6^ → review-pass5` as the case to *refuse* |
+| **medium** — `scripts/review_facts.py:89,96-98` (+ `docs/TEST_CONTRACTS.md:491-492`): a red `drift` row still names no drift (the gate prints its verdict *first*, so a fixed head+tail slice misses a mid-list `[DRIFT]`) | fix in Pass A's commit, with the drift shape added to the sheet's test |
+| **medium** — `scripts/review_facts.py:196-203`: an unanswerable git prints `frozen: False`, a positive "not frozen" verdict on the load-bearing key of a frozen-tree pass | fix in Pass A's commit (mirror the sibling sentinel) |
+| **medium** — `docs/TEST_CONTRACTS.md:475` + `docs/REVIEW.md:417`: the coverage clause claims the model-literal *leak* is asserted only under `mise drift`; it is unit-tested in `tests/test_check_docs.py:265-267` | fix both sentences in Pass A's commit |
+| **low / nit** (in-range one-liners) `frozen.md:12` empty-TARGET rule; the hook comment's quoted-*task* miss; `agentic_tune.py` sentinel vs. `[env]`; the two untested ownership-drift branches; the "working-tree-only" framing of the tracked `data/golden` | same commit where the line is one of the above; the rest is backlog |
+
+**Pass A — notebook retirement (no behavior change).** Delete what is notebook-only,
+each item verified against its consumers:
+
+- `notebooks/molab-agentic/`, `docs/MOLAB_OPS.md`, `scripts/molab_vllm_launch.sh`.
+- `.agents/skills/molab-notebook/` — together with `check_docs.CANONICAL_SKILLS`
+  (`scripts/check_docs.py:139`) and the L12 fixture that names it
+  (`tests/test_check_docs.py:158`), or deleting the directory reports no drift.
+- `scripts/publish_store.py` + `tests/test_publish_store.py`, and the
+  `upload-store` / `upload-docs` tasks with the `us` / `ud` aliases — the task set,
+  AGENTS.md's list of it and the test that reads it move in one commit or
+  `mise drift` fails.
+- `tests/test_lint.py::test_shipped_source_stays_python_313_parseable`: its only
+  subject was the molab kernel (`upload-store` shipped `src/` there), so PEP 758
+  `except A, B:` becomes legal repo-wide again; the parenthesized handlers stay.
+- Prose/contract rewrites: `AGENTS.md` (:6-9, :149-163, :173-174, :190-191,
+  :285-287, :415-417), `docs/TEST_CONTRACTS.md` (the store/publish row, the molab
+  stamp rows, the loop's env-at-call-time note), `.agents/skills/pg-rag/SKILL.md`
+  and `.../testing/SKILL.md`, and
+  `docs/research/pg-rag-game-interaction-limits.md:46` — the private-bucket carve-out
+  is the one privacy claim that named a *shipped* upload path, so it must be retired
+  with the path, not left as dead prose.
+
+Keep: `--corpus tool`, `scripts/build_tool_corpus.py` and `data/tool_*` (they are
+also local `agentic-chat`/`golden_check` options, not sandbox-only), and the
+CWD-relative stamp addressing — only its rationale comment changes.
+Gate: `uv run pytest`, `mise drift` (task set, skills, doc refs, and
+TEST_CONTRACTS' coverage of the *remaining* tests), `mise compliance` (the carve-out
+prose plus its planted fixtures), then one live `mise agentic-chat` round.
+
+**Pass B — the corpus into the store (behavior change; its own freeze).** Add
+`documents` (`id, type, text, source, table, name, keywords, documents_version`) and
+`documents_fts(text, name, keywords)` to `data/sqlite_gorgon.db`; `corpus_search`
+becomes one SQL query ranked by FTS5 `bm25()`, and `--corpus tool` becomes a filter
+(or goes, if Pass A's review decides it is sandbox-only after all). Delete:
+`data/documents.json`, `data/bm25_index.pkl`, `data/tool_*` as artifacts;
+`src/pgrag/rag/bm25.py` (the loader *and* its mtime staleness contract);
+`scripts/build_tool_corpus.py` and its `DOCUMENTS_VERSION` refusal;
+`data/derived/documents_version.json`; and `src/pgrag/buildlock.py` plus the
+pre-hook's probe — SQLite/WAL is the single-writer property the hand-rolled lock was
+imitating, and the critical above is the evidence it does not deliver it.
+Costs, stated: the store build becomes a corpus build (minutes,
+`mwparserfromhtml`) instead of a source mirror; the store grows by the documents and
+the FTS index (today's 185 MB `documents.json` plus a 126 MB `tool_documents.json`
+and 143 MB `tool_bm25.pkl` collapse into one index); and the documents table's shape
+stamp is a *different* invalidation rule than `sqlite_state.json`'s source
+watermarks, even though both would then live in the same file.
+Verification: snapshot `mise golden` (62 cases, LLM up) **before** the swap and
+re-run after — a flipped case is a ranking regression, not a deletion bug; the
+surviving retrieval suites (`test_agentic_tools.py`, `test_agentic_loop.py`) with
+`mise drift` / `compliance`; and one live `mise chat` round on a wiki-prose question,
+the case `corpus_search` exists for.
+
+**Order.** The critical's one-line stopgap is cheapest to land first, so the review
+closes; Pass A then removes the sandbox with no behavior change; Pass B deletes the
+corpus machinery and re-baselines the goldens.
+
 ## Review protocol — how a pass is run now
 
 Three review passes ran in a row on this PR, each fixing the previous one's
