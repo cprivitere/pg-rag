@@ -476,6 +476,9 @@ below removes one of those costs.
 1. **Freeze first.** Commit the work in progress and tag it
    (`git tag review-base-<sha>`); reviewers get that SHA — never a dirty working
    tree, never `origin/HEAD...main`. Every fix is a new commit and a new tag.
+   The same instruction lives as a project slash command —
+   `/frozen-review <tag> <base-tag> [focus]` (`.omp/commands/frozen-review.md`) —
+   which is this protocol in prompt form; it also hard-stops on a dirty tree.
    *Evidence*: the third pass's two high findings (a failed restart exiting `0`
    and leaving the production server down, `--sweep-reasoning` persisting
    mislabeled rows) and its untracked TS-gate runner all lived in the layer that
