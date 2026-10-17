@@ -284,6 +284,10 @@ lock by hand-editing it; to clear a stuck one, delete `data/.omp-build.lock`.
   — tool-corpus variant; `scripts/publish_store.py` — private-bucket publish
   (`--docs` = `mise upload-docs`, the public corpus bucket);
   `scripts/agentic_chat.py` — agentic CLI chat (+ pre-chat sync).
+- `scripts/review_facts.py` — the read-only facts sheet a review pass pastes into
+  every reviewer brief (suite counts, gate verdicts, task set, freeze state,
+  platform liveness, clone-invisible inputs); the protocol that consumes it is
+  `docs/REVIEW.md` → "Review protocol".
 - `docs/TEST_CONTRACTS.md` — layer→tests→contract map + regression-triage
   protocol (read before changing behavior/tests); `docs/REVIEW.md` — audit
   findings + improvement backlog.
@@ -328,10 +332,10 @@ lock by hand-editing it; to clear a stuck one, delete `data/.omp-build.lock`.
 
 ## Testing & QA
 
-- **Framework**: pytest via `uv run pytest`; the suite collects **537 tests**,
-  of which **78 are deselected by the default `not slow` marker** (16
-  data-heavy tests + the 62 parametrized golden cases), leaving **459** in the
-  default offline run (one POSIX-only port-owner case skips on Windows) — all
+- **Framework**: pytest via `uv run pytest`; the counts this doc quotes are
+  **567 collected / 78 deselected / 489 default** (asserted by `mise drift`
+  against a real collection) — the 78 being 16 data-heavy tests + the 62
+  parametrized golden cases, so the default offline run leaves **489** (one POSIX-only port-owner case skips on Windows) — all
   offline (temp-dir integration, mocked servers). The golden gate is the only
   suite that needs any server.
 - **Golden eval** (`tests/test_golden_check.py`): parametrized over

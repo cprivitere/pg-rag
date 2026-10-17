@@ -38,7 +38,10 @@
 // -- ls docs/`): the probe is reached only for commands whose shape can rewrite
 // corpus state — a corpus task in task position, or a writer's own spelling.
 // A rare spelling that puts the name in task position (`mise which docs`) is
-// still probed, which is the fail-safe direction. The probed root
+// still probed, which is the fail-safe direction; a `mise` spelled with a path
+// or `.exe` is probed too, while the inspection subcommands (`mise tasks`/`ls`/
+// `list`/`env`) are reader heads, so naming a build task at them is never a
+// block. The probed root
 // is the repo the *call* runs in, not necessarily the session's: a bash call's
 // own non-empty `cwd` (another checkout) wins over the session cwd, which is
 // only the fallback. Every hook runtime error is swallowed silently — this
@@ -86,9 +89,15 @@ const TTL_MS = 3 * 60 * 60 * 1000;
 // docs/`, any word ending in a task alias), and `\b` matches before the slash.
 const CORPUS_TASKS = "sync-(?:fast|full|wiki)|generate-docs|build-bm25|build-tool-corpus|syf|syw|docs|b25|btc|sy";
 const MISE_SKIP = "(?:[^\\s|&;<>()]+\\s+){0,12}?";
+// `mise` may be spelled with a path or an interpreter extension (`mise.exe`,
+// `F:\tools\mise.exe`, `./mise.cmd`) — the Windows spelling of the same writer.
+// A *quoted* one (`& "$env:MISE_BIN\mise.exe" syf`) still misses: its token class
+// excludes the call operator and the quotes, so it stays in the "no early
+// warning, never a wrong block" class the writers' own lock covers.
+const MISE_EXE = "(?:[^\\s|&;<>()]*[\\\\/])?mise(?:\\.exe|\\.cmd|\\.ps1)?";
 const DESTRUCTIVE = new RegExp(
   "(?:\\b|_)(build-documents|build-bm25|build-tool-corpus|generate-docs)(?:\\b|\\s|\\s-|$)" +
-    `|mise\\s+${MISE_SKIP}` +
+    `|${MISE_EXE}\\s+${MISE_SKIP}` +
     `(?:${CORPUS_TASKS})(?![\\w/.\\-])` +
     `|:::\\s*(?:${CORPUS_TASKS})(?![\\w/.\\-])` +
     "|\\b(?:uv\\s+run\\s+)?pgrag\\s+build-" +
@@ -103,8 +112,15 @@ const DESTRUCTIVE = new RegExp(
 // disqualifier, not a shell parser. `git` is allowed wholesale because no git
 // subcommand rewrites `data/*.json`; a chained corpus command still fails the
 // disqualifier below (`git commit … && mise syf`).
+//
+// mise's *inspection* subcommands are reader heads for the same reason: a
+// pipeline that lists or prints tasks (`mise tasks | grep build-bm25`) cannot
+// rewrite corpus state, and without them every such pipeline was denied for the
+// whole duration of a peer's build — a wrong block, which the probe must never
+// produce. `mise run`/`mise exec` stay out, so a writer in task position is
+// still probed.
 const READ_ONLY_HEAD =
-  /^\s*(?:git|rg|grep|egrep|fgrep|findstr|Select-String|Get-ChildItem|Get-Content|Get-Item|Get-Command|Test-Path|gci|gc|ruff|read|awk|sed\s+-n|cat|bat|head|tail|less|more|wc|sort|uniq|jq|file|stat|du|ls|dir|type|where|echo|printf|uv\s+run\s+(?:ruff|pytest|pyright))\b/;
+  /^\s*(?:git|rg|grep|egrep|fgrep|findstr|Select-String|Get-ChildItem|Get-Content|Get-Item|Get-Command|Test-Path|gci|gc|ruff|read|awk|sed\s+-n|cat|bat|head|tail|less|more|wc|sort|uniq|jq|file|stat|du|ls|dir|type|where|echo|printf|mise\s+(?:tasks|ls|list|env)|uv\s+run\s+(?:ruff|pytest|pyright))\b/;
 
 // True when every segment of the command is a pure reader. Chaining (`&&`, `;`,
 // `&`, backticks, `$(…)`, subshells) and output redirection always disqualify:

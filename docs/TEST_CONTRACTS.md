@@ -434,28 +434,57 @@ test (prove the source is fine) or recording a deliberate contract change
 
 - **Tests**: `test_check_docs.py`
 - **Source**: `scripts/check_docs.py` (`mise drift`, alias `dc`).
-- **Contracts**: every `tests/test_*.py` is named in this map, and every test path this map names
-  exists; every backticked `scripts|src|tests|docs|.mise/tasks`-prefixed path in AGENTS.md and the
-  skills resolves over `.py`, `.sh` **and** `.ps1` — with `-` in the name class, since the audit's
-  deleted names are hyphenated, and a path a SKILL.md addresses as `scripts/…` resolving next to that
-  SKILL.md too (a skill bundles its own scripts) — **this pointer scan is the one check with an
-  offline unit test** (`test_check_docs.py`); the rest of this list runs only under `mise drift`;
-  `DOCUMENTS_VERSION` is quoted as a symbol (never a literal) in AGENTS.md / this map / RULES.md /
-  the pg-rag skill; the golden counts, `SHORT_TIER_IDS` and `GOLDEN_DIR` the evaluation skill/gate
-  quote exist; the documented `golden_check.py` flags are real; every skill named by
+- **Contracts**: every `tests/test_*.py` is named in this map, owned by exactly one layer's
+  `**Tests**` block, and every test path this map names exists; every backticked
+  `scripts|src|tests|docs|.mise/tasks`-prefixed path in AGENTS.md and the skills resolves over
+  `.py`, `.sh`, `.ps1`, `.mjs`, `.md`, `.json` and `.toml` — with `-` in the name class, since the
+  audit's deleted names are hyphenated, and a path a SKILL.md addresses as `scripts/…` resolving next
+  to that SKILL.md too (a skill bundles its own scripts) — while a *missing* source is drift, never a
+  silent skip; `DOCUMENTS_VERSION` is quoted as a symbol (never a literal) in AGENTS.md / this map /
+  RULES.md / the pg-rag skill; the golden counts, `SHORT_TIER_IDS` and `GOLDEN_DIR` the evaluation
+  skill/gate quote exist; the documented `golden_check.py` flags are real; every skill named by
   `CANONICAL_SKILLS` **or** by the tree (a `SKILL.md` directory) is present and carries frontmatter —
   the union is deliberate, since a tree-only list cannot report a canonical skill deleted outright
   and a canonical-only list cannot report a newly landed skill; each `[env]` model single-source
   consumer (`scripts/services.py`, `scripts/agentic_tune.py`, AGENTS.md) is scanned for a **leaked
   literal value** of `LLM_MODEL`/`LLM_FLAGS` — the enforced rule is *no literal value*, not
-  "references the variable", so a consumer that names neither variable still passes. Exit 1 on any
-  drift.
+  "references the variable", so a consumer that names neither variable still passes; `cli.py`'s
+  `corpus_lock` argument is parsed (AST, not grep) and must be `DOCUMENTS_PATH.parent` with no
+  `DATA_DIR` reference — the writer locks the CWD-relative tree it writes, not the package root;
+  every `ruff.toml` suppression (`lint.ignore` + `lint.per-file-ignores`) names a code
+  `lint.select` carries, matched by prefix (`B` covers `B008`); the gates' runner files
+  (`scripts/check_ts.mjs`, `package.json`, `package-lock.json`) are `git ls-files`-tracked, because a
+  clone without them has no TypeScript gate at all and its tests merely *skip*; AGENTS.md's
+  "`[tasks]` set is exactly:" list equals `mise.toml`'s task set, set for set; and the three docs
+  quoting the suite counts must quote the live `N collected / M deselected / K default` from a real
+  `pytest --collect-only`. **This check has an offline unit test** (`test_check_docs.py`), which
+  provisions a tmp tree and asserts the provisioned one is clean and each drift is reported — the
+  pointer scan, the ownership map, the wiring checks and the count quote are all covered there;
+  `mise drift` then runs the same script against the real tree. Exit 1 on any drift.
 - **Change ⇒** `uv run pytest tests/test_check_docs.py`, then `mise drift` (must print `0 drift`).
+
+### L13 — Review tooling (`scripts/review_facts.py`)
+
+- **Tests**: `test_review_facts.py`
+- **Source**: `scripts/review_facts.py` (`uv run python scripts/review_facts.py`, `--json` for machines;
+  protocol: `docs/REVIEW.md` → "Review protocol").
+- **Contracts**: the sheet is **read-only** — it inspects, never writes, and starts no service — and it
+  carries exactly one section per fact class: `counts` (via the drift gate's own collector, so the sheet
+  and `mise drift` cannot disagree), `gates` (ruff / drift / compliance, each as `rc <code> — <last
+  line>`, where a non-zero rc is a *fact* to report, not an error to raise), `tasks` (the `mise.toml`
+  task names + aliases), `tree` (HEAD, whether the working tree is frozen, and whether the runner files
+  the gates shell out to are `git ls-files`-tracked — read from *every* `ls-files` line, because a
+  "last output line" reader reported two of three files as untracked), `liveness` (how python and node
+  each classify a released pid — the platform fact reviewers kept re-measuring), and `limits`
+  (working-tree-only `data/` inputs a clone cannot see). The markdown block and `--json` carry the same
+  facts.
+- **Change ⇒** `uv run pytest tests/test_review_facts.py`, then `uv run python scripts/review_facts.py`
+  to see the sheet a review pass pastes into its shared context.
 
 ## Hard rules (no exceptions)
 
 1. A test that **changes an assertion** is a **contract change** — state the
-   new contract in the test and run the layer's sibling suite (L1–L12 above).
+   new contract in the test and run the layer's sibling suite (L1–L13 above).
 2. A test that **fails without a contract change** is a **regression in
    source** — fix the source, not the test.
 3. Never hand-edit a build artifact to satisfy a test (`documents.json`,

@@ -34,9 +34,10 @@ class _Args:
 
 @pytest.fixture(autouse=True)
 def _fresh_served_state(monkeypatch):
-    """`_served` is module state: a test that moved the server must not decide
-    the next test's restart verdict."""
+    """`_served`/`_disturbed` are module state: a test that moved the server must
+    not decide the next test's restart verdict."""
     monkeypatch.setattr(agentic_tune, "_served", None)
+    monkeypatch.setattr(agentic_tune, "_disturbed", False)
 
 
 def test_load_cases_golden_short(monkeypatch):
@@ -303,3 +304,84 @@ def test_server_probe_builds_its_url_from_the_shared_port(monkeypatch):
     monkeypatch.setattr(requests, "get", fake_get)
     assert agentic_tune._server_running() is True
     assert seen["url"] == f"http://localhost:{LLM_PORT}/v1/models"
+
+
+def test_a_failed_move_restores_the_production_pair_and_still_aborts(tmp_path, monkeypatch):
+    """CONTRACT: when the sweep's own move fails (the candidate never binds
+    :8080), `main()` exits 1 *and* undoes the move — the old server was already
+    stopped, so returning without a restart would strand the operator with no
+    server at all.
+
+    Pins both halves of the abort: the verdict must not be the restore's rc (a
+    successful restore cannot turn an aborted sweep into `0`), and the restore
+    must not be a no-op just because `_served` is still None after the failure.
+    """
+    monkeypatch.setenv("LLM_MODEL", "org/Prod-1.5-9B:Q4_K_M")
+    monkeypatch.setenv("LLM_FLAGS", "--no-mmproj -ngl 999 --reasoning-budget 4096")
+    running = {"now": True}
+    spawned, ran = [], []
+
+    def fake_spawn(model, flags):
+        spawned.append((model, flags))
+        running["now"] = "Prod" in model  # the candidate never binds, the restore does
+
+    def fake_run(argv, **kwargs):
+        ran.append(argv)
+        running["now"] = False  # llm-stop released the port
+
+    monkeypatch.setattr(agentic_tune, "_server_running", lambda: bool(running["now"]))
+    monkeypatch.setattr(agentic_tune, "_spawn_server", fake_spawn)
+    monkeypatch.setattr(agentic_tune.subprocess, "run", fake_run)
+    monkeypatch.setattr(agentic_tune.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(agentic_tune, "TUNE_DIR", tmp_path)
+    runs = []
+    monkeypatch.setattr(agentic_tune, "run_once", lambda a: runs.append(a) or {"passed": 0})
+    monkeypatch.setattr(
+        _sys,
+        "argv",
+        [
+            "agentic_tune.py",
+            "--sweep-temperature",
+            "0,0.2",
+            "--model",
+            "gemma-26b-qat",
+            "--llm-restart",
+        ],
+    )
+
+    assert agentic_tune.main() == 1  # the abort is the verdict, not the restore's rc
+    assert runs == [] and list(tmp_path.glob("*.json")) == []
+    assert [m for m, _ in spawned][-1] == "org/Prod-1.5-9B:Q4_K_M"  # production is back
+    assert len(spawned) == 2
+    assert ran == [["mise", "run", "llm-stop"]]  # the failed candidate was already gone
+
+
+def test_a_labeled_run_without_llm_restart_is_refused(tmp_path, monkeypatch):
+    """CONTRACT: a run-id records the model/budget the server was asked to serve,
+    so `--sweep-reasoning`, a non-production `--model`, or a non-default
+    `--reasoning-budget` without `--llm-restart` refuses (exit 2) before anything
+    is measured: the rows would otherwise be labeled with a pair nothing served
+    (a `--sweep-reasoning 2048,4096` run would measure the production 4096 server
+    under a `b2048` id and misdirect the tuning).
+    """
+    monkeypatch.setattr(agentic_tune, "TUNE_DIR", tmp_path)
+    runs, spawned = [], []
+    monkeypatch.setattr(agentic_tune, "run_once", lambda a: runs.append(a) or {"passed": 0})
+    monkeypatch.setattr(agentic_tune, "_spawn_server", lambda m, f: spawned.append((m, f)))
+
+    for argv in (
+        ["agentic_tune.py", "--sweep-reasoning", "2048,4096"],
+        ["agentic_tune.py", "--model", "gemma-26b-qat"],
+        ["agentic_tune.py", "--reasoning-budget", "2048"],
+        ["agentic_tune.py", "--sweep-temperature", "0,0.2", "--model", "qwen-27b"],
+    ):
+        monkeypatch.setattr(_sys, "argv", argv)
+        assert agentic_tune.main() == 2, argv
+    assert runs == [] and spawned == []
+    assert list(tmp_path.glob("*.json")) == []
+
+    # the production pair at the default budget is the one thing that needs no
+    # restart (its rows are labeled with what the operator's server already serves)
+    monkeypatch.setattr(agentic_tune, "_maybe_restart_server", lambda a, force=False: True)
+    monkeypatch.setattr(_sys, "argv", ["agentic_tune.py", "--temperature", "0.2"])
+    assert agentic_tune.main() == 0

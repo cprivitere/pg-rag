@@ -22,10 +22,14 @@ spawned directly because that task would re-apply `[env]` and override the
 candidate. `current` and `ornith` are the same row: both read the live `[env]`
 pair, and a non-default --reasoning-budget is rewritten into those flags, so
 the server serves exactly the model/budget the run-id records — `llm-start` is
-never launched from here. A restart that does not reach the requested state
-(port still bound after `llm-stop`, server never accepting requests, unknown
-model key) makes the harness exit non-zero instead of persisting rows under a
-label nothing served.
+never launched from here. Anything that would make a run-id record a pair the
+server did not serve — a `--model` other than the production row, a non-default
+`--reasoning-budget`, `--sweep-reasoning` — therefore requires `--llm-restart`
+and is refused (exit 2) without it. A restart that does not reach the requested
+state (port still bound after `llm-stop`, server never accepting requests,
+unknown model key) makes the harness exit non-zero instead of persisting rows
+under a label nothing served, and puts the production pair back (best effort —
+the failed move already stopped the old server).
 
 Usage:
   uv run python scripts/agentic_tune.py --eval-set cases --temperature 0.2
@@ -258,12 +262,25 @@ def _spawn_server(model: str, flags: str) -> None:
     )
 
 
+# The pair the harness assumes is on :8080 before it moves anything (the
+# operator's own `mise llm-start`), and the pair every sweep restores.
+PRODUCTION_PAIR = ("current", 4096)
+DEFAULT_REASONING_BUDGET = 4096
+
 # The (model, budget) pair this run last moved the server to — None until a
 # restart happens, i.e. "the server is whatever was already running" (the
 # production pair, by the operator's own `mise llm-start`). Guarding on this
 # rather than on the default sentinel is what keeps a sweep step from being
 # measured against the previous step's server.
 _served: tuple[str, int] | None = None
+
+# True once the harness has stopped or replaced the operator's server. `_served`
+# alone cannot answer "what is on :8080": after a *failed* move it is still None
+# while the old server is gone, so the production sentinel would stand in for a
+# server that is not there — and the restore would report "already serving" and
+# leave :8080 down. Set the moment a switch is committed to (past the candidate
+# lookup, where the old server is about to be stopped).
+_disturbed: bool = False
 
 
 def _maybe_restart_server(args, force: bool = False) -> bool:
@@ -279,18 +296,24 @@ def _maybe_restart_server(args, force: bool = False) -> bool:
     that asks for a default value after a non-default step (ascending
     --sweep-reasoning, say) restarts instead of measuring the leftover server.
     """
-    global _served
+    global _disturbed, _served
     target = (args.model, args.reasoning_budget)
     if not args.llm_restart:
         return True
-    if not force and (_served or ("current", 4096)) == target:
+    # The production sentinel may only stand in for the served pair while the
+    # operator's server is untouched: with `_disturbed` set the harness knows
+    # what it put there, or knows that nothing is there.
+    serving = _served if _disturbed else (_served or PRODUCTION_PAIR)
+    if not force and serving == target:
         return True  # already serving it (or never moved off the production pair)
     cand = candidate(args.model)
     if not cand:
         print(f"[warn] unknown model key {args.model}; skipping restart")
         return False
+    # Past this point the production server is no longer guaranteed up.
+    _disturbed = True
     flags = cand["flags"]
-    if args.reasoning_budget != 4096:
+    if args.reasoning_budget != DEFAULT_REASONING_BUDGET:
         flags = _set_reasoning_budget(flags, args.reasoning_budget)
     print(f"[server] switching to {cand['model']} (budget {args.reasoning_budget})")
     if _server_running():
@@ -320,12 +343,24 @@ def _maybe_restart_server(args, force: bool = False) -> bool:
 def _restore_production_pair(args) -> int:
     """Return the production model/budget to the server after a sweep.
 
-    `_served` makes it a no-op when the sweep never moved the server (an
-    ordinary temperature-only run against the default pair), so the restore
-    costs a restart only when one is owed.
+    Best effort — the sweep paths report their own verdict, so only the final
+    `return` of an ordinary sweep uses this rc. It is a no-op when the sweep
+    never moved the server (an ordinary temperature-only run against the default
+    pair), so the restore costs a restart only when one is owed; after a *failed*
+    move it must act, and `_disturbed` is what makes the guard see that (:8080 is
+    empty there, not serving the sentinel).
+
+    An unset `[env]` pair cannot be restored to (there is no production pair to
+    read): that is reported, not raised, so an aborted sweep still leaves with its
+    own non-zero verdict instead of a SystemExit traceback.
     """
-    args.model, args.reasoning_budget = "current", 4096
-    return 0 if _maybe_restart_server(args) else 1
+    args.model, args.reasoning_budget = PRODUCTION_PAIR
+    try:
+        restored = _maybe_restart_server(args)
+    except SystemExit as exc:  # LLM_MODEL/LLM_FLAGS unset: nothing to restore to
+        print(f"[warn] cannot restore the production pair: {exc}")
+        return 1
+    return 0 if restored else 1
 
 
 def compare(paths: list[str]) -> int:
@@ -390,6 +425,23 @@ def main() -> int:
         paths = args.compare or [str(p) for p in sorted(TUNE_DIR.glob("*.json"))]
         return compare(paths)
 
+    # A run-id records the model and budget the server was *asked* to serve, so
+    # anything that deviates from the production pair without --llm-restart would
+    # persist rows under a label nothing served — the failure the restart verdict
+    # exists to prevent, and what the argparse help already claims. Refuse
+    # instead of writing them (`--compare` above is unaffected).
+    deviates = (
+        args.model not in ("current", "ornith")
+        or args.reasoning_budget != DEFAULT_REASONING_BUDGET
+        or args.sweep_reasoning is not None
+    )
+    if deviates and not args.llm_restart:
+        print(
+            "--model/--reasoning-budget/--sweep-reasoning need --llm-restart: a run-id "
+            "records the pair the server served, and nothing else would move the server"
+        )
+        return 2
+
     if args.sweep_temperature:
         temps = [float(t) for t in args.sweep_temperature.split(",")]
         seeds = [int(s) for s in args.sweep_seeds.split(",")]
@@ -397,9 +449,11 @@ def main() -> int:
         # still be served the pair the run-id records: with --model/--sweep
         # this moves the server before the first row, so a move that fails
         # aborts the sweep instead of persisting rows under a label nothing
-        # served (and the restore below still runs).
+        # served. The restore is owed regardless — the failed move stopped the
+        # operator's server — but its rc must not pass for the sweep's verdict.
         if not _maybe_restart_server(args):
-            return _restore_production_pair(args)
+            _restore_production_pair(args)
+            return 1
         for t, s in itertools.product(temps, seeds):
             args.temperature, args.seed = t, s
             run_once(args)
@@ -419,6 +473,7 @@ def main() -> int:
         return _restore_production_pair(args) or status
 
     if not _maybe_restart_server(args):
+        _restore_production_pair(args)  # the failed move stopped the old server
         return 1
     return 0 if run_once(args) is not None else 1
 

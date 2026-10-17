@@ -354,7 +354,7 @@ in the first pass are addressed in the second.
 
 Sixteen reviewers covered the range `479b6bc..d048ce3` slice by slice; every
 finding below is fixed and pinned, and the suite is green
-(**537 collected / 78 deselected / 459 default**, one POSIX-only port-owner case
+(**567 collected / 78 deselected / 489 default**, one POSIX-only port-owner case
 skipping on Windows) with `mise lint`, `mise drift` (0 drift) and
 `mise compliance` clean.
 
@@ -422,3 +422,45 @@ skipping on Windows) with `mise lint`, `mise drift` (0 drift) and
 - **Verified end to end**: `mise build-tool-corpus` against the real corpus
   (204,232 docs kept / 65,491 dropped, 6 s, lock released) proves the CWD stamp
   path and the cross-instance lock still work in the repo, not just in tmp.
+
+## Review protocol — how a pass is run now
+
+Three review passes ran in a row on this PR, each fixing the previous one's
+findings. The reason it took three is structural, and each part of the protocol
+below removes one of those costs.
+
+1. **Freeze first.** Commit the work in progress and tag it
+   (`git tag review-base-<sha>`); reviewers get that SHA — never a dirty working
+   tree, never `origin/HEAD...main`. Every fix is a new commit and a new tag.
+   *Evidence*: the third pass's two high findings (a failed restart exiting `0`
+   and leaving the production server down, `--sweep-reasoning` persisting
+   mislabeled rows) and its untracked TS-gate runner all lived in the layer that
+   was being *written* while that pass ran, so no reviewer had seen it by
+   construction.
+2. **Compute the facts once.** `uv run python scripts/review_facts.py` (L13) and
+   paste the sheet into the shared context of every brief, with "do not
+   re-derive; do not re-run the suite, ruff, drift or compliance". It carries the
+   suite counts, the gate verdicts, the task set, whether the tree is frozen, the
+   platform's liveness answer and the working-tree-only inputs. *Evidence*: four
+   reviewers re-derived the same numbers, and three of them reported a fact as a
+   finding (a stale count, an untracked file, a drift status).
+3. **Fan out by risk, not by file count.** ~8 agents in three tiers: changed
+   *logic* (deep, and allowed to execute code paths — both highs of the third
+   pass came from a reviewer running the path rather than reading it),
+   wiring/config (medium), docs/data (one batched agent, or just `mise drift`).
+   Cap concurrency: sixteen agents on one host were parked mid-flight, and a
+   broadcast revived only one of them, so the other fifteen each needed their own
+   message. One runner executes the shared commands.
+4. **Two lenses, not five passes.** Pass A: correctness against the frozen diff.
+   Pass B: cross-file consistency and claim-vs-assertion — the class that only
+   appears when files are compared (the pre-hook versus `read_owner`, `cli.py`
+   versus `bm25.py` lock directories, a docstring versus the test meant to hold
+   it). Keep the deep briefs; pay for depth by cutting breadth.
+5. **Turn each recurring class into a gate.** Every one of these had been found by
+   hand at least once: a stale suite count, dead lint suppressions, an untracked
+   gate runner, a task list that disagreed with `mise.toml`, a test file owned by
+   no layer, an unguarded `read_text` in the gate itself, a lock on a directory
+   the writer does not write. They are L12 assertions now, so no later pass pays
+   for them again — and the compliance scanner pays for itself the same way: it
+   caught this protocol's own first change (`OpenProcess` in a liveness probe)
+   before a human did.

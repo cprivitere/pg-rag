@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -141,15 +143,25 @@ def test_the_steal_deletes_only_the_file_it_judged(tmp_path, monkeypatch):
     lock = buildlock.lock_path(tmp_path)
     _hold(lock)  # a live owner's record, as the peer will leave behind
     peer = json.dumps({"pid": os.getpid() + 1, "startedAt": int(time.time() * 1000)})
+    reads = {"n": 0}
 
     def judge_stale_and_let_the_peer_win(path):
         """Simulate the race: we judged the file stale, and before our claim a
-        peer finished its own steal (unlink) and re-created the lock."""
-        path.unlink()
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(peer)
-        return None  # "nothing worth deferring to"
+        peer finished its own steal (unlink) and re-created the lock.
+
+        The first read is the verdict that sent us into the claim; later reads
+        see the peer's fresh record mid-write — the create→write window, i.e. an
+        owner worth deferring to. Returning nothing home on those reads would
+        model a peer that vanished, which is its own case (see the vanished-claim
+        test below)."""
+        reads["n"] += 1
+        if reads["n"] == 1:
+            path.unlink()
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(peer)
+            return None  # "nothing worth deferring to"
+        return (-1, 0.0)  # the peer's create→write window
 
     monkeypatch.setattr(buildlock, "read_owner", judge_stale_and_let_the_peer_win)
     with pytest.raises(buildlock.BuildLocked), buildlock.corpus_lock(tmp_path):
@@ -197,6 +209,46 @@ def test_a_peer_winning_inside_the_claim_window_keeps_its_lock(tmp_path, monkeyp
     assert not [p for p in tmp_path.iterdir() if p.name != lock.name], "left a claim aside"
 
 
+def test_a_lost_steal_whose_claim_vanished_acquires_the_lock(tmp_path, monkeypatch):
+    """A stealer that lost the race leaves nothing behind: the winner unlinked
+    the stale record and has not re-created it yet.
+
+    Reporting contention there would name a holder this module's own re-read
+    just called absent — and its remedy ("remove the lock file") would point at
+    a file that is already gone. The acquirer retries into the `O_EXCL` and
+    takes the name."""
+    lock = buildlock.lock_path(tmp_path)
+    lock.write_text("{not json", encoding="utf-8")  # an unreadable record: the stale verdict
+
+    def lose_the_claim_and_unlink(path, judged):
+        path.unlink()  # the peer's win
+        return False  # our claim was refused
+
+    monkeypatch.setattr(buildlock, "_steal_stale", lose_the_claim_and_unlink)
+    with buildlock.corpus_lock(tmp_path) as path:
+        assert json.loads(path.read_text())["pid"] == os.getpid()
+    assert not lock.exists()
+
+
+def test_a_stale_record_that_cannot_be_claimed_is_unavailable_not_contention(tmp_path, monkeypatch):
+    """A stale record the claim cannot carry out (win32 refuses the rename while
+    a peer holds the file open) is retried a bounded number of times and then
+    reported as an unusable lock path — never as contention, because the re-read
+    says the record belongs to nobody.
+
+    The bound is what keeps the retry from becoming a spin: `wait=0` callers get
+    a verdict, not a hot loop."""
+    lock = buildlock.lock_path(tmp_path)
+    lock.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(buildlock, "_steal_stale", lambda path, judged: False)
+    monkeypatch.setattr(buildlock, "UNCLAIMED_PAUSE_S", 0.0)
+
+    with pytest.raises(buildlock.BuildLockUnavailable) as err, buildlock.corpus_lock(tmp_path):
+        pytest.fail("took a lock whose stale record refused to be claimed")
+    assert "could not be claimed" in str(err.value)
+    assert lock.exists()  # still there: the next acquirer re-judges it
+
+
 def test_a_refused_release_unlink_does_not_crash(tmp_path, monkeypatch):
     """win32: a peer holding the lock file open makes the delete fail with
     WinError 32. That must not crash a build that just finished successfully."""
@@ -239,6 +291,35 @@ def test_release_leaves_a_foreign_record_alone(tmp_path):
     with buildlock.corpus_lock(tmp_path):
         _record(lock, pid=os.getpid() + 1, started_at_s=time.time())
     assert lock.exists()
+
+
+def test_liveness_residuals_are_the_documented_ones():
+    """Liveness is deliberately the *weak* probe (`os.kill(pid, 0)`).
+
+    The accurate win32 answer needs a handle to another process, and opening one
+    is a scanned forbidden API — the game-interaction policy forbids a handle to
+    any process, and a lock record is not a trusted pid source (see
+    `scripts/check_constraints.py`; the gate caught exactly this change). What
+    the weak probe costs is pinned here so nobody "fixes" it back:
+
+    * a pid nothing answers for is dead — the crashed-writer recovery, and
+    * a pid whose process *exited* while its parent had not reaped it is alive
+      (POSIX zombie / win32 open handle). Such a lock survives to `TTL_S`, and
+      the pre-hook, which asks libuv, may call that same owner dead.
+    """
+    assert buildlock._pid_alive(2147483646) is False  # released: no such process
+    assert buildlock._pid_alive(0) is False  # never a pid
+    assert buildlock._pid_alive(os.getpid()) is True  # ourselves
+
+    # Exited but unreaped: the residual. The pipe's EOF proves the child ran to
+    # completion without reaping it (a `poll()`/`wait()` would free the pid).
+    child = subprocess.Popen([sys.executable, "-c", "pass"], stdout=subprocess.PIPE)
+    try:
+        assert child.stdout is not None
+        assert child.stdout.read() == b""  # EOF: the child has exited
+        assert buildlock._pid_alive(child.pid) is True
+    finally:
+        child.wait()
 
 
 def test_the_lock_lives_beside_the_artifacts(tmp_path):

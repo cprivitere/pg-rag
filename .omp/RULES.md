@@ -27,11 +27,12 @@ Hard requirements for pg-rag sessions. Sticky: re-attached near the current turn
     does). `mise sql-store`/`sq` is *not* guarded (private additive store, not
     corpus state) and neither are publishes (`upload-docs`/`upload-store`). A
     pure read that merely *names* a task (`grep -rn build-bm25 .`,
-    `git commit -m 'fix build-documents stamp'`, `mise tasks | grep docs`) is
-    never blocked, but the reader list is a heuristic: an unusual spelling (e.g.
-    `uv run python -c "..."` that names a build script, or `mise which docs`)
-    may still be probed, and a chained or redirected command that itself carries
-    a writer spelling always is (`grep -rn build-bm25 . | head`). The writers'
-    own lock is the real guarantee.
+    `git commit -m 'fix build-documents stamp'`, `mise tasks | grep build-bm25`)
+    is never blocked, but the reader list is a heuristic: an unusual spelling
+    (e.g. `uv run python -c "..."` that names a build script, or
+    `mise which docs`) may still be probed, and a command that redirects output
+    or chains a writer (`grep -rn build-bm25 . > out.txt`,
+    `grep x && mise syf`) always is — a pipeline of pure readers is not. The
+    writers' own lock is the real guarantee.
     Never bypass the lock by hand-editing it; to clear a stuck one, delete
     `data/.omp-build.lock`.

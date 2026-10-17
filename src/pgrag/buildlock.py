@@ -53,6 +53,15 @@ POLL_S = 0.5
 # read_owner). Far longer than the gap between os.open and os.write.
 EMPTY_GRACE_S = 5.0
 
+# A stale record whose claim cannot be carried out — win32 refuses the rename
+# while a peer has the file open — is retried this many times, with this pause,
+# before it is reported as an unusable lock path. The pause is short because the
+# window it covers (a peer's create→write, or its release of a read handle)
+# closes in microseconds, and the alternative — reporting contention — names a
+# holder `read_owner` just called absent.
+UNCLAIMED_RETRIES = 3
+UNCLAIMED_PAUSE_S = 0.05
+
 
 class BuildLockError(RuntimeError):
     """Base of every corpus-build lock failure.
@@ -99,6 +108,26 @@ def lock_path(data_dir: str | os.PathLike[str]) -> Path:
 
 
 def _pid_alive(pid: int) -> bool:
+    """Is `pid` a live process?
+
+    POSIX and win32 both ask "can I signal it" (`os.kill(pid, 0)`), which is the
+    only probe this repo may use: the accurate win32 answer needs a **handle to
+    another process** (the `ctypes` route libuv/Node takes: open the process,
+    read its exit code), and the game-interaction policy draws that line
+    regardless of the caller's intent — the handle-opening API is a scanned
+    forbidden name (`scripts/check_constraints.py`) and a lock record is not a
+    trusted pid source. So this is deliberately the weaker probe, with its
+    residual stated:
+
+    * a fully released pid → `OSError` (win32: `errno 22 / winerror 87`),
+      classified dead — the crashed-writer recovery that matters;
+    * a pid the process table still answers for — including one that *exited*
+      while a supervisor (`mise`, an omp background job) still holds its handle —
+      classified alive. Such a lock is then only reclaimed by `TTL_S`, and the
+      pre-hook, which asks the OS the libuv way, may call it dead and let a
+      command through that this module then refuses.
+    Pinned by `tests/test_buildlock.py::test_win32_liveness_residuals`.
+    """
     if pid <= 0:
         return False
     try:
@@ -108,13 +137,11 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:  # exists, owned by someone else
         return True
     except OSError as exc:
-        # Windows raises no ProcessLookupError: opening a dead pid fails with
-        # ERROR_INVALID_PARAMETER, surfaced as OSError(22 / winerror 87) —
-        # measured on py3.15/win32 for 2147483646, 999999 and 1. Reading that as
-        # "alive" left a crashed writer's lock unbroken for the whole TTL (the
-        # hook, which asks the OS differently, correctly called it dead), so it
-        # means dead here; every other failure stays conservative, because
-        # stealing a live build's lock is worse than waiting.
+        # win32 raises no ProcessLookupError: opening a released pid fails with
+        # ERROR_INVALID_PARAMETER, surfaced as errno 22 / winerror 87 (measured
+        # on py3.15/win32 for 2147483646, 999999 and 1) — that is the dead
+        # signal. Every other failure stays conservative: stealing a live
+        # build's lock is worse than waiting, and TTL_S is the escape hatch.
         dead = getattr(exc, "winerror", None) == 87 or exc.errno == errno.EINVAL
         return not dead
     return True
@@ -251,12 +278,14 @@ def corpus_lock(
     raising — 0 means fail fast (an explicit build should not start work it
     cannot finish exclusively); a lazy rebuild inside a request passes a small
     wait so a peer's short step does not fail the answer. Contention raises
-    :class:`BuildLocked`; a lock path that cannot be created raises
-    :class:`BuildLockUnavailable` (same base, carrying the ``OSError``) rather
-    than being misreported as a build that does not exist.
+    :class:`BuildLocked`, and only for a holder the re-read actually saw: a lost
+    or refused steal of an ownerless record retries (see `UNCLAIMED_RETRIES`)
+    and then raises :class:`BuildLockUnavailable`, the same base carrying the
+    ``OSError``, rather than being misreported as a build that does not exist.
     """
     path = lock_path(data_dir)
     deadline = time.monotonic() + max(0.0, wait)
+    unclaimed = 0
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:  # unwritable artifact dir is a real error
@@ -282,13 +311,32 @@ def corpus_lock(
                 # O_EXCL winner.
                 if _steal_stale(path, judged):
                     continue
-                # The lock changed under us (a peer re-created it), or the claim
-                # was refused (win32 peer holds it open): re-judge next pass
-                # instead of spinning.
+                # The claim was refused (a win32 peer holds the file open) or a
+                # peer won the race and has not re-created its record yet. Only a
+                # holder the *re-read* sees is worth reporting: naming one from
+                # the stale verdict would contradict this module's own judgement
+                # (and its "remove the lock file" remedy would point at a file
+                # that is already gone).
                 if time.monotonic() >= deadline:
-                    holder = read_owner(path) or (-1, 0.0)
-                    raise BuildLocked(path, *holder) from None
-                time.sleep(poll)
+                    holder = read_owner(path)
+                    if holder is not None:
+                        raise BuildLocked(path, *holder) from None
+                    if not path.exists():
+                        continue  # the claimant vanished: take the name now
+                    unclaimed += 1
+                    if unclaimed > UNCLAIMED_RETRIES:
+                        # Still there, still nobody's: the path refuses to be
+                        # claimed (a sharing violation, a read-only dir), which is
+                        # a filesystem failure, not a build to wait out.
+                        raise BuildLockUnavailable(
+                            path,
+                            PermissionError(
+                                errno.EACCES, "the stale lock could not be claimed", str(path)
+                            ),
+                        ) from None
+                    time.sleep(UNCLAIMED_PAUSE_S)
+                else:
+                    time.sleep(poll)
                 continue
             pid, age = owner
             if time.monotonic() >= deadline:

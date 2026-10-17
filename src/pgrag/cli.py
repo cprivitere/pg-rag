@@ -37,14 +37,17 @@ def _download_wiki(args) -> int:
 
 
 def _build_documents(args) -> int:
-    from pgrag.build import generate_documents
+    from pgrag.build import DOCUMENTS_PATH, generate_documents
     from pgrag.buildlock import corpus_lock
-    from pgrag.config import DATA_DIR
 
     # The documents rebuild is a corpus write: hold the cross-instance lock so
     # a second instance (any invocation spelling — mise task, alias, this CLI)
-    # serializes instead of interleaving. See pgrag.buildlock.
-    with corpus_lock(DATA_DIR):
+    # serializes instead of interleaving. See pgrag.buildlock. The locked
+    # directory is the one the writer writes (`build.DOCUMENTS_PATH`, CWD-
+    # relative like every other corpus path), never the package-anchored
+    # `DATA_DIR`: from another CWD those are different directories, and a lock
+    # the writer does not take is not a lock.
+    with corpus_lock(DOCUMENTS_PATH.parent):
         generate_documents()
     return 0
 

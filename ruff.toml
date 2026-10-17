@@ -24,19 +24,16 @@ indent-style = "space"
 # Deliberately OFF: E501 (line length — formatter's job), ANN (typer/annotating),
 #        N (naming), D (docstrings), S (bandit), DTZ, RET, PERF, FURB, C4, PIE.
 select = ["E4", "E7", "E9", "F", "I", "W", "B", "UP", "SIM", "ISC", "FLY", "RUF"]
-ignore = ["B008"]   # typer Click-style default=... patterns in cli.py
 
 # scripts/ runs as one-off host tooling — pragmatic exemptions.
+# Only codes `select` actually carries may be listed: the S/BLE/PLW/DTZ families
+# are deliberately off (above), so ignoring them suppressed nothing and merely
+# looked like a safeguard. `scripts/check_docs.py` asserts every suppression
+# names a selected rule, which keeps this list honest as `select` changes.
 [lint.per-file-ignores]
-"scripts/**" = [
-    "BLE001",       # one-off ops scripts intentionally catch Exception broadly
-    "PLW1510",      # subprocess without check — scripts intentionally inspect return codes
-    "S110", "S112", # try/except pass-continue in polling loops
-    "DTZ005",       # datetime.now() without tz — local host time is the point
-    "RUF059", "F841", # unused unpack/vars in probe scripts
-]
-# tests use bare asserts, broad catches, unused args by design
-"tests/**" = ["BLE001", "RUF059"]
+"scripts/**" = ["RUF059", "F841"]   # unused unpack/vars in probe scripts
+# tests use bare asserts and unpack what they assert on
+"tests/**" = ["RUF059"]
 
 [lint.isort]
 case-sensitive = false
