@@ -143,7 +143,7 @@ corpus_search, player_state`.
 - `.omp/` — oh-my-pi config: `RULES.md`, `config.yml`, `WATCHDOG.md`,
   `hooks/pre/00-repo-lock.ts`, and `commands/frozen-review.md` (the review
   protocol as a project slash command:
-  `/frozen-review <tag|sha> <base-tag> [focus]`).
+  `/frozen-review <tag|sha> [base tag or -] [focus...]`).
 - `.agents/skills/` — all agent skills, discoverable by any agent harness:
   `pg-rag`, `pg-data`, `retrieval`, `evaluation`, `testing` (project skills) +
   `molab-notebook` (pairing on the molab-hosted marimo notebook). Skills live

@@ -544,6 +544,35 @@ Every finding below is fixed and pinned; the tree is green at
 The ten items in "Leftovers for the next pass" above are untouched — they were
 declared out of scope for this pass and remain ordinary work.
 
+## Advice pass (2026-10-17) — the `/frozen-review` argument path
+
+The sibling repo's session reviewed this command against the harness and found the
+argument plumbing broken. Both defects are fixed, and the mechanics were **measured
+on this harness** (v18.12.0, `omp -p` with a throwaway command, the saved session
+transcript read back) rather than taken from a disassembly:
+
+- **Only `$1` was read, so BASE and the focus never reached the prompt.** The
+  expander appends the raw argument text *only when the body uses no inline
+  placeholder at all* (`omp://slash-command-internals.md` §6). Measured: a
+  placeholder-free body renders `…body\n\nALPHA TWO WORDS GAMMA`, while a body
+  carrying `$1`/`$2`/`$@[3]`/`$ARGUMENTS` renders the substitutions and appends
+  nothing. So the old `/frozen-review review-pass5 review-base-5ddd05b fix the lock`
+  reached the agent as "TARGET: review-pass5", and the prose then had to guess BASE
+  from a focus text that had been dropped. The body now reads `$1`, `$2` and `$@[3]`,
+  and the hint advertises exactly those three.
+- **An empty quoted argument shifts the position** (measured: `A "" B C` renders
+  `$2`=`B`, `$@[3]`=`C`), so BASE is tested with `git rev-parse` instead of trusted
+  from its slot: an unresolvable `$2` is the head of the focus, and BASE is derived.
+- **The BASE fallback was lexicographic.** `git tag -l 'review-*' | sort` puts
+  `review-pass10` before `review-pass5` and can select a `review-base-*` marker;
+  replaced with `git describe --tags --match 'review-*' --abbrev=0 <target>^`, which
+  resolves the marker step 1 created (`review-pass5^` → `review-base-5ddd05b`,
+  `review-pass6^` → `review-pass5`).
+- The dirty-tree stop is now stated as its invariant — the diff handed to a reviewer
+  and the files it reads are the *same revision* — with the `git worktree add` escape
+  hatch for a checkout that is merely ahead of the tag; and closure now requires the
+  one runner's suite verdict green on the frozen SHA.
+
 ## Review protocol — how a pass is run now
 
 Three review passes ran in a row on this PR, each fixing the previous one's
@@ -554,10 +583,13 @@ below removes one of those costs.
    (`git tag review-base-<sha>`); reviewers get that SHA — never a dirty working
    tree, never `origin/HEAD...main`. Every fix is a new commit and a new tag.
    The reviewer-side half of the same instruction lives as a project slash command —
-   `/frozen-review <tag|sha> <base-tag> [focus]` (`.omp/commands/frozen-review.md`) —
-   which hard-stops on an already-dirty tree. The freeze/tag step *above* stays the
-   operator's, and the command does not carry it (nor §4's two lenses): running the
-   command on a dirty tree is a report, not a review.
+   `/frozen-review <tag|sha> [base tag or -] [focus...]` (`.omp/commands/frozen-review.md`) —
+   which hard-stops on an already-dirty tree. Its BASE defaults to
+   `git describe --tags --match 'review-*' --abbrev=0 <target>^` — the base marker step 1
+   created — and a checkout that is merely ahead of the tag is answered with
+   `git worktree add ../review-<tag> <tag>`, not with a report. The freeze/tag step
+   *above* stays the operator's, and the command does not carry it (nor §4's two
+   lenses): running the command on a dirty tree is a report, not a review.
    *Evidence*: the third pass's two high findings (a failed restart exiting `0`
    and leaving the production server down, `--sweep-reasoning` persisting
    mislabeled rows) and its untracked TS-gate runner all lived in the layer that
@@ -570,7 +602,9 @@ below removes one of those costs.
    verdicts, the task set, whether the tree is frozen, the platform's liveness
    answer and the working-tree-only inputs. The full suite and `mise lint-ts` are
    deliberately **not** rows, so the one runner measures those once and reports
-   them alongside the sheet. *Evidence*: four reviewers re-derived the same
+   them alongside the sheet. Closure needs both green on the frozen SHA: the numeric
+   close-out rule alone would let a pass close with the suite never having run on that
+   revision. *Evidence*: four reviewers re-derived the same
    numbers, and three of them reported a fact as a finding (a stale count, an
    untracked file, a drift status).
 3. **Fan out by risk, not by file count.** ~8 agents in three tiers: changed

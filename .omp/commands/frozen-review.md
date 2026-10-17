@@ -1,22 +1,33 @@
 ---
 description: Frozen-tree review pass — freeze the tag, one facts sheet, tiered agents, report only
-argumentHint: "<tag|sha> <base-tag> [focus]"
+argumentHint: "<tag|sha> [base tag or -] [focus...]"
 ---
 
 Run a **frozen-tree review pass**, not a diff review of a moving branch.
 
-TARGET: `$1` — a tag or SHA (e.g. `review-pass5`), and the operator focus below.
-If `$1` is empty, TARGET is the newest `review-*` tag and BASE the one before it —
-state which pair you resolved, and stop if either does not resolve.
+TARGET: `$1` — a tag or SHA (e.g. `review-pass6`).
+BASE: `$2` — a tag or SHA, or `-` for "derive it".
+FOCUS: `$@[3]` — the operator's focus text, if any.
+
+If TARGET is missing, use the newest `review-pass*` tag. A BASE that is `-`, empty or does not resolve as
+a revision (`git rev-parse` fails) is *derived*, never assumed — and such a value is really the head of
+the focus, so read FOCUS as the BASE slot's value followed by everything after it. The splitter drops an
+empty *quoted* argument (measured: with `A "" B C` the second argument is `B`), so test the value, never
+the position. State the pair you resolved, and stop if either does not resolve.
 
 # Scope
 
-- Review **only** the committed range `BASE..TARGET`. BASE is the `review-*` tag named in the focus text;
-  if none is named, use the newest `review-*` tag that is not TARGET (`git tag -l 'review-*' | sort`).
+- Review **only** the committed range `BASE..TARGET`. Derive a missing BASE with
+  `git describe --tags --match 'review-*' --abbrev=0 <TARGET>^` — the nearest `review-*` tag behind the
+  target, i.e. the base marker the freeze step created (verified on this history: `review-pass5^` →
+  `review-base-5ddd05b`, `review-pass6^` → `review-pass5`). Never `git tag -l 'review-*' | sort`: it is
+  lexicographic (`review-pass10` sorts before `review-pass5`) and can select a `review-base-*` marker.
   Do **not** use `origin/HEAD...main` unless it resolves to the same commit.
-- **Verify before reviewing**, and stop if either fails: `git rev-parse TARGET` resolves, and
-  `git status --porcelain` is empty for the tree under review. A dirty tree means the review target is
-  moving; report that instead of reviewing it.
+- **Verify before reviewing.** The invariant is that the diff handed to a reviewer and the files it
+  reads are the *same revision*, so a frozen-tag pass needs both: `git rev-parse <TARGET>` resolves and
+  `git status --porcelain` is empty. A dirty tree means the target is moving — report that instead of
+  reviewing it; if the checkout is merely ahead of the tag, `git worktree add ../review-<tag> <tag>`
+  puts every reviewer (and every path they execute) at the frozen SHA, main checkout untouched.
 - **Report only.** No edits, no corpus builds (`mise sync-*` / `build-*` / `generate-docs`), no service
   start/stop. Fixes happen in a later, separate turn, on a new frozen tag.
 
@@ -34,8 +45,9 @@ state which pair you resolved, and stop if either does not resolve.
 
 # Fan-out
 
-- Three risk tiers, **at most 8 concurrent agents** (the host parks more than that, and a parked agent
-  must be revived one message at a time):
+- Three risk tiers, **at most 8 concurrent agents**. 8 is a budget for a round, not a host ceiling: the
+  host parks more than that (sixteen on one host in an early pass, and a broadcast revived exactly one),
+  and a parked agent must be revived one message at a time:
   1. changed **logic** — deep, and allowed to execute code paths (both high findings of the last pass
      came from an agent running the path rather than reading it);
   2. wiring/config (`mise.toml`, hooks, gates);
@@ -50,8 +62,12 @@ exact quote, command, or output) · the fix · `verified` or `[INFERENCE]`. Then
 
 - a verdict — **ship** / **ship-with-fixes** / **blocked**;
 - an explicit **fix-now vs backlog** split (fix-now = a defect in code this range changed);
+- the one runner's two verdicts as measured on the frozen SHA — `uv run pytest` (counts and conclusion)
+  and `node scripts/check_ts.mjs`;
 - what could not be verified, and why.
 
 Close-out rule: a pass closes the review when it returns 0 critical, 0 high and 0 fix-now mediums in
-changed code on a frozen tag. Anything else goes to the backlog — that is ordinary work, not another
-review pass. At most one further **verification-only** pass is allowed (verify the fixes, no new scope).
+changed code on a frozen tag, **and** the suite verdict above is green on that SHA — nothing else in the
+pass establishes it, and this repo has no CI, so a red suite is a blocked pass, not a finding. Anything
+else goes to the backlog — that is ordinary work, not another review pass. At most one further
+**verification-only** pass is allowed (verify the fixes, no new scope).
