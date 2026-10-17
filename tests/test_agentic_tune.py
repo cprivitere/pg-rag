@@ -385,3 +385,66 @@ def test_a_labeled_run_without_llm_restart_is_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(agentic_tune, "_maybe_restart_server", lambda a, force=False: True)
     monkeypatch.setattr(_sys, "argv", ["agentic_tune.py", "--temperature", "0.2"])
     assert agentic_tune.main() == 0
+
+
+class _RunArgs(_Args):
+    """The attribute set `run_once` reads for a single (non-sweep) run."""
+
+    eval_set = "cases"
+    cases = None
+    model = "current"
+    reasoning_budget = 4096
+    force = True
+
+
+def _one_run_report(cases_path, **overrides):
+    args = _RunArgs()
+    args.cases = str(cases_path)
+    for key, value in overrides.items():
+        setattr(args, key, value)
+    return agentic_tune.run_once(args)
+
+
+def test_a_default_budget_is_labelled_with_what_env_serves(tmp_path, monkeypatch):
+    """CONTRACT: a *default* `--reasoning-budget` does not rewrite the live flags,
+    so with `[env]` carrying a different budget the server serves that one — and the
+    run-id plus the report must say so.
+
+    Labelling the row `b4096` (the sentinel that stood in for the pair) while the
+    server served 8192 is exactly the mislabelling the `--llm-restart` verdict
+    exists to prevent, and it survived a swap of `[env]`'s flags — the file the repo
+    documents as the one place to change them.
+    """
+    monkeypatch.setenv("LLM_MODEL", "org/Prod-1.5-9B:Q4_K_M")
+    monkeypatch.setenv("LLM_FLAGS", "--no-mmproj -ngl 999 --reasoning-budget 8192")
+    monkeypatch.setattr(agentic_tune, "TUNE_DIR", tmp_path)
+    cases = tmp_path / "cases.json"
+    cases.write_text(
+        json.dumps([{"id": "c1", "question": "q", "facts": [["a"]]}]), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        agentic_tune,
+        "run_sweep_case",
+        lambda case, args: {
+            "id": case["id"],
+            "status": "PASS",
+            "rounds": 1,
+            "missing": [],
+            "elapsed_s": 0.0,
+        },
+    )
+
+    production = _one_run_report(cases)
+    assert production["reasoning_budget"] == 8192  # what [env] serves, not the sentinel
+    assert "_b8192_" in production["run_id"]
+
+    # An explicit budget is the requested one: it *is* written into the flags.
+    explicit = _one_run_report(cases, reasoning_budget=2048)
+    assert explicit["reasoning_budget"] == 2048
+    assert "_b2048_" in explicit["run_id"]
+
+    # No live [env] pair: the requested budget is all the row can honestly carry.
+    monkeypatch.delenv("LLM_MODEL")
+    monkeypatch.delenv("LLM_FLAGS")
+    fallback = _one_run_report(cases, eval_set="cases")
+    assert fallback["reasoning_budget"] == 4096

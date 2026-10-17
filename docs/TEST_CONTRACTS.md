@@ -324,9 +324,12 @@ test (prove the source is fine) or recording a deliberate contract change
   `node_modules/`)
 - **Contracts**: `uv run ruff check src scripts tests` returns 0 — any new
   finding in the linted trees fails `mise test`. `ruff.toml` `extend-exclude`
-  (`data/`, caches) plus per-file-ignores (`scripts/**`:
-  BLE001/PLW1510/S110/S112/DTZ005/RUF059/F841;
-  `tests/**`: BLE001/RUF059) are deliberate, not drift. And `mise lint-ts`
+  (`data/`, caches) plus the per-file-ignores it carries (`scripts/**`:
+  RUF059/F841; `tests/**`: RUF059) are deliberate, not drift — and every
+  suppression must name a code `lint.select` actually carries, resolved inside
+  the code's linter family (`B` covers `B008`, never `BLE001`): a suppression for
+  a family that is *off* suppresses nothing while looking like a safeguard.
+  L12 §8 enforces that. And `mise lint-ts`
   (`node scripts/check_ts.mjs`) must parse every JS/TS file the repo ships
   (`.omp/hooks/**` + `scripts/*.mjs`) clean: `TS2307` for the
   `@oh-my-pi/pi-coding-agent` import is an expected *note* (that API's types
@@ -452,14 +455,24 @@ test (prove the source is fine) or recording a deliberate contract change
   `corpus_lock` argument is parsed (AST, not grep) and must be `DOCUMENTS_PATH.parent` with no
   `DATA_DIR` reference — the writer locks the CWD-relative tree it writes, not the package root;
   every `ruff.toml` suppression (`lint.ignore` + `lint.per-file-ignores`) names a code
-  `lint.select` carries, matched by prefix (`B` covers `B008`); the gates' runner files
+  `lint.select` carries, resolved the way ruff resolves it — inside the code's linter family, so
+  `B` covers `B008` but **not** `BLE001` (a raw string prefix accepted exactly the dead
+  suppressions the check exists for), with the `lint.ignore` arm dormant until that key returns
+  to `ruff.toml`; the gates' runner files
   (`scripts/check_ts.mjs`, `package.json`, `package-lock.json`) are `git ls-files`-tracked, because a
-  clone without them has no TypeScript gate at all and its tests merely *skip*; AGENTS.md's
+  clone without them has no TypeScript gate at all and its tests merely *skip* — and a git that cannot
+  answer (rc ≠ 0) is its own drift, never "untracked"; AGENTS.md's
   "`[tasks]` set is exactly:" list equals `mise.toml`'s task set, set for set; and the three docs
   quoting the suite counts must quote the live `N collected / M deselected / K default` from a real
-  `pytest --collect-only`. **This check has an offline unit test** (`test_check_docs.py`), which
+  `pytest --collect-only` — parsed from any summary shape pytest prints (with a deselect count or
+  without), with a *failed* collection reported as its own failure rather than as a stale count (this
+  map states the convention, not a count, so it is deliberately not in the set). **This check has an
+  offline unit test** (`test_check_docs.py`), which
   provisions a tmp tree and asserts the provisioned one is clean and each drift is reported — the
-  pointer scan, the ownership map, the wiring checks and the count quote are all covered there;
+  pointer scan, the ownership map (including a `*`/`+` bullet, a fenced example of the convention and
+  a file named twice in one block), the lock/AST arm, the lint-suppression arm, the untracked-runner
+  and unanswerable-git arms, the task list and the count quote are all covered there — while the
+  model-literal *leak* (as opposed to a missing consumer file) is asserted only under `mise drift`;
   `mise drift` then runs the same script against the real tree. Exit 1 on any drift.
 - **Change ⇒** `uv run pytest tests/test_check_docs.py`, then `mise drift` (must print `0 drift`).
 
@@ -468,15 +481,23 @@ test (prove the source is fine) or recording a deliberate contract change
 - **Tests**: `test_review_facts.py`
 - **Source**: `scripts/review_facts.py` (`uv run python scripts/review_facts.py`, `--json` for machines;
   protocol: `docs/REVIEW.md` → "Review protocol").
-- **Contracts**: the sheet is **read-only** — it inspects, never writes, and starts no service — and it
+- **Contracts**: the sheet is **read-only** — it inspects, writes nothing git-visible (bytecode and
+  the ruff cache only), and starts no service — and it
   carries exactly one section per fact class: `counts` (via the drift gate's own collector, so the sheet
-  and `mise drift` cannot disagree), `gates` (ruff / drift / compliance, each as `rc <code> — <last
-  line>`, where a non-zero rc is a *fact* to report, not an error to raise), `tasks` (the `mise.toml`
-  task names + aliases), `tree` (HEAD, whether the working tree is frozen, and whether the runner files
+  and `mise drift` cannot disagree; `None` when the gate could not collect, rendered as
+  `(unavailable)` rather than as the number zero), `gates` (the three repo-wide **Python** gates —
+  ruff / drift / compliance — each as `rc <code> — <summary>`, where a non-zero rc is a *fact* to
+  report, not an error to raise, and the summary keeps the diagnosis as well as the trailer; the full
+  suite and `mise lint-ts` are deliberately not rows), `tasks` (the `mise.toml`
+  task names + aliases, tolerating mise's trivial string-task form), `tree` (HEAD, whether the working
+  tree is frozen, and whether the runner files
   the gates shell out to are `git ls-files`-tracked — read from *every* `ls-files` line, because a
-  "last output line" reader reported two of three files as untracked), `liveness` (how python and node
-  each classify a released pid — the platform fact reviewers kept re-measuring), and `limits`
-  (working-tree-only `data/` inputs a clone cannot see). The markdown block and `--json` carry the same
+  "last output line" reader reported two of three files as untracked — with an unanswerable git
+  reported as itself, never as "untracked"), `liveness` (how python and node
+  each classify a released pid — the platform fact reviewers kept re-measuring, and the case where the
+  two agree, not the case where they diverge), and `limits`
+  (working-tree-only `data/` inputs a clone cannot see, with a *directory* counted as tracked when any
+  file under it is — `git ls-files` never prints the directory). The markdown block and `--json` carry the same
   facts.
 - **Change ⇒** `uv run pytest tests/test_review_facts.py`, then `uv run python scripts/review_facts.py`
   to see the sheet a review pass pastes into its shared context.

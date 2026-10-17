@@ -22,14 +22,17 @@ spawned directly because that task would re-apply `[env]` and override the
 candidate. `current` and `ornith` are the same row: both read the live `[env]`
 pair, and a non-default --reasoning-budget is rewritten into those flags, so
 the server serves exactly the model/budget the run-id records — `llm-start` is
-never launched from here. Anything that would make a run-id record a pair the
-server did not serve — a `--model` other than the production row, a non-default
-`--reasoning-budget`, `--sweep-reasoning` — therefore requires `--llm-restart`
-and is refused (exit 2) without it. A restart that does not reach the requested
-state (port still bound after `llm-stop`, server never accepting requests,
-unknown model key) makes the harness exit non-zero instead of persisting rows
-under a label nothing served, and puts the production pair back (best effort —
-the failed move already stopped the old server).
+never launched from here. A *default* budget leaves the live flags alone, so the
+run-id and the report then carry the budget `[env]` itself serves
+(`_served_budget`), never the 4096 sentinel that stood in for it. Anything that
+would make a run-id record a pair the server did not serve — a `--model` other
+than the production row, a non-default `--reasoning-budget`, `--sweep-reasoning`
+— therefore requires `--llm-restart` and is refused (exit 2) without it. A
+restart that does not reach the requested state (port still bound after
+`llm-stop`, server never accepting requests, unknown model key) makes the
+harness exit non-zero instead of persisting rows under a label nothing served,
+and puts the production pair back (best effort — the failed move already
+stopped the old server).
 
 Usage:
   uv run python scripts/agentic_tune.py --eval-set cases --temperature 0.2
@@ -152,18 +155,47 @@ def run_sweep_case(case: dict, args) -> dict:
     return record
 
 
+def _served_budget(args) -> int:
+    """The budget a run-id/report must carry: the requested one, or — for the
+    production sentinel at the default budget — the one `[env]` actually serves.
+
+    A default `--reasoning-budget` does not rewrite the live flags (see
+    `_maybe_restart_server`), so when `[env]` carries a different budget the
+    server serves *that* one: labelling the row with the sentinel would record a
+    pair nothing served, which is the mislabelling the restart verdict exists to
+    prevent. Read the same way `_set_reasoning_budget` writes it (`--reasoning-budget N`).
+    """
+    if args.reasoning_budget != DEFAULT_REASONING_BUDGET:
+        return args.reasoning_budget
+    try:
+        flags = candidate(args.model)["flags"]
+    except SystemExit:  # no live [env] pair: the requested budget is all there is
+        return args.reasoning_budget
+    parts = flags.split()
+    for i, part in enumerate(parts):
+        if part == "--reasoning-budget" and i + 1 < len(parts):
+            try:
+                return int(parts[i + 1])
+            except ValueError:
+                break
+    return args.reasoning_budget
+
+
 def run_once(args) -> dict:
     cases = _load_cases(args.eval_set, args.cases)
     # parity contract: the golden set always runs deterministic
     if args.eval_set == "golden-short" and (args.temperature or args.seed):
         print("golden-short parity set pins temperature=0 seed=0; overriding.")
         args.temperature, args.seed = 0, 0
+    # The row is labelled with the budget the server *served*, which for the
+    # production sentinel is whatever `[env]` carries (see `_served_budget`).
+    budget = _served_budget(args)
     run_id = _run_id(
         args.eval_set,
         args.model,
         args.temperature,
         args.seed,
-        args.reasoning_budget,
+        budget,
         args.max_rounds,
     )
     out = TUNE_DIR / f"{run_id}.json"
@@ -183,7 +215,7 @@ def run_once(args) -> dict:
         "model": args.model,
         "temperature": args.temperature,
         "seed": args.seed,
-        "reasoning_budget": args.reasoning_budget,
+        "reasoning_budget": budget,
         "max_rounds": args.max_rounds,
         "elapsed_s": round(sum(r["elapsed_s"] for r in records), 1),
         "cases": records,
@@ -402,7 +434,8 @@ def main() -> int:
         "--model",
         default="current",
         help="model key: `current`/`ornith` (the live mise.toml [env] production pair, "
-        "re-read at restart) or a CANDIDATES key",
+        "re-read at restart) or a CANDIDATES key (which needs --llm-restart, since a "
+        "run-id records the pair the server served)",
     )
     parser.add_argument(
         "--llm-restart",

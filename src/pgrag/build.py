@@ -13,9 +13,10 @@ from pgrag.loaders.wiki_loader import load_wiki
 
 # The corpus artifact, addressed from the CWD: the data tree is rooted at the
 # working directory (the molab sandbox keeps `data/` at the sandbox CWD while the
-# package lives in `pg-rag-src/`), which is also why the build lock has to be
-# *this* directory rather than the package-anchored `DATA_DIR` — locking the
-# package root would serialize two writers on a file only one of them writes.
+# package lives in `pg-rag-src/`). That is also why the build lock belongs to
+# *this* directory rather than the package-anchored `DATA_DIR`: from any other CWD
+# the two name different directories, so a lock on the package root would
+# serialize writers around a file the corpus writers do not touch.
 # `scripts/build_tool_corpus.py` and `rag/bm25.py` derive their lock the same
 # way, from the artifacts they touch; `cli.py` locks `DOCUMENTS_PATH.parent`.
 DOCUMENTS_PATH = Path("data/documents.json")

@@ -798,4 +798,4 @@ def test_corpus_search_reports_an_unusable_lock_path(tmp_path, monkeypatch):
 
     out = tools.execute_tool("unused.db", "corpus_search", {"query": "alpha"}, corpus="tool")
     assert out.startswith("corpus_search error:")
-    assert "cannot create the corpus-build lock" in out
+    assert "cannot acquire the corpus-build lock" in out

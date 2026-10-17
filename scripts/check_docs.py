@@ -90,10 +90,18 @@ def _doc_refs(text: str) -> set[str]:
     return set(_DOC_PATH_RE.findall(text))
 
 
-# pytest's own summary ("479/557 tests collected (78 deselected) in 0.98s") and
-# the canonical triple every quoting doc must carry.
-_COLLECTED_RE = re.compile(r"(\d+)/(\d+) tests? collected \((\d+) deselected\)")
+# pytest's own collection summaries, with and without a deselect count:
+#   "490/568 tests collected (78 deselected) in 0.98s"
+#   "12 tests collected in 0.4s"
+#   "no tests collected (3 deselected) in 0.1s"
+# A config that deselects nothing is legitimate, so the deselect half is optional;
+# demanding it (the first version of this check) reported "cannot count the test
+# suite" for a tree that was merely configured differently.
+_COLLECTED_RE = re.compile(r"(?:(\d+)/)?(\d+|no) tests? collected(?: \((\d+) deselected\))?")
 _COUNTS_QUOTE_RE = re.compile(r"(\d+) collected / (\d+) deselected / (\d+) default")
+
+# The leading letter run of a rule code, i.e. its linter family (`BLE001` -> `BLE`).
+_FAMILY_RE = re.compile(r"[A-Z]+")
 
 # The directory the documents rebuild must lock: the one it writes to. Asserted
 # as a spelling so the writer and the lock cannot drift apart again (they were
@@ -138,31 +146,68 @@ def _expected_skills() -> list[str]:
 
 
 def _code_selected(code: str, select: list[str]) -> bool:
-    """True when `select` covers `code`: ruff matches by prefix, so `B` covers
-    `B008` and `E4` covers `E402`."""
-    return any(code == sel or code.startswith(sel) for sel in select)
+    """True when `select` covers `code`.
+
+    Ruff resolves a selector *inside its linter first*: `B` is flake8-bugbear and
+    so never covers `BLE001` (flake8-blind-except), `F` is pyflakes and never
+    covers `FA`/`FURB`. A raw string prefix — the first version of this check —
+    judged those families "selected", i.e. it accepted exactly the dead
+    suppressions it exists to catch. The rule is therefore: a code-prefix match
+    *within the same leading-letter family*, which still lets `B` cover `B008`,
+    `E4` cover `E402` and `RUF` cover `RUF059`."""
+    family = _FAMILY_RE.match(code)
+    if family is None:  # pragma: no cover - every ruff code starts with letters
+        return False
+    for sel in select:
+        sel_family = _FAMILY_RE.match(sel)
+        if sel_family is not None and code.startswith(sel) and sel_family.group() == family.group():
+            return True
+    return False
 
 
 def _git_tracked(paths: tuple[str, ...]) -> set[str] | None:
     """The subset of `paths` the git index knows, or None when git cannot answer
-    (not a repo, no git binary)."""
+    (not a repo, no git binary).
+
+    The explicit codec is load-bearing: a decode failure kills subprocess's reader
+    thread, so `stdout` comes back `None` with no exception and `splitlines()` on
+    it raises. `cwd=ROOT` is load-bearing too — `git ls-files -- package.json`
+    from a subdirectory answers rc 0 with empty output, which would report every
+    runner as untracked."""
     try:
         proc = subprocess.run(
             ["git", "ls-files", "--", *paths],
             cwd=ROOT,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=60,
         )
     except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode != 0:
         return None
-    return {line.strip() for line in proc.stdout.splitlines() if line.strip()}
+    return {line.strip() for line in (proc.stdout or "").splitlines() if line.strip()}
 
 
-def _collected_counts() -> tuple[int, int, int] | None:
-    """`(collected, deselected, default)` from a real collection, or None.
+def _parse_collection(out: str) -> tuple[int, int, int] | None:
+    """`(collected, deselected, default)` from pytest's summary, or None.
+
+    All three shapes count: `N/M tests collected (K deselected)`, `N tests
+    collected` (nothing deselected — `default == collected`) and `no tests
+    collected (K deselected)` (everything deselected)."""
+    matches = _COLLECTED_RE.findall(out)
+    if not matches:
+        return None
+    default_raw, collected_raw, deselected_raw = matches[-1]  # the summary line
+    collected = 0 if collected_raw == "no" else int(collected_raw)
+    default = collected if not default_raw else int(default_raw)
+    return collected, int(deselected_raw or 0), default
+
+
+def _collected_counts() -> tuple[tuple[int, int, int] | None, str]:
+    """`((collected, deselected, default) | None, detail)` from a real collection.
 
     One `pytest --collect-only -q` run (~1.4 s here) is the only honest source:
     the golden cases are parametrized from the files on disk, so counting `def
@@ -170,6 +215,10 @@ def _collected_counts() -> tuple[int, int, int] | None:
     `N collected / M deselected / K default` and this is what it must equal —
     the numbers churned three review passes in a row ("537/459" outlived the
     tree by 8 tests) precisely because nothing computed them.
+
+    `None` means *not measured*, with `detail` saying why: a collection that
+    failed is its own failure (the partial summary a broken run prints names a
+    count that does not exist), so it is never reported as a stale count.
     """
     try:
         proc = subprocess.run(
@@ -177,15 +226,19 @@ def _collected_counts() -> tuple[int, int, int] | None:
             cwd=ROOT,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=300,
         )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    matches = _COLLECTED_RE.findall(proc.stdout or "")
-    if not matches:
-        return None
-    default, collected, deselected = (int(g) for g in matches[-1])  # the summary line
-    return collected, deselected, default
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"pytest --collect-only could not start ({type(exc).__name__})"
+    if proc.returncode != 0:
+        return None, f"pytest --collect-only rc {proc.returncode}"
+    got = _parse_collection(proc.stdout or "")
+    if got is None:
+        return None, "pytest --collect-only printed no summary line"
+    collected, deselected, default = got
+    return got, f"{collected} collected / {deselected} deselected / {default} default"
 
 
 def _all_missing_doc_refs() -> list[str]:
@@ -228,19 +281,33 @@ def main() -> int:
         # "Covered" must mean *owned*: a file listed under two layers leaves two
         # claims on one contract and no way to tell which is current (and a file
         # no `**Tests**` block names is owned by nothing at all). Names are read
-        # from the layer blocks only — the map also discusses files in prose.
-        owners: dict[str, int] = {}
+        # from the layer blocks only — the map also discusses files in prose — and
+        # once *per block*: a layer that names one file twice, or a fenced example
+        # of the convention, is not two layers. Fences are skipped and all three
+        # bullet markers open a block, because a `*`/`+` reformat used to make every
+        # file unowned (a loud drift with the wrong reason).
+        owners: dict[str, set[int]] = {}
         in_tests = False
+        in_fence = False
+        block = -1
         for line in tc_text.splitlines():
-            if line.lstrip().startswith("- **Tests**"):
+            if line.lstrip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            if re.match(r"\s*[-*+]\s+\*\*Tests\*\*", line):
                 in_tests = True
-            elif in_tests and (not line.strip() or line.lstrip().startswith(("#", "-", "*", "|"))):
+                block += 1
+            elif in_tests and (
+                not line.strip() or line.lstrip().startswith(("#", "-", "*", "+", "|"))
+            ):
                 in_tests = False
                 continue
             if in_tests:
                 for name in re.findall(r"`(test_[a-zA-Z0-9_]+\.py)`", line):
-                    owners[name] = owners.get(name, 0) + 1
-        multi_layer = sorted(n for n, count in owners.items() if count > 1)
+                    owners.setdefault(name, set()).add(block)
+        multi_layer = sorted(n for n, blocks in owners.items() if len(blocks) > 1)
         unowned = sorted(f for f in test_files if f not in owners)
         if multi_layer:
             _drift("TEST_CONTRACTS gives a test file more than one layer", ", ".join(multi_layer))
@@ -466,6 +533,10 @@ def main() -> int:
             and node.func.id == "corpus_lock"
             and node.args
         ]
+        # Empty today — the `DATA_DIR` mentions in cli.py are comments, and comments
+        # are AST-invisible — i.e. a guard for the *next* writer rather than for the
+        # current one: the value the lock must name is this file's, so a
+        # reintroduced `DATA_DIR` anywhere in it is the shape that must fail.
         data_dir_refs = [
             node.lineno
             for node in ast.walk(cli_tree)
@@ -494,6 +565,9 @@ def main() -> int:
         ruff_cfg = {}
     lint_cfg = ruff_cfg.get("lint", {}) or {}
     selected = list(lint_cfg.get("select", []))
+    # `lint.ignore` is absent from ruff.toml today (its last entry went with the
+    # dead-suppression cleanup), so this arm guards its return; the live
+    # suppressions are the per-file-ignores below.
     dead = [f"lint.ignore:{c}" for c in lint_cfg.get("ignore", []) if not _code_selected(c, selected)]
     for scope, codes in (lint_cfg.get("per-file-ignores", {}) or {}).items():
         dead += [f"{scope}:{c}" for c in codes if not _code_selected(c, selected)]
@@ -552,15 +626,17 @@ def main() -> int:
     # --- 11. The suite counts the docs quote are the live ones --------------
     # Volatile by nature (every added test moves them), so nothing but a real
     # collection may be their source — and every doc that quotes them must quote
-    # the same triple, or the reader cannot tell which one is current.
+    # the same triple, or the reader cannot tell which one is current. This map
+    # states the *convention* (with placeholders) rather than a count, so it is
+    # deliberately not in the set and carries no triple to drift.
     quote_docs = {
         "AGENTS.md": ROOT / "AGENTS.md",
         "testing skill": ROOT / ".agents" / "skills" / "testing" / "SKILL.md",
         "REVIEW.md": ROOT / "docs" / "REVIEW.md",
     }
-    counts = _collected_counts()
+    counts, detail = _collected_counts()
     if counts is None:
-        _drift("cannot count the test suite", "pytest --collect-only produced no count")
+        _drift("cannot count the test suite", detail)
     else:
         collected, deselected, default = counts
         hint = f"{collected} collected / {deselected} deselected / {default} default"

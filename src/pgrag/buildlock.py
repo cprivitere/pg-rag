@@ -88,16 +88,20 @@ class BuildLocked(BuildLockError):
 
 
 class BuildLockUnavailable(BuildLockError):
-    """The lock path could not be created — a filesystem error, not contention.
+    """No lock could be acquired, and waiting for a peer will not change that.
 
-    Reported separately from :class:`BuildLocked` because the two call for
-    opposite reactions: contention means "wait for the peer", while an
-    unusable path names no holder at all and the lock-file remedy cannot work.
-    The underlying ``OSError`` is kept in the message (and on ``exc``).
+    A filesystem outcome rather than contention: the path could not be created (an
+    unwritable directory) *or* an ownerless record could not be claimed (a peer
+    holds the file open, so the claim's rename is refused). Reported separately
+    from :class:`BuildLocked` because the two call for opposite reactions —
+    contention means "wait for the peer", while this names no holder at all — so
+    the message carries the recipe and the underlying ``OSError`` (also kept on
+    ``exc``) instead of :class:`BuildLocked`'s "if that process is gone, remove the
+    lock file" advice.
     """
 
     def __init__(self, path: Path, exc: OSError) -> None:
-        super().__init__(f"cannot create the corpus-build lock {path}: {exc}")
+        super().__init__(f"cannot acquire the corpus-build lock {path}: {exc}")
         self.path = path
         self.exc = exc
 
@@ -126,7 +130,7 @@ def _pid_alive(pid: int) -> bool:
       classified alive. Such a lock is then only reclaimed by `TTL_S`, and the
       pre-hook, which asks the OS the libuv way, may call it dead and let a
       command through that this module then refuses.
-    Pinned by `tests/test_buildlock.py::test_win32_liveness_residuals`.
+    Pinned by `tests/test_buildlock.py::test_liveness_residuals_are_the_documented_ones`.
     """
     if pid <= 0:
         return False
@@ -327,11 +331,16 @@ def corpus_lock(
                     if unclaimed > UNCLAIMED_RETRIES:
                         # Still there, still nobody's: the path refuses to be
                         # claimed (a sharing violation, a read-only dir), which is
-                        # a filesystem failure, not a build to wait out.
+                        # a filesystem failure, not a build to wait out. The message
+                        # names the one remedy left — the record is nobody's, so it
+                        # can be removed by hand (unlike a live holder's).
                         raise BuildLockUnavailable(
                             path,
                             PermissionError(
-                                errno.EACCES, "the stale lock could not be claimed", str(path)
+                                errno.EACCES,
+                                "the stale lock could not be claimed; remove it if no "
+                                "build is running",
+                                str(path),
                             ),
                         ) from None
                     time.sleep(UNCLAIMED_PAUSE_S)

@@ -6,8 +6,9 @@ record is gone/corrupt/stale/dead-pid — never while a live owner holds it. A
 corpus writer must therefore refuse to start work while a peer holds the lock.
 
 Two distinct failures, both `BuildLockError`: a *live* owner raises
-`BuildLocked` (contention — the caller may wait), while a lock path that cannot
-be created at all (a directory in its place, an uncreatable artifact dir) raises
+`BuildLocked` (contention — the caller may wait), while a lock that cannot be
+acquired at all — a directory in the path's place, an uncreatable artifact dir, or
+an ownerless record whose claim the filesystem refuses — raises
 `BuildLockUnavailable`. Mixing them reported contention for a filesystem error,
 naming a holder that does not exist and offering a remedy that cannot work.
 
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -71,7 +73,7 @@ def test_a_directory_at_the_lock_path_is_unavailable_not_contention(tmp_path):
     with pytest.raises(buildlock.BuildLockUnavailable) as err, buildlock.corpus_lock(tmp_path):
         pytest.fail("acquired a lock at an unusable path")
     assert isinstance(err.value, buildlock.BuildLockError)  # errors-as-data base
-    assert "cannot create the corpus-build lock" in str(err.value)
+    assert "cannot acquire the corpus-build lock" in str(err.value)
 
 
 def test_an_uncreatable_lock_parent_is_unavailable(tmp_path):
@@ -149,11 +151,10 @@ def test_the_steal_deletes_only_the_file_it_judged(tmp_path, monkeypatch):
         """Simulate the race: we judged the file stale, and before our claim a
         peer finished its own steal (unlink) and re-created the lock.
 
-        The first read is the verdict that sent us into the claim; later reads
-        see the peer's fresh record mid-write — the create→write window, i.e. an
-        owner worth deferring to. Returning nothing home on those reads would
-        model a peer that vanished, which is its own case (see the vanished-claim
-        test below)."""
+        The first read is the verdict that sent us into the claim; later reads see
+        the peer's fresh record — a *live* owner worth deferring to, which is what
+        the file on disk actually holds. Returning a sentinel there would model a
+        peer that vanished, which is its own case (see the vanished-claim test)."""
         reads["n"] += 1
         if reads["n"] == 1:
             path.unlink()
@@ -161,11 +162,12 @@ def test_the_steal_deletes_only_the_file_it_judged(tmp_path, monkeypatch):
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(peer)
             return None  # "nothing worth deferring to"
-        return (-1, 0.0)  # the peer's create→write window
+        return (os.getpid() + 1, 0.0)  # the peer's fresh, live record
 
     monkeypatch.setattr(buildlock, "read_owner", judge_stale_and_let_the_peer_win)
-    with pytest.raises(buildlock.BuildLocked), buildlock.corpus_lock(tmp_path):
+    with pytest.raises(buildlock.BuildLocked) as err, buildlock.corpus_lock(tmp_path):
         pytest.fail("stole a lock a peer had just re-created")
+    assert err.value.pid == os.getpid() + 1, "the re-read holder was not what got reported"
     assert json.loads(lock.read_text())["pid"] == os.getpid() + 1, "the peer's lock was deleted"
     assert not [p for p in tmp_path.iterdir() if p.name != lock.name], "left a claim aside"
 
@@ -216,18 +218,24 @@ def test_a_lost_steal_whose_claim_vanished_acquires_the_lock(tmp_path, monkeypat
     Reporting contention there would name a holder this module's own re-read
     just called absent — and its remedy ("remove the lock file") would point at
     a file that is already gone. The acquirer retries into the `O_EXCL` and
-    takes the name."""
+    takes the name, and it does so *without* paying the unclaimed-claim pause: a
+    vanished claimant is not the "the record refuses to be claimed" case, so it
+    must not burn the retry budget either (the pause is the only observable
+    difference, and its absence is what pins the branch)."""
     lock = buildlock.lock_path(tmp_path)
     lock.write_text("{not json", encoding="utf-8")  # an unreadable record: the stale verdict
+    sleeps: list[float] = []
 
     def lose_the_claim_and_unlink(path, judged):
         path.unlink()  # the peer's win
         return False  # our claim was refused
 
     monkeypatch.setattr(buildlock, "_steal_stale", lose_the_claim_and_unlink)
+    monkeypatch.setattr(buildlock.time, "sleep", sleeps.append)
     with buildlock.corpus_lock(tmp_path) as path:
         assert json.loads(path.read_text())["pid"] == os.getpid()
     assert not lock.exists()
+    assert sleeps == [], "a vanished claimant paid the retry pause (or the retry budget)"
 
 
 def test_a_stale_record_that_cannot_be_claimed_is_unavailable_not_contention(tmp_path, monkeypatch):
@@ -293,6 +301,22 @@ def test_release_leaves_a_foreign_record_alone(tmp_path):
     assert lock.exists()
 
 
+def test_every_test_pointer_in_the_module_resolves():
+    """`buildlock`'s docstrings name the tests that pin them; a renamed test leaves
+    a `tests/…py::name` pointer that nothing resolves — `check_docs` drops the
+    `::selector` by design and only requires the file to exist — so the pointer
+    rots silently (one did). Resolve every one against the suite."""
+    source = Path(buildlock.__file__).read_text(encoding="utf-8")
+    pointers = sorted(
+        set(re.findall(r"`(?:tests/)?(test_[a-zA-Z0-9_]+\.py)::([A-Za-z0-9_]+)`", source))
+    )
+    assert pointers, "buildlock should name the tests that pin its behaviour"
+    tests_dir = Path(buildlock.__file__).resolve().parents[2] / "tests"
+    for filename, name in pointers:
+        body = (tests_dir / filename).read_text(encoding="utf-8")
+        assert f"def {name}(" in body, f"{filename}::{name} does not exist"
+
+
 def test_liveness_residuals_are_the_documented_ones():
     """Liveness is deliberately the *weak* probe (`os.kill(pid, 0)`).
 
@@ -311,8 +335,11 @@ def test_liveness_residuals_are_the_documented_ones():
     assert buildlock._pid_alive(0) is False  # never a pid
     assert buildlock._pid_alive(os.getpid()) is True  # ourselves
 
-    # Exited but unreaped: the residual. The pipe's EOF proves the child ran to
-    # completion without reaping it (a `poll()`/`wait()` would free the pid).
+    # Exited but still signallable: the residual. Measured wider than "unreaped" —
+    # on win32 the pid reads alive after `wait()`, after an explicit handle close,
+    # and even once `tasklist` denies it, so the mechanism is a lingering reference
+    # to the process object rather than the missing reap. The pipe's EOF is what
+    # proves the child ran to completion here.
     child = subprocess.Popen([sys.executable, "-c", "pass"], stdout=subprocess.PIPE)
     try:
         assert child.stdout is not None

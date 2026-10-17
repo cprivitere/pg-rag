@@ -21,6 +21,10 @@ import pytest
 
 import scripts.check_docs as cd
 
+# The module's real collector, captured before any fixture stubs it: the tests
+# below that exercise the subprocess path restore this reference.
+_REAL_COLLECTED_COUNTS = cd._collected_counts
+
 
 def test_captures_every_script_class():
     """`.py`, `.sh`, `.ps1`, `.mjs`, `.md`, `.json` and `.toml` pointers under the
@@ -173,17 +177,62 @@ def _clean_tree(tmp_path: Path, **overrides: str | None) -> Path:
 def _stub_collection(monkeypatch):
     """`main()` counts the suite by running `pytest --collect-only`; the tmp trees
     hold no tests, so the count is stubbed to the zero their docs quote. The
-    count check itself is covered by `test_the_count_quote_is_checked`."""
-    monkeypatch.setattr(cd, "_collected_counts", lambda: (0, 0, 0))
+    count check itself is covered by `test_the_count_quote_is_checked`, and the
+    parser by `test_collection_summaries_are_parsed`."""
+    monkeypatch.setattr(
+        cd, "_collected_counts", lambda: ((0, 0, 0), "0 collected / 0 deselected / 0 default")
+    )
     # the tmp trees live outside the repo: `git ls-files` there answers nothing
     monkeypatch.setattr(cd, "_git_tracked", lambda paths: set(paths))
+
+
+def test_collection_summaries_are_parsed():
+    """§11's parser accepts every summary pytest prints, and a *failed* collection
+    is its own verdict.
+
+    The first version understood only the `-m`-filtered triple, so a legitimate
+    0-deselected (or all-deselected) config reported "cannot count the test
+    suite" — a false drift — while a broken collection's partial summary was
+    accepted and then blamed on the docs."""
+    assert cd._parse_collection("490/568 tests collected (78 deselected) in 1.0s") == (568, 78, 490)
+    assert cd._parse_collection("12 tests collected in 0.4s") == (12, 0, 12)
+    assert cd._parse_collection("no tests collected (3 deselected) in 0.1s") == (0, 3, 0)
+    assert cd._parse_collection("no tests ran in 0.02s") is None
+
+
+def test_a_failed_collection_is_not_a_stale_count(monkeypatch, capsys):
+    """A collection that fails (`rc != 0`) reports its own reason, never a count:
+    the partial summary a broken run prints names a number that does not exist,
+    and blaming the docs for it is the misleading half of the same bug."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(cd, "_collected_counts", _REAL_COLLECTED_COUNTS)  # past the stub
+    monkeypatch.setattr(
+        cd.subprocess,
+        "run",
+        lambda *a, **kw: SimpleNamespace(
+            returncode=2, stdout="2/3 tests collected (1 deselected), 1 error in 0.17s\n"
+        ),
+    )
+    counts, detail = cd._collected_counts()
+    assert counts is None
+    assert detail == "pytest --collect-only rc 2"
+
+    monkeypatch.setattr(
+        cd.subprocess,
+        "run",
+        lambda *a, **kw: SimpleNamespace(returncode=0, stdout="7 tests collected in 0.2s\n"),
+    )
+    assert cd._collected_counts() == ((7, 0, 7), "7 collected / 0 deselected / 7 default")
 
 
 def test_the_count_quote_is_checked(tmp_path, monkeypatch, capsys):
     """The stale-count class, pinned: a doc whose triple disagrees with the live
     collection is drift, and one that does not quote it at all is drift too —
     "537/459" outlived the tree by twelve tests because nothing computed it."""
-    monkeypatch.setattr(cd, "_collected_counts", lambda: (557, 78, 479))
+    monkeypatch.setattr(
+        cd, "_collected_counts", lambda: ((557, 78, 479), "557 collected / 78 deselected / 479 default")
+    )
     monkeypatch.setattr(cd, "ROOT", _clean_tree(tmp_path))
     assert cd.main() == 1
     out = capsys.readouterr().out
@@ -201,6 +250,21 @@ def test_the_count_quote_is_checked(tmp_path, monkeypatch, capsys):
         (
             {"ruff.toml": '[lint]\nselect = ["F"]\nignore = ["S110"]\n'},
             "lint suppressions name unselected rules",
+        ),
+        (
+            # `B` selects flake8-bugbear, not flake8-blind-except: the prefix the
+            # first predicate matched is not what ruff matches.
+            {
+                "ruff.toml": (
+                    '[lint]\nselect = ["B"]\n\n'
+                    '[lint.per-file-ignores]\n"scripts/**" = ["BLE001"]\n'
+                )
+            },
+            "lint suppressions name unselected rules",
+        ),
+        (
+            {"scripts/services.py": 'LLM_MODEL = "org/Model:Q4_K_M"\n'},
+            "scripts/services.py hardcodes model literal",
         ),
         (
             {"src/pgrag/cli.py": "def f():\n    with corpus_lock(DATA_DIR):\n        pass\n"},
@@ -254,6 +318,72 @@ def test_a_prose_mention_of_the_tests_bullet_is_not_a_second_layer(tmp_path, mon
     assert "every test file is owned by exactly one layer" in capsys.readouterr().out
 
 
+def test_a_suppression_in_a_family_the_selector_only_string_prefixes_is_dead():
+    """§8's predicate is ruff's, not a string prefix: a selector resolves *inside
+    its linter*, so `B` (flake8-bugbear) never covers `BLE001`
+    (flake8-blind-except) and `F` (pyflakes) never covers `FA`/`FURB`.
+
+    The first version matched raw prefixes, which judged every one of those
+    families selected — i.e. it accepted exactly the dead suppressions the check
+    exists to catch (verified against ruff itself: `--select B` lints a bare
+    `except Exception:` clean, `--select BLE` reports `BLE001`)."""
+    select = ["E4", "E7", "E9", "F", "I", "W", "B", "UP", "SIM", "ISC", "FLY", "RUF"]
+    assert cd._code_selected("B008", select)  # bugbear, selected by `B`
+    assert cd._code_selected("E402", select)  # matched by the `E4` prefix
+    assert cd._code_selected("RUF059", select)
+    assert not cd._code_selected("BLE001", select)  # blind-except under `B`
+    assert not cd._code_selected("FA100", select)  # future-annotations under `F`
+    assert not cd._code_selected("FURB189", select)  # refurb under `F`
+    assert not cd._code_selected("S110", select)
+
+
+def test_the_ownership_parser_follows_the_convention_not_the_markup(tmp_path, monkeypatch, capsys):
+    """All three bullet markers open a layer block, a fenced *example* of the
+    convention is not one, and a file named twice inside one block is still one
+    owner.
+
+    Each of these was a wrong verdict: a `*`/`+` reformat made every file
+    "unowned", a fenced example double-counted a file into two layers, and a
+    repeated name inside one layer reported "more than one layer"."""
+    for bullet in ("-", "*", "+"):
+        monkeypatch.setattr(
+            cd,
+            "ROOT",
+            _clean_tree(
+                tmp_path / bullet.replace("*", "star").replace("+", "plus"),
+                **{
+                    "docs/TEST_CONTRACTS.md": (
+                        "DOCUMENTS_VERSION\n{id, question, type, facts\n"
+                        "0 collected / 0 deselected / 0 default\n"
+                        f"{bullet} **Tests**: `test_alpha.py`\n"
+                    ),
+                    "tests/test_alpha.py": "def test_x():\n    pass\n",
+                },
+            ),
+        )
+        assert cd.main() == 0, bullet
+        assert "every test file is owned by exactly one layer" in capsys.readouterr().out
+
+    monkeypatch.setattr(
+        cd,
+        "ROOT",
+        _clean_tree(
+            tmp_path / "fenced",
+            **{
+                "docs/TEST_CONTRACTS.md": (
+                    "DOCUMENTS_VERSION\n{id, question, type, facts\n"
+                    "0 collected / 0 deselected / 0 default\n"
+                    "```\n- **Tests**: `test_alpha.py`\n```\n"
+                    "- **Tests**: `test_alpha.py`\n"
+                ),
+                "tests/test_alpha.py": "def test_x():\n    pass\n",
+            },
+        ),
+    )
+    assert cd.main() == 0
+    assert "every test file is owned by exactly one layer" in capsys.readouterr().out
+
+
 def test_a_provisioned_tree_reports_no_drift(tmp_path, monkeypatch, capsys):
     """The gate's own happy path: everything it needs is present, so it must
     report zero drift *and* exit 0 — the baseline the missing-file cases below
@@ -275,6 +405,8 @@ def test_a_provisioned_tree_reports_no_drift(tmp_path, monkeypatch, capsys):
         ("scripts/golden_check.py", "golden_check.py missing"),
         ("mise.toml", "cannot parse mise.toml"),
         ("scripts/services.py", "scripts/services.py missing"),
+        ("src/pgrag/cli.py", "cannot check the corpus lock"),
+        (".agents/skills/evaluation/SKILL.md", "evaluation skill missing"),
     ],
 )
 def test_a_missing_input_is_loud_and_never_a_traceback(tmp_path, monkeypatch, capsys, missing, label):
@@ -288,6 +420,25 @@ def test_a_missing_input_is_loud_and_never_a_traceback(tmp_path, monkeypatch, ca
     monkeypatch.setattr(cd, "ROOT", _clean_tree(tmp_path, **{missing: None}))
     assert cd.main() == 1
     assert label in capsys.readouterr().out
+
+
+def test_an_untracked_runner_and_an_unanswerable_git_are_their_own_drifts(
+    tmp_path, monkeypatch, capsys
+):
+    """§9's two arms, neither pinned elsewhere: a runner file the index does not
+    know (a fresh clone then has no TypeScript gate at all, and its tests merely
+    *skip*), and a git that cannot answer — which must not be reported as the
+    first, because "untracked" is a fact git never stated."""
+    monkeypatch.setattr(cd, "ROOT", _clean_tree(tmp_path))
+    monkeypatch.setattr(cd, "_git_tracked", lambda paths: {p for p in paths if p != "package.json"})
+    assert cd.main() == 1
+    assert "gate runner files are untracked" in capsys.readouterr().out
+
+    monkeypatch.setattr(cd, "_git_tracked", lambda paths: None)
+    assert cd.main() == 1
+    out = capsys.readouterr().out
+    assert "cannot read the git index" in out
+    assert "gate runner files are untracked" not in out
 
 
 def test_the_real_docs_point_only_at_live_files():

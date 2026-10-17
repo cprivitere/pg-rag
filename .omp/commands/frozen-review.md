@@ -1,11 +1,13 @@
 ---
 description: Frozen-tree review pass — freeze the tag, one facts sheet, tiered agents, report only
-argumentHint: "<tag|sha> [base tag] [focus]"
+argumentHint: "<tag|sha> <base-tag> [focus]"
 ---
 
 Run a **frozen-tree review pass**, not a diff review of a moving branch.
 
 TARGET: `$1` — a tag or SHA (e.g. `review-pass5`), and the operator focus below.
+If `$1` is empty, TARGET is the newest `review-*` tag and BASE the one before it —
+state which pair you resolved, and stop if either does not resolve.
 
 # Scope
 
@@ -20,10 +22,12 @@ TARGET: `$1` — a tag or SHA (e.g. `review-pass5`), and the operator focus belo
 
 # Facts — measured once, never re-derived
 
-- The facts sheet is the shared context: `uv run python scripts/review_facts.py` (read-only, ~9 s;
-  `--no-gates` for 1.6 s, `--json` for machines). Paste its output into every agent's brief.
-- Do **not** re-run `pytest`, `ruff`, `mise drift` or `mise compliance` in a slice — they are rows on the
-  sheet. Treat a red row as a *fact to report once*, not as a finding to raise per file.
+- The facts sheet is the shared context: `uv run python scripts/review_facts.py` (read-only, ~4 s warm;
+  `--no-gates` for ~1.6 s, `--json` for machines). Paste its output into every agent's brief.
+- Do **not** re-run the rows the sheet already carries — `ruff`, `mise drift` and `mise compliance` — in a
+  slice; a red row is a *fact to report once*, not a finding to raise per file. The sheet does **not**
+  carry the suite verdict (a full `uv run pytest`) or `mise lint-ts`: the one runner measures both once,
+  and no slice runs the suite.
 - `docs/REVIEW.md` → "Leftovers for the next pass" is the **accepted backlog**: out of scope. Never
   re-raise those items as new findings, and do not widen scope to untouched files except where one makes
   a claim about a file that changed.
@@ -36,7 +40,8 @@ TARGET: `$1` — a tag or SHA (e.g. `review-pass5`), and the operator focus belo
      came from an agent running the path rather than reading it);
   2. wiring/config (`mise.toml`, hooks, gates);
   3. docs/data — one batched agent, or leave it to `mise drift`.
-- **One runner.** The parent runs the shared commands once; subagents never do.
+- **One runner.** The parent runs the shared commands once — the facts sheet plus the two verdicts it
+  does not carry (`uv run pytest` and `node scripts/check_ts.mjs`); subagents never do.
 
 # Report
 

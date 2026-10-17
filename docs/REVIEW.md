@@ -353,9 +353,10 @@ in the first pass are addressed in the second.
 **Third pass (2026-10-17) — the 61-file PR review, every finding fixed.**
 
 Sixteen reviewers covered the range `479b6bc..d048ce3` slice by slice; every
-finding below is fixed and pinned, and the suite is green
-(**568 collected / 78 deselected / 490 default**, one POSIX-only port-owner case
-skipping on Windows) with `mise lint`, `mise drift` (0 drift) and
+finding below is fixed and pinned, and the suite is green on the tree this record
+was written against (**584 collected / 78 deselected / 506 default**, one
+POSIX-only port-owner case skipping on Windows; the pass-5 follow-up at the end
+moved these from 568/78/490) with `mise lint`, `mise drift` (0 drift) and
 `mise compliance` clean.
 
 - **The molab stamp never reached the builder (the review's P1).** `corpus_docs`
@@ -412,7 +413,9 @@ skipping on Windows) with `mise lint`, `mise drift` (0 drift) and
   stamp aborts actionably instead of raising `JSONDecodeError`); `AGENTS.md`'s
   model-consumer trio now names the set `mise drift` actually enforces; L12
   describes the enforced rule (a leaked literal *value*) and the coverage
-  (pointer scan unit-tested, the rest only under `mise drift`); the never-edit
+  (the pointer scan, the ownership map, the wiring drifts and the count quote are
+  unit-tested — see `docs/TEST_CONTRACTS.md` L12 — while the model-literal leak
+  and the suite counts are asserted only under `mise drift`); the never-edit
   parse cache is named by its live path (`data/derived/wiki_parsed.json`) in
   RULES/testing/pg-data/TEST_CONTRACTS and `tests/conftest.py`; `pyproject.toml`'s
   golden counts (62/8/54) match reality; `docs/LLM_MODEL_WIRING.md` names how to
@@ -438,7 +441,7 @@ they are evidence-backed rather than suspicions.
    check runs *before* the lock by design, so it can observe new `documents.json` beside the old
    stamp and refuse spuriously. Also: its new `except OSError` in-build path is untested, the version
    numbers in the refusal message are unpinned, and the CWD-anchor test is vacuous on a fresh clone
-   (`data/` is gitignored).
+   (`data/documents.json` and the stamp are gitignored — unlike `data/golden/*.json`, which is tracked).
 3. **The BM25 lock covers the whole rebuild** (`src/pgrag/rag/bm25.py`): minutes of in-memory indexing
    are held exclusively with no re-check inside, so a peer that finished while we waited has its work
    redone; and nothing tests that the cache-hit path takes *no* lock.
@@ -467,6 +470,80 @@ they are evidence-backed rather than suspicions.
 
 
 
+## Pass-5 follow-up (2026-10-17) — fixed findings of the frozen-tree review
+
+The fifth pass reviewed the frozen tag `review-pass5` (`918f510`) against
+`review-base-5ddd05b` — 18 files, one facts sheet, seven read-only slices, both
+lenses. Verdict: **ship-with-fixes** (0 critical, 0 high, 8 fix-now mediums).
+Every finding below is fixed and pinned; the tree is green at
+**584 collected / 78 deselected / 506 default** with `mise lint`, `mise drift`
+(0 drift) and `mise compliance` clean.
+
+- **The facts sheet was wrong about four of its own facts.**
+  `limits()` called the *tracked* `data/golden` fixture set "clone-invisible"
+  (`git ls-files` never prints a directory; `_is_tracked` now accepts any tracked
+  file under one). `liveness()` described the two probes backwards — `buildlock`
+  is the weak `os.kill` side *by policy*, the pre-hook is the libuv side, and they
+  deliberately diverge (measured: an exited child reads `alive` to `os.kill`,
+  `ESRCH` to node). A bare `text=True` turned one non-UTF-8 byte into a `TypeError`
+  that escaped every guard (now `encoding=`/`errors="replace"`, as `services.py`
+  already did). And a red gate's row reported only its trailer, naming no finding.
+- **The suite no longer runs the gates.**
+  `test_review_facts.py::test_every_section_renders` called `rf.collect()`
+  unstubbed, so the *offline* suite shelled out to ruff + drift + compliance and
+  spawned a second `pytest --collect-only` inside the first (measured 4.0 s, 9
+  spawns; the two share `.pytest_cache`). The module's `counts` and gate rows are
+  stubbed, and its remaining facts are unit-tested.
+- **The rest of the sheet's facts are honest**: a git that cannot answer is no
+  longer reported as "untracked"/"clone-invisible" (`None` is its own verdict),
+  `counts=None` renders as `(unavailable)`, mise's trivial string-task form no
+  longer raises, and the suite and `mise lint-ts` are documented as *not* rows.
+- **§8's predicate is ruff's, not a string prefix.** A selector resolves inside
+  its linter, so `B` (flake8-bugbear) never covers `BLE001` — verified with
+  `ruff check --select B` on a blind `except`, which lints clean, while
+  `--select BLE` reports it. The old predicate judged every such family
+  "selected", i.e. it accepted exactly the dead suppressions the check exists for
+  (the "six of nine were dead" count is now what it computes).
+- **§11 parses every summary pytest prints and treats a failed collection as its
+  own verdict**: a legitimate 0-deselected (or all-deselected) config was a false
+  "cannot count the test suite", and a broken collection's partial count was
+  accepted and then blamed on the docs.
+- **The layer map's parser follows the convention, not the markup**: all three
+  bullet markers open a block, fenced examples are skipped, and a file named twice
+  in one block is one owner. Each of those was a wrong verdict.
+- **The pre-hook's new `MISE_EXE` had no leading `\b`**, so any word *ending* in
+  `mise` before a corpus word reached the probe (`uv run python -c "print('promise
+  docs')"`, and newly `compromise.exe syf`) — a wrong block while a peer builds,
+  the one outcome the probe promises never to produce. All eleven writer spellings
+  still probe; the four false positives do not.
+- **`BuildLockUnavailable` says what happened.** Its message covered only "cannot
+  create" while the class is now also raised for an ownerless record whose claim
+  the filesystem refuses — where the file *exists* and removing it is the remedy.
+  It now says "cannot acquire", and the inner text names that remedy.
+- **`buildlock`'s docstring named a test that does not exist**
+  (`test_win32_liveness_residuals`); `mise drift` drops `::`-selectors by design,
+  so nothing else could see it. `tests/test_buildlock.py` now resolves every
+  `tests/…::name` pointer in the module, and the liveness test's mechanism comment
+  was corrected to the measured residual. The vanished-claim branch is pinned
+  through the pause it skips (a refused steal whose file is gone must not burn the
+  retry budget), and the peer fake returns a real record instead of a sentinel.
+- **`agentic_tune` labels the budget the server served.** A *default*
+  `--reasoning-budget` does not rewrite the live `[env]` flags, so with `[env]`
+  carrying 8192 the row said `b4096` — the same mislabelling the `--llm-restart`
+  verdict exists to prevent. `_served_budget` reads the served value (and falls
+  back to the requested one when no `[env]` pair exists).
+- **Docs made truthful**: the L8 map and AGENTS.md no longer enumerate the
+  suppressions this range deleted; L12/L13 match the code they describe (the family
+  rule, the dormant `lint.ignore` arm, the three docs in the count-quote set, the
+  gate-summary format, "read-only" meaning *nothing git-visible*); REVIEW's own
+  coverage clause, its `data/` gitignore parenthetical and its "this protocol in
+  prompt form" claim were corrected; `/frozen-review` documents a fallback for an
+  empty `$1` (this pass ran with an empty target) and its timings match
+  measurement.
+
+The ten items in "Leftovers for the next pass" above are untouched — they were
+declared out of scope for this pass and remain ordinary work.
+
 ## Review protocol — how a pass is run now
 
 Three review passes ran in a row on this PR, each fixing the previous one's
@@ -476,21 +553,26 @@ below removes one of those costs.
 1. **Freeze first.** Commit the work in progress and tag it
    (`git tag review-base-<sha>`); reviewers get that SHA — never a dirty working
    tree, never `origin/HEAD...main`. Every fix is a new commit and a new tag.
-   The same instruction lives as a project slash command —
-   `/frozen-review <tag> <base-tag> [focus]` (`.omp/commands/frozen-review.md`) —
-   which is this protocol in prompt form; it also hard-stops on a dirty tree.
+   The reviewer-side half of the same instruction lives as a project slash command —
+   `/frozen-review <tag|sha> <base-tag> [focus]` (`.omp/commands/frozen-review.md`) —
+   which hard-stops on an already-dirty tree. The freeze/tag step *above* stays the
+   operator's, and the command does not carry it (nor §4's two lenses): running the
+   command on a dirty tree is a report, not a review.
    *Evidence*: the third pass's two high findings (a failed restart exiting `0`
    and leaving the production server down, `--sweep-reasoning` persisting
    mislabeled rows) and its untracked TS-gate runner all lived in the layer that
    was being *written* while that pass ran, so no reviewer had seen it by
    construction.
 2. **Compute the facts once.** `uv run python scripts/review_facts.py` (L13) and
-   paste the sheet into the shared context of every brief, with "do not
-   re-derive; do not re-run the suite, ruff, drift or compliance". It carries the
-   suite counts, the gate verdicts, the task set, whether the tree is frozen, the
-   platform's liveness answer and the working-tree-only inputs. *Evidence*: four
-   reviewers re-derived the same numbers, and three of them reported a fact as a
-   finding (a stale count, an untracked file, a drift status).
+   paste the sheet into the shared context of every brief, with "do not re-derive
+   the rows it already carries (ruff / drift / compliance), and no slice runs the
+   suite". The sheet carries the suite *counts* (a collection), the three gate
+   verdicts, the task set, whether the tree is frozen, the platform's liveness
+   answer and the working-tree-only inputs. The full suite and `mise lint-ts` are
+   deliberately **not** rows, so the one runner measures those once and reports
+   them alongside the sheet. *Evidence*: four reviewers re-derived the same
+   numbers, and three of them reported a fact as a finding (a stale count, an
+   untracked file, a drift status).
 3. **Fan out by risk, not by file count.** ~8 agents in three tiers: changed
    *logic* (deep, and allowed to execute code paths — both highs of the third
    pass came from a reviewer running the path rather than reading it),

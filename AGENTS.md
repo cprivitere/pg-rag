@@ -142,7 +142,8 @@ corpus_search, player_state`.
   cutover — nothing reads them. `retrieval_traces/` is live (loop traces).
 - `.omp/` — oh-my-pi config: `RULES.md`, `config.yml`, `WATCHDOG.md`,
   `hooks/pre/00-repo-lock.ts`, and `commands/frozen-review.md` (the review
-  protocol as a project slash command: `/frozen-review <tag> <base-tag>`).
+  protocol as a project slash command:
+  `/frozen-review <tag|sha> <base-tag> [focus]`).
 - `.agents/skills/` — all agent skills, discoverable by any agent harness:
   `pg-rag`, `pg-data`, `retrieval`, `evaluation`, `testing` (project skills) +
   `molab-notebook` (pairing on the molab-hosted marimo notebook). Skills live
@@ -334,9 +335,9 @@ lock by hand-editing it; to clear a stuck one, delete `data/.omp-build.lock`.
 ## Testing & QA
 
 - **Framework**: pytest via `uv run pytest`; the counts this doc quotes are
-  **568 collected / 78 deselected / 490 default** (asserted by `mise drift`
+  **584 collected / 78 deselected / 506 default** (asserted by `mise drift`
   against a real collection) — the 78 being 16 data-heavy tests + the 62
-  parametrized golden cases, so the default offline run leaves **490** (one POSIX-only port-owner case skips on Windows) — all
+  parametrized golden cases, so the default offline run leaves **506** (one POSIX-only port-owner case skips on Windows) — all
   offline (temp-dir integration, mocked servers). The golden gate is the only
   suite that needs any server.
 - **Golden eval** (`tests/test_golden_check.py`): parametrized over
@@ -382,8 +383,8 @@ lock by hand-editing it; to clear a stuck one, delete `data/.omp-build.lock`.
   `uv run ruff check src scripts tests` must be clean — a failing check fails
   `uv run pytest`. Run `mise lint` after editing code (`mise format` applies the
   safe autofixes: import sort, unused imports, f-strings, formatting). Rules
-  live solely in `ruff.toml`; the per-file-ignores there (scripts: broad
-  excepts, unchecked subprocess; tests: broad catches) are deliberate. New rule
+  live solely in `ruff.toml`; the per-file-ignores there (scripts: unused
+  unpack/vars; tests: unused unpack) are deliberate. New rule
   ⇒ fix all findings in the same commit.
 - **TypeScript gate** (same `tests/test_lint.py` / L8 layer): every JS/TS file
   the repo ships must parse — the pre-command hook (`.omp/hooks/**`) and the

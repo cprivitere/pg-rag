@@ -90,11 +90,16 @@ const TTL_MS = 3 * 60 * 60 * 1000;
 const CORPUS_TASKS = "sync-(?:fast|full|wiki)|generate-docs|build-bm25|build-tool-corpus|syf|syw|docs|b25|btc|sy";
 const MISE_SKIP = "(?:[^\\s|&;<>()]+\\s+){0,12}?";
 // `mise` may be spelled with a path or an interpreter extension (`mise.exe`,
-// `F:\tools\mise.exe`, `./mise.cmd`) — the Windows spelling of the same writer.
-// A *quoted* one (`& "$env:MISE_BIN\mise.exe" syf`) still misses: its token class
-// excludes the call operator and the quotes, so it stays in the "no early
-// warning, never a wrong block" class the writers' own lock covers.
-const MISE_EXE = "(?:[^\\s|&;<>()]*[\\\\/])?mise(?:\\.exe|\\.cmd|\\.ps1)?";
+// `F:\tools\mise.exe`, `./mise.cmd`, or PowerShell's unquoted
+// `$env:MISE_BIN\mise.exe`) — the Windows spelling of the same writer. `\b`
+// before `mise` keeps this alternation from matching a *word that ends in* it
+// (`promise docs`, `compromise.exe syf`): without it those reached the probe,
+// i.e. a command that cannot rewrite corpus state was denied while a peer built.
+// A *quoted* spelling (`& "$env:MISE_BIN\mise.exe" syf`) still misses: the match
+// would have to swallow the closing quote, which the `\s+` that must follow the
+// token cannot, so it stays in the "no early warning, never a wrong block" class
+// the writers' own lock covers.
+const MISE_EXE = "(?:[^\\s|&;<>()]*[\\\\/])?\\bmise(?:\\.exe|\\.cmd|\\.ps1)?";
 const DESTRUCTIVE = new RegExp(
   "(?:\\b|_)(build-documents|build-bm25|build-tool-corpus|generate-docs)(?:\\b|\\s|\\s-|$)" +
     `|${MISE_EXE}\\s+${MISE_SKIP}` +
