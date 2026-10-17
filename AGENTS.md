@@ -322,9 +322,9 @@ lock by hand-editing it; to clear a stuck one, delete `data/.omp-build.lock`.
 
 ## Testing & QA
 
-- **Framework**: pytest via `uv run pytest`; the suite collects **483 tests**,
+- **Framework**: pytest via `uv run pytest`; the suite collects **486 tests**,
   of which **78 are deselected by the default `not slow` marker** (16
-  data-heavy tests + the 62 parametrized golden cases), leaving **405** in the
+  data-heavy tests + the 62 parametrized golden cases), leaving **408** in the
   default offline run (one POSIX-only port-owner case skips on Windows) — all
   offline (temp-dir integration, mocked servers). The golden gate is the only
   suite that needs any server.

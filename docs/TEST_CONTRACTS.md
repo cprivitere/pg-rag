@@ -401,10 +401,25 @@ test (prove the source is fine) or recording a deliberate contract change
   `mise build-tool-corpus`: an agent-issued run is blocked by the pre-hook
   probe, a plain-shell run fails with *corpus build already running*.
 
+### L12 — Docs drift gate (`scripts/check_docs.py`)
+
+- **Tests**: `test_check_docs.py`
+- **Source**: `scripts/check_docs.py` (`mise drift`, alias `dc`).
+- **Contracts**: every `tests/test_*.py` is named in this map, and every test path this map names
+  exists; every backticked `scripts|src|tests|docs`-prefixed path in AGENTS.md and the skills
+  resolves, over `.py`, `.sh` **and** `.ps1` (the classes the 2026-10-16 task/script audit deleted —
+  a `.py`-only scan cannot see a surviving pointer to a removed script); `DOCUMENTS_VERSION` is quoted
+  as a symbol (never a literal) in AGENTS.md / this map / RULES.md / the pg-rag skill; the golden
+  counts and `SHORT_TIER_IDS` the evaluation skill quotes exist; the documented `golden_check.py`
+  flags are real; each `[env]` model single-source consumer (`scripts/services.py`,
+  `scripts/agentic_tune.py`, AGENTS.md) actually references `LLM_MODEL`/`LLM_FLAGS`. Exit 1 on any
+  drift.
+- **Change ⇒** `uv run pytest tests/test_check_docs.py`, then `mise drift` (must print `0 drift`).
+
 ## Hard rules (no exceptions)
 
 1. A test that **changes an assertion** is a **contract change** — state the
-   new contract in the test and run the layer's sibling suite (L1–L11 above).
+   new contract in the test and run the layer's sibling suite (L1–L12 above).
 2. A test that **fails without a contract change** is a **regression in
    source** — fix the source, not the test.
 3. Never hand-edit a build artifact to satisfy a test (`documents.json`,

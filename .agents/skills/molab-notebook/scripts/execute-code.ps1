@@ -7,9 +7,11 @@
 #   execute-code.ps1 -Url URL [-File PATH | -Session ID] script.py
 #   some-pipeline | execute-code.ps1 -Url URL [-File PATH | -Session ID]
 #
-# Find the URL with discover-servers.ps1. With one notebook open on the server
-# the session is resolved automatically. -File stably identifies a notebook;
-# -Session targets an exact (but ephemeral) session ID.
+# Find the URL + token with the sibling molab-connect.ps1: it caches the
+# sandbox's connect block (`-Pasteline "<block>" -Save`) and `-Info` prints the
+# cached url/token plus a live kernel probe. With one notebook open on the
+# server the session is resolved automatically. -File stably identifies a
+# notebook; -Session targets an exact (but ephemeral) session ID.
 #
 # Auth: set MARIMO_TOKEN env var (preferred) or pass -Token TOKEN (visible in ps).
 [CmdletBinding()]
@@ -32,7 +34,8 @@ $ErrorActionPreference = "Stop"
 function Usage {
     Write-Host "Usage: execute-code.ps1 -Url URL [-File PATH | -Session ID] -Code 'code'" -ForegroundColor Yellow
     Write-Host "       execute-code.ps1 -Url URL [-File PATH | -Session ID] script.py" -ForegroundColor Yellow
-    Write-Host "URL:   run discover-servers.ps1; it reports the url to use." -ForegroundColor Yellow
+    Write-Host "URL:   run molab-connect.ps1 -Info (cached url + token + kernel probe), or" -ForegroundColor Yellow
+    Write-Host "       delegate through molab-connect.ps1, which fills -Url/-Token from cache." -ForegroundColor Yellow
     Write-Host "Auth:  set MARIMO_TOKEN env var (preferred) or pass -Token TOKEN" -ForegroundColor Yellow
     exit 1
 }

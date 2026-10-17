@@ -285,11 +285,18 @@ found except two items deliberately deferred (below).
   its new `test_publish_store.py`, and the orphan
   `tests/fixtures/retrieval_cases.json` (a dense-path leftover) was deleted.
 
-**Deferred (open backlog).**
+**Resolved in a follow-up pass (2026-10-17).**
 
-1. `scripts/check_docs.py` resolves only backticked **`.py`** pointers, so a
-   stale `.sh`/`.ps1`/`.mise/tasks` reference in AGENTS.md/skills passes
-   `mise drift` silently — 12 of `479b6bc`'s deletions were that class. Widen
-   the regex *after* fixing item 2, or the gate fails immediately.
-2. `.agents/skills/molab-notebook/scripts/execute-code.ps1:10,35` name
-   `discover-servers.ps1`, which is not in the tree and never was tracked.
+1. `scripts/check_docs.py` now resolves backticked `scripts|src|tests|docs`
+   pointers over **`.py`, `.sh` and `.ps1`** (the extension class that let 12 of
+   `479b6bc`'s deletions pass silently), split into testable helpers
+   (`_doc_refs` / `_missing_doc_refs` / `_doc_blob`). New layer **L12**
+   (`tests/test_check_docs.py`) pins the widened capture, a vanished pointer
+   being reported, and the real AGENTS.md + skills blob staying clean. Verified
+   `mise drift` → 21 OK / 0 drift with the wider scan.
+2. `.agents/skills/molab-notebook/scripts/execute-code.ps1` pointed at
+   `discover-servers.ps1`, which never existed in the skill; the URL/token flow
+   is its sibling `molab-connect.ps1` (`-Pasteline "<block>" -Save`, then
+   `-Info` for the url + kernel probe). Both the header comment and the Usage
+   text now name it. The `scripts/molab_vllm_launch.sh` the molab skill
+   references **does** exist (checked) — it was never part of this backlog.

@@ -7,7 +7,9 @@ script is the documentation analogue. It asserts stable, meaningful facts:
 
 - every test file is covered by docs/TEST_CONTRACTS.md (and nothing it
   references has vanished) — the layer->test map cannot quietly diverge;
-- file paths named in backticks under AGENTS.md / the skills actually exist;
+- file paths named in backticks under AGENTS.md / the skills actually exist
+  (`.py`, `.sh` and `.ps1` — the executable-script classes were deleted by the
+  task/script audit, so a `.py`-only scan could not see a surviving pointer);
 - contract constants (DOCUMENTS_VERSION) and the golden shape agree across the
   docs that quote them;
 - the golden-set counts the evaluation skill quotes are real.
@@ -48,6 +50,29 @@ def _exists(*parts: str) -> bool:
     return ROOT.joinpath(*parts).exists()
 
 
+# Backticked repo-relative paths named in AGENTS.md / the skills. The
+# executable-script classes are in scope: the 2026-10-16 task/script audit
+# deleted `scripts/*.ps1` and `scripts/*.sh` files, and a `.py`-only scan
+# cannot see a surviving pointer to one of them.
+_DOC_PATH_RE = re.compile(r"`((?:scripts|src|tests|docs)/[A-Za-z0-9_./]+\.(?:py|sh|ps1))`")
+
+
+def _doc_refs(text: str) -> set[str]:
+    """The repo-relative paths named in backticks in `text`."""
+    return set(_DOC_PATH_RE.findall(text))
+
+
+def _missing_doc_refs(text: str) -> list[str]:
+    """The subset of `_doc_refs(text)` that does not exist on disk."""
+    return sorted(ref for ref in _doc_refs(text) if not _exists(ref))
+
+
+def _doc_blob() -> str:
+    """AGENTS.md + every skill's SKILL.md, concatenated."""
+    sources = [ROOT / "AGENTS.md", *(ROOT / ".agents" / "skills").glob("*/SKILL.md")]
+    return "\n".join(f.read_text(encoding="utf-8") for f in sources if f.exists())
+
+
 def main() -> int:
     # --- 1. TEST_CONTRACTS covers every test file (and vice versa) ---------
     tc = ROOT / "docs" / "TEST_CONTRACTS.md"
@@ -69,10 +94,7 @@ def main() -> int:
             _report("OK", "TEST_CONTRACTS refs resolve")
 
     # --- 2. Backticked file paths in AGENTS.md + skills resolve ------------
-    doc_sources = [ROOT / "AGENTS.md", *(ROOT / ".agents" / "skills").glob("*/SKILL.md")]
-    doc_blob = "\n".join(f.read_text(encoding="utf-8") for f in doc_sources if f.exists())
-    named = set(re.findall(r"`((?:scripts|src|tests|docs)/[A-Za-z0-9_./]+\.py)`", doc_blob))
-    missing_files = sorted(f for f in named if not _exists(f))
+    missing_files = _missing_doc_refs(_doc_blob())
     if missing_files:
         _drift("docs reference missing files", ", ".join(missing_files))
     else:
