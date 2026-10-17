@@ -5,8 +5,8 @@ description: Regression-triage and test discipline for pg-rag — how to decide 
 
 # testing — regression triage & test discipline
 
-The suite collects 503 tests; the default `not slow` marker deselects 78 (16
-data-heavy tests + the 62 parametrized golden cases), leaving 425 in the default
+The suite collects 537 tests; the default `not slow` marker deselects 78 (16
+data-heavy tests + the 62 parametrized golden cases), leaving 459 in the default
 offline run (one POSIX-only port-owner case skips on Windows). Everything is
 offline — the golden gate is the only suite that needs a server, and only the
 LLM (:8080). When a test fails, triage BEFORE
@@ -24,7 +24,7 @@ of which file defends which contract).
    - Yes → update the test to the new contract (a CONTRACT CHANGE — see rules).
    - No → the failure is a real regression: **fix the source, never the test.**
 3. **Wrong-layer check.** If your fix targets `data/documents.json`,
-   `data/wiki/.parsed.json`, `data/derived/*`, `data/bm25_index.pkl`,
+   `data/derived/wiki_parsed.json`, `data/derived/*`, `data/bm25_index.pkl`,
    `data/tool_documents.json`, `data/tool_bm25.pkl`, or a real
    `data/wiki/.meta.json` — STOP. Those are build outputs (`RULES.md #2`):
    change the builder that produces them, not the artifact.

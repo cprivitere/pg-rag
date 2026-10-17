@@ -238,13 +238,14 @@ data/agentic_tune/*
 skills-lock.json
 docs/superpowers/
 
-# Retrieval eval harness output (generated) — never commit
-evaluation/results/
-
 # Local runtime output (service logs + CLI/golden capture) — never commit.
 # The generic template above only covers `*.log`, so plain-text captures under
 # logs/ were stageable until this entry.
 logs/
+
+# Lint scratch dir — `ruff.toml` extend-exclude covers `.tmp`, so scratch files
+# there lint clean but were still stageable; ignore it here too.
+.tmp/
 
 # Other AI tool local files — never commit
 .devin/

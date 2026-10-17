@@ -1,9 +1,12 @@
-"""Tests scripts.services: the manager's argv/env assembly, port-owner
-parsing, pidfile handling/identity, stop's port verdict and status mapping are
-the launch contract the mise tasks (`llm-start`/`llm-stop`/`chat-start`/
-`chat-stop`/`status`/`debug-llm`) promise. No service process (llama-server,
-Gradio) is ever spawned — the only subprocesses are a throwaway
-`sys.executable -c pass` and the real `tasklist`/`ps` identity probes."""
+"""Tests scripts.services: the manager's argv/env assembly, the `start` spawn
+kwargs (the env merge, `cwd`, and the session/creation flags a background start
+depends on), port-owner parsing, pidfile handling/identity, `_kill_tree`'s kill
+verdict and `stop`'s port verdict, and status mapping are the launch contract the
+mise tasks (`llm-start`/`llm-stop`/`chat-start`/`chat-stop`/`status`/
+`debug-llm`) promise. No service process (llama-server, Gradio) is ever spawned —
+the only subprocesses are a throwaway `sys.executable -c pass` and the real
+`tasklist`/`ps` identity probes, and every `Popen` is a fake whose kwargs are
+recorded."""
 
 import importlib.util
 import os
@@ -419,27 +422,82 @@ def _posix_kill_env(
 
 def test_kill_tree_windows_uses_taskkill_tree(monkeypatch):
     """contract: the Windows kill is `taskkill /PID <pid> /T /F` — /T is what
-    reaches the llama-server/gradio children holding the port."""
+    reaches the llama-server/gradio children holding the port. A taskkill that
+    ran (return code 0) is a signal handed over, so the verdict is True."""
     calls: list[list[str]] = []
     monkeypatch.setattr(services.os, "name", "nt", raising=False)
-    monkeypatch.setattr(services.subprocess, "run", lambda argv, **kw: calls.append(list(argv)))
-    services._kill_tree(4242, ours=True)
+
+    def fake_run(argv, **_kwargs):
+        calls.append(list(argv))
+        return _FakeRun()  # return code 0: the kill went out
+
+    monkeypatch.setattr(services.subprocess, "run", fake_run)
+    assert services._kill_tree(4242, ours=True) is True
     assert calls == [["taskkill", "/PID", "4242", "/T", "/F"]]
+
+
+def test_kill_tree_windows_a_taskkill_that_cannot_run_signalled_nothing(monkeypatch, capsys):
+    """A `taskkill` that cannot even start (no binary on PATH, a wedged one timing
+    out) sends no signal: the verdict is False, so `stop` will not wait out the
+    grace window for it."""
+    monkeypatch.setattr(services.os, "name", "nt", raising=False)
+
+    def boom(argv, **_kwargs):
+        raise OSError("no taskkill here")
+
+    monkeypatch.setattr(services.subprocess, "run", boom)
+    assert services._kill_tree(4242, ours=True) is False
+    assert "could not be run" in capsys.readouterr().out
+
+
+def test_kill_tree_windows_reports_a_failed_taskkill(monkeypatch, capsys):
+    """contract: `taskkill`'s exit code is read, not discarded. A non-zero code
+    (a refused kill: access denied, no such process) means nothing was signalled
+    — the verdict is False and the code + stderr are reported, because a silent
+    refusal is indistinguishable from a successful kill."""
+    monkeypatch.setattr(services.os, "name", "nt", raising=False)
+    monkeypatch.setattr(
+        services.subprocess,
+        "run",
+        lambda argv, **kw: _FakeRun(returncode=1, stderr="ERROR: The process not found.\n"),
+    )
+    assert services._kill_tree(4242, ours=True) is False
+    out = capsys.readouterr().out
+    assert "taskkill exited 1" in out
+    assert "ERROR: The process not found." in out
+
+
+def test_kill_tree_windows_reports_a_refusal_with_no_stderr(monkeypatch, capsys):
+    """The stderr a refused `taskkill` leaves may be unreadable (None) — the code
+    is still reported and the verdict is still False."""
+    monkeypatch.setattr(services.os, "name", "nt", raising=False)
+    monkeypatch.setattr(
+        services.subprocess, "run", lambda argv, **kw: _FakeRun(returncode=2, stderr=None)
+    )
+    assert services._kill_tree(4242, ours=True) is False
+    assert "taskkill exited 2" in capsys.readouterr().out
 
 
 def test_kill_tree_windows_refuses_a_system_pid_and_names_a_port_owner(monkeypatch, capsys):
     """`taskkill /T /F` on 0 or 4 would end a system process, and the port-owner
     path has no provenance at all — Windows gets the POSIX `pid <= 1` rule and
-    the same warning the POSIX branch prints."""
+    the same warning the POSIX branch prints. Nothing is signalled for an
+    unattributable pid, so that verdict is False; a completed taskkill is True."""
     calls: list[list[str]] = []
     monkeypatch.setattr(services.os, "name", "nt", raising=False)
-    monkeypatch.setattr(services.subprocess, "run", lambda argv, **kw: calls.append(list(argv)))
 
-    services._kill_tree(0, ours=False)
+    def fake_run(argv, **_kwargs):
+        calls.append(list(argv))
+        return _FakeRun()
+
+    monkeypatch.setattr(services.subprocess, "run", fake_run)
+
+    assert services._kill_tree(0, ours=False) is False
     assert calls == []
     assert "not a service we spawned" in capsys.readouterr().out
 
-    services._kill_tree(4242, ours=False)  # port-derived: killed, but named
+    # port-derived: killed, but named
+    assert services._kill_tree(4242, ours=False) is True
     assert calls == [["taskkill", "/PID", "4242", "/T", "/F"]]
     assert "came from the port owner" in capsys.readouterr().out
 
@@ -449,15 +507,68 @@ def test_kill_tree_posix_group_leader_escalates(monkeypatch):
     start_new_session) is killed as a group, SIGTERM first, SIGKILL after the
     grace."""
     signals = _posix_kill_env(monkeypatch, leader=True)
-    services._kill_tree(4242, ours=True)
+    assert services._kill_tree(4242, ours=True) is True
     assert signals == [("killpg", 4242, _SIGTERM), ("killpg", 4242, _SIGKILL)]
+
+
+def test_kill_tree_posix_permission_denied_on_getpgid_signals_nothing(monkeypatch, capsys):
+    """Another user's process holds the port: `getpgid` is refused, no signal is
+    sent, and the verdict is False — so `stop` returns at once instead of waiting
+    on a kill that never happened."""
+    monkeypatch.setattr(services, "signal", _Signals, raising=False)
+    monkeypatch.setattr(services.os, "name", "posix", raising=False)
+
+    def denied(pid):
+        raise PermissionError
+
+    monkeypatch.setattr(services.os, "getpgid", denied, raising=False)
+    monkeypatch.setattr(
+        services.os, "kill", lambda pid, sig: pytest.fail("signalled a foreign pid"), raising=False
+    )
+    assert services._kill_tree(4242, ours=True) is False
+    assert "permission denied" in capsys.readouterr().out
+
+
+def test_kill_tree_posix_permission_denied_on_kill_signals_nothing(monkeypatch, capsys):
+    """Same verdict when the group probe passes but the signal itself is refused:
+    nothing was sent, so the grace window (and `_wait_dead`) must not run."""
+    monkeypatch.setattr(services, "signal", _Signals, raising=False)
+    monkeypatch.setattr(services.os, "name", "posix", raising=False)
+    monkeypatch.setattr(services.os, "getpgid", lambda pid: pid + 1, raising=False)
+
+    def denied(pid, sig):
+        raise PermissionError
+
+    monkeypatch.setattr(services.os, "kill", denied, raising=False)
+    monkeypatch.setattr(
+        services, "_wait_dead", lambda *a, **k: pytest.fail("waited after a refused signal")
+    )
+    assert services._kill_tree(4242, ours=True) is False
+    assert "permission denied" in capsys.readouterr().out
+
+
+def test_kill_tree_posix_a_process_gone_before_the_signal_counts_as_done(monkeypatch):
+    """A kill that finds no process means the tree is already gone: nothing is
+    left to stop, so the verdict is True (the port is what `stop` then checks)."""
+    monkeypatch.setattr(services, "signal", _Signals, raising=False)
+    monkeypatch.setattr(services.os, "name", "posix", raising=False)
+    monkeypatch.setattr(services.os, "getpgid", lambda pid: pid + 1, raising=False)
+
+    def gone(pid, sig):
+        raise ProcessLookupError
+
+    monkeypatch.setattr(services.os, "kill", gone, raising=False)
+    monkeypatch.setattr(
+        services, "_wait_dead", lambda *a, **k: pytest.fail("waited for a gone process")
+    )
+    assert services._kill_tree(4242, ours=True) is True
 
 
 def test_kill_tree_posix_never_killpgs_a_foreign_group(monkeypatch, capsys):
     """contract: a pid that is not its own group leader is signalled alone — a
     killpg there would take out everything sharing that group."""
     signals = _posix_kill_env(monkeypatch, leader=False)
-    services._kill_tree(4242, ours=True)
+    assert services._kill_tree(4242, ours=True) is True
     assert [kind for kind, *_ in signals] == ["kill", "kill"]
     assert "only the top process was signalled" in capsys.readouterr().out
 
@@ -469,7 +580,7 @@ def test_kill_tree_posix_port_owner_never_killpgs(monkeypatch, capsys):
     terminal job all do), the group kill would take out a foreign group, so only
     the single pid is signalled."""
     signals = _posix_kill_env(monkeypatch, leader=True)
-    services._kill_tree(4242, ours=False)
+    assert services._kill_tree(4242, ours=False) is True
     assert [kind for kind, *_ in signals] == ["kill", "kill"]
     out = capsys.readouterr().out
     assert "only the top process was signalled" in out
@@ -482,7 +593,7 @@ def test_kill_tree_posix_own_group_is_never_killpged(monkeypatch, capsys):
     from inside that group (`mise` runs us in it), and killpg would SIGTERM this
     script too."""
     signals = _posix_kill_env(monkeypatch, leader=True, own_group=4242)
-    services._kill_tree(4242, ours=True)
+    assert services._kill_tree(4242, ours=True) is True
     assert [kind for kind, *_ in signals] == ["kill", "kill"]
     out = capsys.readouterr().out
     assert "only the top process was signalled" in out
@@ -491,16 +602,20 @@ def test_kill_tree_posix_own_group_is_never_killpged(monkeypatch, capsys):
 
 def test_kill_tree_posix_pid_one_is_never_killpged(monkeypatch, capsys):
     """contract: pid 1 is init/the caller's container entrypoint, never a service
-    this script spawned — no `killpg` for it under any reading."""
+    this script spawned — no `killpg` for it under any reading. POSIX still
+    signals the single pid (the warning names what it did), so the verdict is
+    True: the "nothing was signalled" branch belongs to the cases where no
+    signal goes out at all (Windows' `pid <= 1`, a permission denial, a failed
+    `taskkill`)."""
     signals = _posix_kill_env(monkeypatch, leader=True)
-    services._kill_tree(1, ours=True)
+    assert services._kill_tree(1, ours=True) is True
     assert [kind for kind, *_ in signals] == ["kill", "kill"]
     assert "only the top process was signalled" in capsys.readouterr().out
 
 
 def test_kill_tree_posix_tolerates_a_process_dying_mid_escalation(monkeypatch):
     signals = _posix_kill_env(monkeypatch, leader=True, killpg_error=ProcessLookupError)
-    services._kill_tree(4242, ours=True)  # must not raise
+    assert services._kill_tree(4242, ours=True) is True  # must not raise
     assert signals == [("killpg", 4242, _SIGTERM), ("killpg", 4242, _SIGKILL)]
 
 
@@ -514,14 +629,19 @@ def test_kill_tree_posix_gone_process_is_a_no_op(monkeypatch):
     monkeypatch.setattr(
         services, "_wait_dead", lambda *a, **k: pytest.fail("waited for a dead pid")
     )
-    services._kill_tree(4242, ours=True)
+    # Already gone = nothing left to stop, i.e. a done kill, not a refused one.
+    assert services._kill_tree(4242, ours=True) is True
 
 
 class _FakeRun:
     # `stdout` may be None: that is what `subprocess.run` returns when a strict
     # decode kills the reader thread — the failure mode these tests cover.
-    def __init__(self, stdout: str | None = ""):
+    # `returncode`/`stderr` are what the `taskkill` branch reads back: a refusal
+    # (non-zero code + message) is a *verdict*, not plumbing.
+    def __init__(self, stdout: str | None = "", returncode: int = 0, stderr: str | None = ""):
         self.stdout = stdout
+        self.returncode = returncode
+        self.stderr = stderr
 
 
 def test_process_image_parses_a_windows_tasklist_row(monkeypatch):
@@ -586,6 +706,7 @@ def test_child_probes_time_out_instead_of_hanging(monkeypatch):
     """Every probe read is bounded: a wedged powershell/tasklist/netstat must not
     hang `start`/`stop`/`status`, and a timeout means "could not read" (unknown),
     not an exception out of the command."""
+
     def fake_run(argv, **kwargs):
         raise services.subprocess.TimeoutExpired(argv, kwargs.get("timeout") or 1)
 
@@ -680,16 +801,31 @@ def _stub_service(monkeypatch, tmp_path, name):
 def _record_kills(monkeypatch) -> tuple[list[int], list[bool]]:
     """Record `stop`'s kill calls with the provenance it passed: `ours` is False
     when the pid came from `_port_owner` rather than a verified pidfile, which is
-    what forbids `_kill_tree`'s POSIX group kill."""
+    what forbids `_kill_tree`'s POSIX group kill. The fake reports the verdict a
+    real kill would (True: a signal went out), which is what `stop` gates its
+    grace poll on."""
     killed: list[int] = []
     provenance: list[bool] = []
 
     def fake_kill_tree(pid, *, ours):
         killed.append(pid)
         provenance.append(ours)
+        return True
 
     monkeypatch.setattr(services, "_kill_tree", fake_kill_tree)
     return killed, provenance
+
+
+def _stop_clock(monkeypatch) -> list[float]:
+    """Record `stop`'s grace-window sleeps without waiting: the fake clock reads
+    the deadline, then a moment inside the window, then one far past it (and any
+    later read lands past the deadline), so a real 10s stop becomes instantaneous
+    while every `sleep(0.2)` is still observable."""
+    ticks = iter([0.0, 1.0])
+    sleeps: list[float] = []
+    monkeypatch.setattr(services.time, "monotonic", lambda: next(ticks, 1e9))
+    monkeypatch.setattr(services.time, "sleep", sleeps.append)
+    return sleeps
 
 
 def test_failed_start_clears_pidfile(monkeypatch, tmp_path):
@@ -711,6 +847,137 @@ def test_failed_start_clears_pidfile(monkeypatch, tmp_path):
     monkeypatch.setattr(services.subprocess, "Popen", lambda *a, **k: _DeadProc())
     assert services.start("llm") == 1
     assert _read_pid("llm") is None
+
+
+class _SpawnedProc:
+    """A `Popen` stand-in: `start` reads only `pid`, `poll()` and `wait()`."""
+
+    pid = 31337
+    returncode: int | None = None
+
+    def __init__(self, wait_rc: int = 0):
+        self._wait_rc = wait_rc
+
+    def poll(self) -> int | None:
+        return None
+
+    def wait(self) -> int:
+        return self._wait_rc
+
+
+def _record_spawn(monkeypatch) -> list[dict]:
+    """Run a real `start` with no process and no socket: a fake `Popen` records
+    the launch kwargs and a stateful `_port_open` reports the port held from the
+    spawn on, so the start-grace loop takes its "accepts a connection" branch
+    immediately (no wait, no real spawn) and the pidfile write stays in tmp."""
+    open_state = {"held": False}
+    spawns: list[dict] = []
+
+    def fake_popen(argv, **kwargs):
+        spawns.append({"argv": list(argv), **kwargs})
+        open_state["held"] = True  # the service accepts from here on
+        return _SpawnedProc()
+
+    monkeypatch.setattr(services, "_port_open", lambda port: open_state["held"])
+    monkeypatch.setattr(services, "_process_start", lambda pid: "start-token")
+    monkeypatch.setattr(services.subprocess, "Popen", fake_popen)
+    return spawns
+
+
+@pytest.mark.parametrize("service", ["llm", "chat"])
+@pytest.mark.parametrize("foreground", [False, True])
+def test_start_spawn_contract(monkeypatch, tmp_path, service, foreground):
+    """contract: `start` hands `Popen` the launch shape the manager's other
+    promises rest on — the caller's environment with the service's own extra env
+    merged over it (chat's `PG_RAG_CHAT_NO_BROWSER=1` keeps the serving path from
+    popping a browser), `cwd=REPO_ROOT` (the argv's script paths are
+    repo-relative), and, for a background start, `start_new_session=True` with
+    `_CREATE_FLAGS`: DETACHED_PROCESS keeps the service off the task's console,
+    and the own session is the exact provenance `_kill_tree`'s POSIX `killpg`
+    must have before it will kill a group. Foreground inverts both, so Ctrl-C
+    reaches the child, and the pidfile it records is dropped again when the child
+    exits."""
+    _stub_service(monkeypatch, tmp_path, service)
+    _set_llm_env(monkeypatch)
+    spawns = _record_spawn(monkeypatch)
+    cmd = _llm_command() if service == "llm" else _chat_command()
+    extra_env = {} if service == "llm" else _chat_env()
+
+    assert services.start(service, foreground=foreground) == 0
+
+    assert len(spawns) == 1  # one spawn, never a second
+    spawn = spawns[0]
+    assert spawn["argv"] == cmd
+    assert spawn["cwd"] == services.REPO_ROOT
+    assert spawn["env"] == {**os.environ, **extra_env}
+    assert spawn["start_new_session"] is not foreground
+    assert spawn["creationflags"] == (0 if foreground else services._CREATE_FLAGS)
+    if service == "chat":
+        assert spawn["env"]["PG_RAG_CHAT_NO_BROWSER"] == "1"
+    else:
+        # the LLM's `[env]` model/flags travel in the environment, not argv only
+        assert spawn["env"]["LLM_MODEL"] == MODEL
+        assert spawn["env"]["LLM_FLAGS"] == FLAGS
+    # A background start leaves the pidfile the kill path trusts; a foreground
+    # one is the caller's own child and clears it on exit.
+    assert _read_pidfile(service) == ((31337, "start-token") if not foreground else (None, None))
+
+
+def test_background_start_logs_to_the_service_log_files(monkeypatch, tmp_path):
+    """contract: a background start detaches *and* logs: stdout goes to the spec's
+    log path (stderr either the same handle — the LLM — or its own file), because
+    a detached service's console output is otherwise lost."""
+    _stub_service(monkeypatch, tmp_path, "llm")
+    _set_llm_env(monkeypatch)
+    spawns = _record_spawn(monkeypatch)
+
+    assert services.start("llm") == 0
+    spawn = spawns[0]
+    assert Path(spawn["stdout"].name) == tmp_path / "llm-stdio.log"
+    assert spawn["stderr"] is spawn["stdout"]  # the LLM shares the handle
+
+
+def test_foreground_start_interrupt_exits_cleanly(monkeypatch, tmp_path, capsys):
+    """`mise debug-llm` runs the server in the foreground, so the operator's
+    Ctrl-C lands inside `proc.wait()`. That must read as a clean stop (other repo
+    entry points return 0 on Ctrl-C, e.g. `scripts/agentic_chat.py`) — never an
+    uncaught `KeyboardInterrupt` out of `main` — and must still leave no pidfile
+    behind."""
+    _stub_service(monkeypatch, tmp_path, "llm")
+    _set_llm_env(monkeypatch)
+
+    class _Interrupted(_SpawnedProc):
+        def wait(self) -> int:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(services, "_port_open", lambda port: False)
+    monkeypatch.setattr(services, "_process_start", lambda pid: "start-token")
+    monkeypatch.setattr(services.subprocess, "Popen", lambda *a, **k: _Interrupted())
+
+    assert services.start("llm", foreground=True) == 0
+    assert "interrupted" in capsys.readouterr().out
+    assert _read_pid("llm") is None  # the foreground child is gone with us
+
+
+def test_already_running_names_the_holder_when_it_can(monkeypatch, tmp_path, capsys):
+    """The already-running path is a success exit, but it must say *what* holds
+    the port whenever the OS can name it (`_port_owner` is already there for it,
+    so a bare port number is a missed hint); an unprivileged POSIX probe that
+    names nobody must print no phantom pid."""
+    _stub_service(monkeypatch, tmp_path, "llm")
+    monkeypatch.setattr(services, "_port_open", lambda port: True)
+    monkeypatch.setattr(services, "_port_owner", lambda port: 4242)
+    monkeypatch.setattr(
+        services.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned over a held port")
+    )
+    assert services.start("llm") == 0
+    assert "already running on :8080 (pid 4242)" in capsys.readouterr().out
+
+    monkeypatch.setattr(services, "_port_owner", lambda port: None)
+    assert services.start("llm") == 0
+    out = capsys.readouterr().out
+    assert "already running on :8080" in out
+    assert "pid None" not in out
 
 
 def test_stop_ignores_a_pidfile_that_lost_its_identity(monkeypatch, tmp_path):
@@ -764,6 +1031,65 @@ def test_stop_kills_the_matching_pidfile(monkeypatch, tmp_path):
     assert services.stop("llm") == 0
     assert killed == [4242]
     assert provenance == [True]  # the pidfile is the provenance a killpg needs
+
+
+def test_stop_does_not_wait_out_the_grace_window_when_nothing_was_signalled(
+    monkeypatch, tmp_path, capsys
+):
+    """contract: `STOP_GRACE_S` is a window for a *signalled* tree to die. When
+    nothing could be sent (an unattributable pid, a refused `taskkill`, a
+    permission-denied kill) the port cannot free itself by waiting, so `stop`
+    returns immediately, keeps the pidfile — still the only record of the
+    service — and says that nothing was signalled rather than blaming surviving
+    children of a kill that never ran."""
+    _stub_service(monkeypatch, tmp_path, "llm")
+    _write_pid("llm", 4242)
+    sleeps = _stop_clock(monkeypatch)
+    monkeypatch.setattr(services, "_pid_matches_service", lambda name, pid: True)
+    monkeypatch.setattr(services, "_kill_tree", lambda pid, *, ours: False)
+    monkeypatch.setattr(services, "_port_open", lambda port: True)
+
+    assert services.stop("llm") == 1
+    out = capsys.readouterr().out
+    assert sleeps == []  # no signal sent => nothing to wait for
+    assert "nothing was signalled" in out
+    assert "surviving children" not in out
+    assert _read_pid("llm") == 4242  # the port is still held: keep the record
+
+
+def test_stop_polls_the_grace_window_after_a_signal(monkeypatch, tmp_path, capsys):
+    """The mirror image of the refused-kill case: with a signal actually sent,
+    `stop` gives the tree its grace window before declaring the port stuck — so a
+    slow shutdown is still "Stopped" — and reports survivors only past it, again
+    keeping the pidfile while the port is held."""
+    _stub_service(monkeypatch, tmp_path, "llm")
+    _write_pid("llm", 4242)
+    sleeps = _stop_clock(monkeypatch)
+    monkeypatch.setattr(services, "_pid_matches_service", lambda name, pid: True)
+    monkeypatch.setattr(services, "_kill_tree", lambda pid, *, ours: True)
+    monkeypatch.setattr(services, "_port_open", lambda port: True)
+
+    assert services.stop("llm") == 1
+    out = capsys.readouterr().out
+    assert sleeps  # the window was really polled
+    assert "may have surviving children" in out
+    assert _read_pid("llm") == 4242
+
+
+def test_stop_clears_the_pidfile_only_against_a_free_port(monkeypatch, tmp_path, capsys):
+    """contract: the pidfile goes only when the port is actually free. A stop
+    whose signal freed the listener is a success and clears it; the held-port
+    cases above keep it."""
+    _stub_service(monkeypatch, tmp_path, "llm")
+    _write_pid("llm", 4242)
+    _stop_clock(monkeypatch)
+    monkeypatch.setattr(services, "_pid_matches_service", lambda name, pid: True)
+    monkeypatch.setattr(services, "_kill_tree", lambda pid, *, ours: True)
+    monkeypatch.setattr(services, "_port_open", lambda port: False)
+
+    assert services.stop("llm") == 0
+    assert "Stopped LLM Server (:8080)" in capsys.readouterr().out
+    assert _read_pid("llm") is None
 
 
 def test_stop_survives_identity_probes_that_could_not_decode(monkeypatch, tmp_path, capsys):

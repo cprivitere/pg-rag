@@ -1,15 +1,23 @@
-"""Tuning-harness contracts (L-agentic): case parsing, run-id, compare math.
+"""Tuning-harness contracts (L-agentic): case parsing, run-id, compare math,
+plus server control — `current`/`ornith` resolving to the live [env] pair, the
+direct-spawn restart path, and the restart verdict that keeps a mislabeled run
+row from ever being written.
 
 Fixture-driven; no live LLM. run_sweep_case is exercised via a stubbed
 run_loop so the sweep math (PASS/FAIL/ERROR classification, fact counting)
-is asserted without server dependencies.
+is asserted without server dependencies, and `_maybe_restart_server` is
+exercised with `_server_running`/`_spawn_server`/`subprocess.run` stubbed so no
+server is ever spawned.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys as _sys
 from pathlib import Path
+
+import pytest
 
 _sys.path.insert(0, "scripts")
 
@@ -103,3 +111,140 @@ def test_parity_pin(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "mkdir", lambda self, *a, **k: None)
     agentic_tune.run_once(args)
     assert captured["t"] == 0 and captured["s"] == 0
+
+
+def test_candidate_current_is_the_live_env_pair(monkeypatch):
+    """CONTRACT: `current` and `ornith` are one row — both re-read the
+    LLM_MODEL/LLM_FLAGS pair from the environment and both fail closed
+    (SystemExit) when that pair is unset."""
+    monkeypatch.setenv("LLM_MODEL", "org/Prod-1.5-9B:Q4_K_M")
+    monkeypatch.setenv("LLM_FLAGS", "-ngl 999 --reasoning-budget 4096")
+    row = agentic_tune.candidate("current")
+    assert row == agentic_tune.candidate("ornith")
+    assert row["model"] == "org/Prod-1.5-9B:Q4_K_M"
+
+    monkeypatch.delenv("LLM_FLAGS")
+    with pytest.raises(SystemExit):
+        agentic_tune.candidate("current")
+    with pytest.raises(SystemExit):
+        agentic_tune.candidate("ornith")
+
+
+def test_current_with_non_default_budget_spawns_directly(monkeypatch):
+    """CONTRACT: `--model current` resolves to the live [env] pair, so a restart
+    for a non-default --reasoning-budget rewrites the budget and takes the
+    direct `_spawn_server` path — never `mise run llm-start`, which would
+    re-apply [env] (4096) and serve it under a `b2048` run-id."""
+    monkeypatch.setenv("LLM_MODEL", "org/Prod-1.5-9B:Q4_K_M")
+    monkeypatch.setenv("LLM_FLAGS", "--no-mmproj -ngl 999 --reasoning-budget 4096")
+    running = {"now": True}
+    ran, spawned = [], []
+
+    def fake_run(argv, **kwargs):
+        ran.append(argv)
+        running["now"] = False  # llm-stop released the port
+
+    def fake_spawn(model, flags):
+        spawned.append((model, flags))
+        running["now"] = True  # the new server is serving
+
+    monkeypatch.setattr(agentic_tune, "_server_running", lambda: running["now"])
+    monkeypatch.setattr(agentic_tune, "_spawn_server", fake_spawn)
+    monkeypatch.setattr(agentic_tune.subprocess, "run", fake_run)
+    monkeypatch.setattr(agentic_tune.time, "sleep", lambda _s: None)
+
+    args = argparse.Namespace(model="current", reasoning_budget=2048, llm_restart=True)
+    assert agentic_tune._maybe_restart_server(args) is True
+    assert spawned == [("org/Prod-1.5-9B:Q4_K_M", "--no-mmproj -ngl 999 --reasoning-budget 2048")]
+    assert ran == [["mise", "run", "llm-stop"]]
+    assert all("llm-start" not in argv for argv in ran)
+
+
+def test_failed_restart_aborts_without_recording_a_run(tmp_path, monkeypatch):
+    """CONTRACT: a restart that never reaches the requested state (server never
+    comes up, or an unknown model key) returns a False verdict, and `main()`
+    exits non-zero without entering the sweep — a row must never be persisted
+    under a model/budget the server did not serve."""
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.delenv("LLM_FLAGS", raising=False)
+    ran, spawned = [], []
+    monkeypatch.setattr(agentic_tune, "_server_running", lambda: False)
+    monkeypatch.setattr(agentic_tune, "_spawn_server", lambda m, f: spawned.append((m, f)))
+    monkeypatch.setattr(agentic_tune.subprocess, "run", lambda argv, **k: ran.append(argv))
+    monkeypatch.setattr(agentic_tune.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(agentic_tune, "TUNE_DIR", tmp_path)
+    runs = []
+    monkeypatch.setattr(agentic_tune, "run_once", lambda a: runs.append(a) or {"passed": 0})
+
+    args = argparse.Namespace(model="gemma-26b-qat", reasoning_budget=2048, llm_restart=True)
+    assert agentic_tune._maybe_restart_server(args) is False  # spawned, never came up
+    assert len(spawned) == 1
+    model, flags = spawned[0]
+    assert model == "unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL"
+    assert flags.endswith("--reasoning-budget 2048")  # the requested budget, not [env]'s
+    assert "--reasoning-budget 4096" not in flags
+    # unknown model key = the requested pair was not reached either
+    unknown = argparse.Namespace(model="nope", reasoning_budget=4096, llm_restart=True)
+    assert agentic_tune._maybe_restart_server(unknown) is False
+    assert len(spawned) == 1  # the unknown key never launched anything
+
+    argv = [
+        "agentic_tune.py",
+        "--model",
+        "gemma-26b-qat",
+        "--reasoning-budget",
+        "2048",
+        "--llm-restart",
+    ]
+    monkeypatch.setattr(_sys, "argv", argv)
+    assert agentic_tune.main() == 1
+    assert runs == []
+    assert list(tmp_path.glob("*.json")) == []
+
+
+def test_reasoning_sweep_restores_the_production_pair(monkeypatch):
+    """CONTRACT: a --sweep-reasoning run ends by re-asserting the production pair
+    (a forced restart), so the harness never leaves a swept model/budget serving."""
+    monkeypatch.setenv("LLM_MODEL", "org/Prod-1.5-9B:Q4_K_M")
+    monkeypatch.setenv("LLM_FLAGS", "-ngl 999 --reasoning-budget 4096")
+    calls = []
+
+    def fake_restart(args, force=False):
+        calls.append((args.model, args.reasoning_budget, force))
+        return True
+
+    monkeypatch.setattr(agentic_tune, "_maybe_restart_server", fake_restart)
+    monkeypatch.setattr(agentic_tune, "run_once", lambda a: {"passed": 6})
+    monkeypatch.setattr(
+        _sys,
+        "argv",
+        [
+            "agentic_tune.py",
+            "--model",
+            "current",
+            "--sweep-reasoning",
+            "2048,256",
+            "--llm-restart",
+        ],
+    )
+    assert agentic_tune.main() == 0
+    assert calls == [("current", 2048, False), ("current", 256, False), ("current", 4096, True)]
+
+
+def test_server_probe_builds_its_url_from_the_shared_port(monkeypatch):
+    """CONTRACT: the health probe's URL comes from `services.LLM_PORT` — the same
+    knob `llm_argv` bakes into the launch argv — so a port change cannot leave
+    the probe pointing at the old one."""
+    import requests
+
+    from scripts.services import LLM_PORT
+
+    seen = {}
+
+    def fake_get(url, timeout=None):
+        seen["url"] = url
+        return type("_R", (), {"ok": True})()
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    assert agentic_tune._server_running() is True
+    assert seen["url"] == f"http://localhost:{LLM_PORT}/v1/models"

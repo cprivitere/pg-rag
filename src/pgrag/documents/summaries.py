@@ -226,7 +226,7 @@ def build_wiki_grow_summaries(wiki):
     (level, grow time, substrates, moon phases) is the only place the grow
     facts live, and grow-questions ("How do I grow Field Mushrooms?") rank
     stub-item families above it, so a dedicated summary gives retrieval a
-    direct hit regardless of reranker state."""
+    direct hit."""
     summaries = []
     for page_name, raw_text in wiki.items():
         if "Growing Time" not in raw_text:

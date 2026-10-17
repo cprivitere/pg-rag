@@ -250,7 +250,23 @@ def _publish_docs() -> int:
         raise SystemExit(f"{DOCS} is not valid JSON: {exc}") from exc
     if not isinstance(docs, list) or not docs:
         raise SystemExit(f"{DOCS} does not hold a non-empty list of documents")
-    stamp = json.loads(DOCS_STAMP.read_text(encoding="utf-8")).get("version")
+    # The stamp is the one artifact a human may hand-edit (it is plain JSON, not a
+    # build output), so a truncated or wrong-shape file must abort with the same
+    # actionable message as a stale one instead of a raw JSONDecodeError — and it
+    # must abort *closed*: publishing without a verified version match would ship a
+    # corpus the sandbox's tool-corpus build cannot stamp.
+    try:
+        stamp_doc = json.loads(DOCS_STAMP.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit(
+            f"{DOCS_STAMP} is not valid JSON: {exc} — run `mise generate-docs` first."
+        ) from exc
+    if not isinstance(stamp_doc, dict):
+        raise SystemExit(
+            f"{DOCS_STAMP} does not hold a JSON object with a version — "
+            "run `mise generate-docs` first."
+        )
+    stamp = stamp_doc.get("version")
     if stamp != DOCUMENTS_VERSION:
         raise SystemExit(
             f"{DOCS_STAMP} says version {stamp}, expected {DOCUMENTS_VERSION} — "

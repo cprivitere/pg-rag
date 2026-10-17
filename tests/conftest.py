@@ -7,7 +7,7 @@ asserts it is unchanged at teardown, so any test that mutates real source data
 fails loudly instead of silently corrupting the cache.
 
 Snapshot scope is deliberately narrow: for ``data/wiki`` only the page ``*.txt``
-and ``.meta.json`` are source. Derived artifacts (``.parsed.json``, ``curated/``)
+and `.meta.json` are source. Derived artifacts (``data/derived/wiki_parsed.json``, ``curated/``)
 are governed by the code moves that keep them out of the source dir, not by this
 guard.
 """

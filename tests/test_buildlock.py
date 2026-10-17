@@ -5,6 +5,12 @@ only ever released by the process that wrote the record, and is stolen when the
 record is gone/corrupt/stale/dead-pid — never while a live owner holds it. A
 corpus writer must therefore refuse to start work while a peer holds the lock.
 
+Two distinct failures, both `BuildLockError`: a *live* owner raises
+`BuildLocked` (contention — the caller may wait), while a lock path that cannot
+be created at all (a directory in its place, an uncreatable artifact dir) raises
+`BuildLockUnavailable`. Mixing them reported contention for a filesystem error,
+naming a holder that does not exist and offering a remedy that cannot work.
+
 The lock file's *name and location* are a cross-repo contract: the omp pre-hook
 (`.omp/hooks/pre/00-repo-lock.ts`) probes `<artifact dir>/.omp-build.lock` and
 reads the same `{pid, startedAt}` record, so a rename here silently disarms the
@@ -25,7 +31,7 @@ from pgrag.config import DATA_DIR
 
 
 def _record(path: Path, pid: int, started_at_s: float) -> None:
-    path.write_text(json.dumps({"pid": pid, "startedAt": int(started_at_s * 1000)}))
+    path.write_bytes(json.dumps({"pid": pid, "startedAt": int(started_at_s * 1000)}).encode())
 
 
 def _hold(path: Path) -> None:
@@ -52,6 +58,28 @@ def test_a_live_owner_blocks_and_is_named(tmp_path):
     assert str(buildlock.lock_path(tmp_path)) in str(err.value)
 
 
+def test_a_directory_at_the_lock_path_is_unavailable_not_contention(tmp_path):
+    """A directory where the lock belongs can never be opened as a lock file.
+
+    That is a filesystem failure, not a peer's build: reporting contention
+    named a holder that does not exist ("an unidentified process") and offered
+    a remedy — delete the lock file — that cannot work.
+    """
+    buildlock.lock_path(tmp_path).mkdir()
+    with pytest.raises(buildlock.BuildLockUnavailable) as err, buildlock.corpus_lock(tmp_path):
+        pytest.fail("acquired a lock at an unusable path")
+    assert isinstance(err.value, buildlock.BuildLockError)  # errors-as-data base
+    assert "cannot create the corpus-build lock" in str(err.value)
+
+
+def test_an_uncreatable_lock_parent_is_unavailable(tmp_path):
+    """The same for an artifact dir that cannot be created at all."""
+    blob = tmp_path / "blob"
+    blob.write_text("a file, not a directory")
+    with pytest.raises(buildlock.BuildLockUnavailable), buildlock.corpus_lock(blob / "data"):
+        pytest.fail("acquired a lock under an uncreatable parent")
+
+
 def test_wait_polls_then_raises(tmp_path):
     """`wait` spends its budget polling before failing, so a peer's short step
     can finish first (the lazy-rebuild path relies on this)."""
@@ -67,26 +95,38 @@ def test_wait_polls_then_raises(tmp_path):
 @pytest.mark.parametrize(
     "record",
     [
-        pytest.param("not json at all", id="corrupt"),
+        pytest.param(b"not json at all", id="corrupt"),
+        # Non-UTF-8 bytes: `UnicodeDecodeError` is a ValueError, so catching
+        # only OSError let a binary-garbled lock crash the acquire path instead
+        # of being judged corrupt and stolen (the hook, which reads differently,
+        # called it corrupt — that is the promise kept here).
+        pytest.param(b'{"pid": 1, "startedAt": 0}\xff', id="non-utf-8"),
         # A pid that cannot exist. This is the win32 regression: `os.kill(dead,
         # 0)` raises OSError(22/winerror 87), NOT ProcessLookupError, so reading
         # it as "alive" left a crashed writer's lock unbroken for the whole TTL.
         pytest.param(
-            json.dumps({"pid": 2147483646, "startedAt": int(time.time() * 1000)}), id="dead-pid"
+            json.dumps({"pid": 2147483646, "startedAt": int(time.time() * 1000)}).encode(),
+            id="dead-pid",
         ),
-        pytest.param(json.dumps({"pid": 0, "startedAt": int(time.time() * 1000)}), id="zero-pid"),
+        pytest.param(
+            json.dumps({"pid": 0, "startedAt": int(time.time() * 1000)}).encode(), id="zero-pid"
+        ),
         pytest.param(
             json.dumps(
                 {"pid": os.getpid(), "startedAt": int((time.time() - buildlock.TTL_S - 60) * 1000)}
-            ),
+            ).encode(),
             id="past-ttl",
         ),
     ],
 )
 def test_unusable_records_are_stolen(tmp_path, record):
     """Corrupt, dead-pid, and past-TTL owners are all recoverable — a leaked
-    lock must never wedge the repo."""
-    buildlock.lock_path(tmp_path).write_text(record)
+    lock must never wedge the repo.
+
+    Contract (byte records): the record is judged by its *bytes*. A lock file
+    that is not valid UTF-8 is a corrupt record exactly like non-JSON text —
+    stolen, never raised out of the acquire path."""
+    buildlock.lock_path(tmp_path).write_bytes(record)
     with buildlock.corpus_lock(tmp_path) as path:
         assert json.loads(path.read_text())["pid"] == os.getpid()
 

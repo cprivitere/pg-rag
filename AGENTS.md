@@ -117,7 +117,8 @@ corpus_search, player_state`.
     `wiki_loader` (wiki text + `.meta.json` title mapping, orphan cleanup),
     `database.GameDatabase` (in-memory `tables` + `wiki` bag).
   - `documents/` — `builder.py`, `wiki_builder.py` (mwparserfromhell →
-    sections/chunks, `parent_id` links), `chunking.py`, `resolver.py` (internal
+    sections/chunks, `parent_id` links), `chunking.py`, `tokenizer.py` (the
+    token counter the chunk budgets measure with), `resolver.py` (internal
     code → display name), `skill_profiles.py`, `summaries.py` (gathering skill
     maps), `creature_zones.py`, `combat_xp.py`.
   - `rag/bm25.py` — the lexical index (build + persistence +
@@ -314,18 +315,19 @@ lock by hand-editing it; to clear a stuck one, delete `data/.omp-build.lock`.
 - **Single-source models**: refs + tuning flags live once in `mise.toml [env]`
   (`LLM_MODEL`/`LLM_FLAGS`); consumed by `scripts/services.py` and
   `scripts/agentic_tune.py` (`os.environ` — the launch path and the `ornith`
-  sweep row / `--llm-restart` argv) and `scripts/check_docs.py` (tomllib) — the
-  same three consumers `mise drift` enforces (plus this file, which the gate
-  reads as the fourth). `mise drift` fails if any consumer hardcodes a model
-  literal. Tuning rationale: `docs/LLM_MODEL_WIRING.md`.
+  sweep row / `--llm-restart` argv). `scripts/check_docs.py` reads `[env]`
+  (tomllib) and fails if any of `scripts/services.py`, `scripts/agentic_tune.py`
+  or this file hardcodes a model literal value — that trio is the consumer set
+  `mise drift` enforces (the gate itself is not a consumer). Tuning rationale:
+  `docs/LLM_MODEL_WIRING.md`.
 - Tests import the installed `pgrag` package — after changing `src/pgrag/`, no
   reinstall needed (editable install).
 
 ## Testing & QA
 
-- **Framework**: pytest via `uv run pytest`; the suite collects **503 tests**,
+- **Framework**: pytest via `uv run pytest`; the suite collects **537 tests**,
   of which **78 are deselected by the default `not slow` marker** (16
-  data-heavy tests + the 62 parametrized golden cases), leaving **425** in the
+  data-heavy tests + the 62 parametrized golden cases), leaving **459** in the
   default offline run (one POSIX-only port-owner case skips on Windows) — all
   offline (temp-dir integration, mocked servers). The golden gate is the only
   suite that needs any server.

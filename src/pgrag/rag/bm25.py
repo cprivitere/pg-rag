@@ -156,7 +156,11 @@ def save_bm25_index(model, documents, path=DEFAULT_PICKLE_PATH, source_path=DEFA
         "postings": model.postings,
         "documents": documents,
     }
-    tmp = f"{path}.tmp-{os.getpid()}"
+    # Unique per *call*, not just per pid: two saves in one process (a lazy
+    # rebuild racing an explicit build) must not share a temp name, or the
+    # second's dump/unlink would clobber the first mid-write and a reader's
+    # `os.replace` could publish a half-written pickle.
+    tmp = f"{path}.tmp-{os.getpid()}-{os.urandom(4).hex()}"
     try:
         with open(tmp, "wb") as f:
             pickle.dump(payload, f)

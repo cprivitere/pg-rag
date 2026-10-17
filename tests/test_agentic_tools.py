@@ -761,7 +761,9 @@ def test_corpus_search_reports_a_peer_holding_the_corpus_lock(tmp_path, monkeypa
     `run_loop` calls corpus_search for its SEED before any round, so a
     `BuildLocked` escaping here would abort the whole answer instead of letting
     the model fall back to sql_query/find_entities — the tool contract is
-    errors-as-data.
+    errors-as-data. It also leaves the peer's lock file in place: this process
+    never took the lock, and unlinking a live peer's lock would un-serialize
+    its build.
     """
     import os
     import time
@@ -781,3 +783,19 @@ def test_corpus_search_reports_a_peer_holding_the_corpus_lock(tmp_path, monkeypa
     out = tools.execute_tool("unused.db", "corpus_search", {"query": "alpha"}, corpus="tool")
     assert out.startswith("corpus_search error:")
     assert "corpus build already running" in out
+    assert buildlock.lock_path(tmp_path).exists(), "the tool deleted a live peer's lock"
+
+
+def test_corpus_search_reports_an_unusable_lock_path(tmp_path, monkeypatch):
+    """An uncreatable lock path is a filesystem error, but it is still
+    errors-as-data: the model gets the message instead of a dead answer."""
+    import pgrag.agentic.tools as tools
+    from pgrag import buildlock
+
+    monkeypatch.setattr(tools, "DEFAULT_TOOL_DOCS", str(tmp_path / "tool_documents.json"))
+    monkeypatch.setattr(tools, "DEFAULT_TOOL_PKL", str(tmp_path / "tool_bm25.pkl"))
+    buildlock.lock_path(tmp_path).mkdir()
+
+    out = tools.execute_tool("unused.db", "corpus_search", {"query": "alpha"}, corpus="tool")
+    assert out.startswith("corpus_search error:")
+    assert "cannot create the corpus-build lock" in out

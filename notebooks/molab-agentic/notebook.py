@@ -73,7 +73,7 @@ def store_token():
         if AUTO_TOKEN
         else "no sandbox token found — paste a read token for the private bucket."
     )
-    _mo.vstack([_mo.md(f"**HF auth** {_note}"), TOKEN_FORM])  # noqa: B018 -- display
+    _mo.vstack([_mo.md(f"**HF auth** {_note}"), TOKEN_FORM])  # display
     return AUTO_TOKEN, TOKEN_FORM
 
 
@@ -213,29 +213,52 @@ def store_snapshot(
 
 @app.cell
 def corpus_docs(HfFileSystem, json, os, shutil):
-    # --- Public corpus: data/documents.json + its version stamp ---
+    # --- Public corpus: data/documents.json + its version stamp, as a PAIR ---
     # corpus_search reads data/tool_documents.json + tool_bm25.pkl, which the
-    # next cell builds FROM this file with the tarball's own
-    # scripts/build_tool_corpus.py — and that build REFUSES to run without
-    # data/derived/documents_version.json, so the stamp ships with the corpus
-    # (`mise upload-docs` publishes both).
-    # Downloading to `.part` and renaming after the parse keeps a truncated or
-    # interrupted download from poisoning the cache: the parse is the integrity
-    # check (the public bucket carries no manifest).
+    # NEXT cell (pgrag_src, gated on DOCS_OK) builds FROM these two files with
+    # the tarball's own scripts/build_tool_corpus.py — and that build REFUSES to
+    # run without data/derived/documents_version.json, so the stamp ships with
+    # the corpus (`mise upload-docs` publishes both, at `documents.json` and
+    # `derived/documents_version.json`).
+    # Both files are downloaded to `.part` and parsed BEFORE either is promoted:
+    # the parse is the integrity check (the public bucket carries no manifest),
+    # and promoting as each one landed would leave a half-refreshed cache — the
+    # 185 MB documents.json next to a missing stamp — so every later run would
+    # re-download the corpus and fail the same way. A missing or unreadable
+    # stamp now fails HERE, naming the publish task, instead of surfacing a raw
+    # HF exception out of the build cell.
     _DOCS_SRC = "buckets/Nubula/paddock/documents.json"
     _STAMP_SRC = "buckets/Nubula/paddock/derived/documents_version.json"
     _LOCAL_DOCS = "data/documents.json"
+    # CWD-relative on purpose: the sandbox build runs the tarball's
+    # build_tool_corpus.py with `data/` under the CWD, and it addresses the
+    # stamp from the same CWD-relative tree as documents.json.
     _LOCAL_STAMP = "data/derived/documents_version.json"
 
-    def _fetch_json(fs, remote, local):
+    def _stage_json(fs, remote, local):
+        """Download `remote` to `<local>.part` and parse it there.
+
+        Returns `(part, payload)`; promotes NOTHING. The caller promotes every
+        staged file only once the whole pair parsed, so a failed stamp can never
+        leave a fresh documents.json (or a stray `.part`) behind.
+        """
         os.makedirs(os.path.dirname(local) or ".", exist_ok=True)
         _part = local + ".part"
-        with fs.open(f"hf://{remote}", "rb") as _fin, open(_part, "wb") as _fout:
-            shutil.copyfileobj(_fin, _fout)
-        with open(_part, encoding="utf-8") as _f:
-            _payload = json.load(_f)
-        os.replace(_part, local)
-        return _payload
+        try:
+            with fs.open(f"hf://{remote}", "rb") as _fin, open(_part, "wb") as _fout:
+                shutil.copyfileobj(_fin, _fout)
+            with open(_part, encoding="utf-8") as _f:
+                _payload = json.load(_f)
+        except Exception as _exc:
+            if os.path.exists(_part):
+                os.remove(_part)
+            raise RuntimeError(
+                f"[corpus] could not fetch + parse {remote} "
+                f"({type(_exc).__name__}: {_exc}) — `mise upload-docs` publishes "
+                "documents.json + derived/documents_version.json as a pair; publish "
+                "both, then re-run this cell"
+            ) from _exc
+        return _part, _payload
 
     DOC_COUNT = 0
     if os.path.exists(_LOCAL_DOCS) and os.path.exists(_LOCAL_STAMP):
@@ -244,8 +267,20 @@ def corpus_docs(HfFileSystem, json, os, shutil):
         print(f"[corpus] cached {DOC_COUNT:,} docs ({os.path.getsize(_LOCAL_DOCS):,} B)")
     else:
         _fs = HfFileSystem()
-        DOC_COUNT = len(_fetch_json(_fs, _DOCS_SRC, _LOCAL_DOCS))
-        _stamp = _fetch_json(_fs, _STAMP_SRC, _LOCAL_STAMP)
+        _staged = []
+        try:
+            _staged.append(_stage_json(_fs, _DOCS_SRC, _LOCAL_DOCS))
+            _staged.append(_stage_json(_fs, _STAMP_SRC, _LOCAL_STAMP))
+        except Exception:
+            # a failed pair leaves the corpus dir exactly as it was: neither
+            # file promoted, no `.part` left for the next run to trip over
+            for _part, _payload in _staged:
+                os.remove(_part)
+            raise
+        (_docs_part, _docs), (_stamp_part, _stamp) = _staged
+        os.replace(_docs_part, _LOCAL_DOCS)
+        os.replace(_stamp_part, _LOCAL_STAMP)
+        DOC_COUNT = len(_docs)
         print(
             f"[corpus] downloaded {DOC_COUNT:,} docs + stamp "
             f"v{_stamp.get('version')} ({os.path.getsize(_LOCAL_DOCS):,} B)"

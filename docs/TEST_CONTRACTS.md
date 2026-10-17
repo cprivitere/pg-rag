@@ -40,7 +40,7 @@ When a test fails, in order:
    - **No** — the behavior change was incidental or wrong. → The failure is a
      real regression. **Fix the source. Never touch the test.**
 3. **Wrong-layer check.** If your next edit targets
-   `data/documents.json`, `data/wiki/.parsed.json`, `data/derived/*`,
+   `data/documents.json`, `data/derived/wiki_parsed.json`, `data/derived/*`,
    `data/bm25_index.pkl`, `data/tool_documents.json`, `data/tool_bm25.pkl`, or
    a real `data/wiki/.meta.json` — **stop**. Those are build outputs
    (RULES.md #2). Fix the builder/loader that produces them. A failing test
@@ -75,8 +75,8 @@ test (prove the source is fine) or recording a deliberate contract change
   `test_flatten.py`, `test_metadata.py`, `test_wiki_builder.py`,
   `test_leveling.py`, `test_creature_zones.py`, `test_combat_xp.py`
 - **Source**: `src/pgrag/documents/` (`builder.py`, `wiki_builder.py`,
-  `chunking.py`, `resolver.py`, `skill_profiles.py`, `summaries.py`,
-  `creature_zones.py`, `combat_xp.py`), `src/pgrag/build.py`
+  `chunking.py`, `tokenizer.py`, `resolver.py`, `skill_profiles.py`,
+  `summaries.py`, `creature_zones.py`, `combat_xp.py`), `src/pgrag/build.py`
 - **Contracts**: doc key shape `{id, type, text, metadata}`; metadata
   scalar-safety (add-only, scalar-only, multi-value `" | "`-delimited —
   `test_doc_quality.py`); chunk max/overlap + `_chunk_N` ids + `parent_id`
@@ -130,10 +130,12 @@ test (prove the source is fine) or recording a deliberate contract change
   serves the pickle while the source is unchanged and rebuilds otherwise, and
   survives a stale/corrupt pickle by rebuilding instead of raising.
   `scripts/build_tool_corpus.py` refuses to run on a missing or stale
-  `DOCUMENTS_VERSION` stamp (the old `build-index` refusal, ported) and emits
-  the trimmed `data/tool_documents.json` + `data/tool_bm25.pkl` —
-  `test_build_tool_corpus.py` asserts all four arms of that refusal
-  (current/stale/missing docs/missing stamp) against tmp paths.
+  `DOCUMENTS_VERSION` stamp (the old `build-index` refusal, ported) — the stamp
+  (`data/derived/documents_version.json`) is addressed from the CWD like
+  `SRC`/`OUT`/`PKL`, so a CWD-rooted data tree (the molab sandbox) resolves all
+  four, not just the three — and emits the trimmed `data/tool_documents.json` +
+  `data/tool_bm25.pkl`; `test_build_tool_corpus.py` asserts all four arms of that
+  refusal (current/stale/missing docs/missing stamp) against tmp paths.
 - **Change ⇒** `uv run pytest tests/test_bm25.py tests/test_bm25_persist.py
   tests/test_build_tool_corpus.py`, then `mise build-bm25` and inspect
   `corpus_search --corpus full|tool`.
@@ -372,7 +374,10 @@ test (prove the source is fine) or recording a deliberate contract change
   (`taskkill /T /F` on Windows; on POSIX `killpg` **only** for a pid that came from a token-matched
   pidfile entry *and* leads its own group — a pid derived from the port owner, `pid <= 1`, or the
   caller's own group is signalled alone with a warning — SIGTERM then SIGKILL), so a foreign group
-  is never killpg'd; a spawn that dies immediately leaves no pidfile;
+  is never killpg'd; a kill that could not be sent at all (an unattributable `pid <= 1` on Windows, a
+  permission-denied signal, a `taskkill` that failed to run) skips the grace window and keeps the
+  pidfile — reported as that
+  failure, never as "surviving children"; a spawn that dies immediately leaves no pidfile;
   status probes the per-service health URL (`:8080/health` for the LLM, `:7860/` for chat) and treats
   HTTP 503 as **loading** (up), so `status` exits 0 on a healthy boot and 1 only when a service is
   genuinely down.
@@ -399,7 +404,11 @@ test (prove the source is fine) or recording a deliberate contract change
   chat-time BM25 rebuild spend `LAZY_REBUILD_WAIT_S` polling and then fail
   instead of rebuilding over a peer — surfaced by `corpus_search` as an error
   string (L3), because `run_loop` calls it for its seed — and the tool-corpus
-  derive abort before deriving.
+  derive abort before deriving. Every failure derives from `BuildLockError`:
+  contention is `BuildLocked`, while a lock path that cannot be created (an
+  unwritable artifact dir, a directory at the lock name, `EACCES` on the
+  `O_EXCL` open) raises `BuildLockUnavailable` carrying the `OSError` — a
+  filesystem error is never reported as the contention a caller could wait out.
 - **Why the writers own it**: a hook's lifetime is one tool call, and a build
   outlives it (an auto-backgrounded command returns at the ~60 s foreground
   threshold and keeps running), so the hook can only probe.
@@ -418,13 +427,18 @@ test (prove the source is fine) or recording a deliberate contract change
   exists; every backticked `scripts|src|tests|docs|.mise/tasks`-prefixed path in AGENTS.md and the
   skills resolves over `.py`, `.sh` **and** `.ps1` — with `-` in the name class, since the audit's
   deleted names are hyphenated, and a path a SKILL.md addresses as `scripts/…` resolving next to that
-  SKILL.md too (a skill bundles its own scripts); `DOCUMENTS_VERSION` is quoted as a symbol (never a
-  literal) in AGENTS.md / this map / RULES.md / the pg-rag skill; the golden counts,
-  `SHORT_TIER_IDS` and `GOLDEN_DIR` the evaluation skill/gate quote exist; the documented
-  `golden_check.py` flags are real; every skill directory with a `SKILL.md` is present and carries
-  frontmatter (the list is derived from the tree, not hardcoded); each `[env]` model single-source
-  consumer (`scripts/services.py`, `scripts/agentic_tune.py`, AGENTS.md) actually references
-  `LLM_MODEL`/`LLM_FLAGS`. Exit 1 on any drift.
+  SKILL.md too (a skill bundles its own scripts) — **this pointer scan is the one check with an
+  offline unit test** (`test_check_docs.py`); the rest of this list runs only under `mise drift`;
+  `DOCUMENTS_VERSION` is quoted as a symbol (never a literal) in AGENTS.md / this map / RULES.md /
+  the pg-rag skill; the golden counts, `SHORT_TIER_IDS` and `GOLDEN_DIR` the evaluation skill/gate
+  quote exist; the documented `golden_check.py` flags are real; every skill named by
+  `CANONICAL_SKILLS` **or** by the tree (a `SKILL.md` directory) is present and carries frontmatter —
+  the union is deliberate, since a tree-only list cannot report a canonical skill deleted outright
+  and a canonical-only list cannot report a newly landed skill; each `[env]` model single-source
+  consumer (`scripts/services.py`, `scripts/agentic_tune.py`, AGENTS.md) is scanned for a **leaked
+  literal value** of `LLM_MODEL`/`LLM_FLAGS` — the enforced rule is *no literal value*, not
+  "references the variable", so a consumer that names neither variable still passes. Exit 1 on any
+  drift.
 - **Change ⇒** `uv run pytest tests/test_check_docs.py`, then `mise drift` (must print `0 drift`).
 
 ## Hard rules (no exceptions)

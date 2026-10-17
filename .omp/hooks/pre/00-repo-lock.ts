@@ -34,9 +34,11 @@
 // mise's own tool-manager subcommand, not ours, and is deliberately not
 // matched. A read that merely names a build task (`grep -rn build-bm25 .`,
 // `git commit -m 'fix build-documents stamp'`) passes untouched: the probe is
-// only reached for commands that could rewrite corpus state. Every hook
-// runtime error is swallowed silently — this hook never blocks a command it
-// cannot reason about.
+// only reached for commands that could rewrite corpus state. The probed root
+// is the repo the *call* runs in, not necessarily the session's: a bash call's
+// own non-empty `cwd` (another checkout) wins over the session cwd, which is
+// only the fallback. Every hook runtime error is swallowed silently — this
+// hook never blocks a command it cannot reason about.
 
 import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -61,13 +63,22 @@ const TTL_MS = 3 * 60 * 60 * 1000;
 // The `mise` clause names the corpus tasks and their aliases (`mise sy`/`syf`/
 // `syw`, `docs`, `b25`/`btc`), plus the `mise r <task>` shorthand, the `run`
 // subcommand's own flags (`mise run --force syf`), and any global flags before
-// the task (`mise -C . syf`). A `:::`-separated chain element (`mise run
-// golden ::: syf`) is matched by the trailing bare-alias clause. `sq`/
-// `sql-store` is deliberately absent (see the header).
+// the task (`mise -C . syf`). Those in-between words are skipped by a *bounded
+// lazy token skip* (`(?:[^\s]+\s+){0,12}?`): `run`/`r`, a flag and a separated
+// flag value are all just whitespace-delimited tokens, so the same detection
+// costs a fixed (tiny) number of alternatives instead of the exponential
+// backtracking a nested `\S+`-with-optional-value group caused — a long flag
+// run can no longer make the probe fail closed on its handler timeout. The
+// skip is bounded: a corpus task more than a dozen words after `mise` is missed
+// (again "no early warning", never a wrong block — `isReadOnly` runs after).
+// A `:::`-separated chain element (`mise run golden ::: syf`) is matched by the
+// trailing bare-alias clause. `sq`/`sql-store` is deliberately absent (see the
+// header).
 const CORPUS_TASKS = "sync-(?:fast|full|wiki)|generate-docs|build-bm25|build-tool-corpus|syf|syw|docs|b25|btc|sy";
+const MISE_SKIP = "(?:[^\\s]+\\s+){0,12}?";
 const DESTRUCTIVE = new RegExp(
   "(?:\\b|_)(build-documents|build-bm25|build-tool-corpus|generate-docs)(?:\\b|\\s|\\s-|$)" +
-    "|mise\\s+(?:-{1,2}[A-Za-z][\\w-]*(?:=\\S+|\\s+\\S+)?\\s+)*(?:(?:run|r)\\s+(?:-{1,2}[A-Za-z][\\w-]*(?:=\\S+|\\s+\\S+)?\\s+)*)?" +
+    `|mise\\s+${MISE_SKIP}` +
     `(?:${CORPUS_TASKS})\\b` +
     `|:::\\s*(?:${CORPUS_TASKS})\\b` +
     "|\\b(?:uv\\s+run\\s+)?pgrag\\s+build-" +
@@ -219,15 +230,18 @@ function liveOwner(path: string): Owner | null {
 export default function (pi: HookAPI): void {
   pi.on("tool_call", async (event, ctx) => {
     if (event.toolName !== "bash") return;
-    const command =
-      event.input && typeof event.input === "object" && "command" in event.input
-        ? String(event.input.command)
-        : "";
+    const input = event.input && typeof event.input === "object" ? event.input : undefined;
+    const command = input && "command" in input ? String(input.command) : "";
     if (!DESTRUCTIVE.test(command)) return;
     // A command that only names a build task takes no lock and is never denied.
     if (isReadOnly(command)) return;
     try {
-      const root = projectRoot(ctx.cwd ?? process.cwd());
+      // The lock belongs to the repo the command runs in: a bash call may carry
+      // its own `cwd` (another checkout), so a non-empty string wins over the
+      // session cwd — otherwise we'd probe the session repo's lock (false block
+      // when it is free) and lose the warning for the repo actually targeted.
+      const callCwd = input && "cwd" in input ? String(input.cwd ?? "").trim() : "";
+      const root = projectRoot(callCwd || ctx.cwd || process.cwd());
       const lockPath = join(root, LOCK_REL);
       const owner = liveOwner(lockPath);
       if (!owner) return; // free, stale, or unreadable: the writer will take it

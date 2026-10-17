@@ -27,7 +27,8 @@ the "ideal" schema, and dropping them is wrong.
   build the gather-requirement map; item docs append "Gather Requirement" from
   it when the wiki matches the item name (see `build_item_documents`).
 - **Wiki sync state lives in `data/wiki/.meta.json`** — real page names, not the
-  `{safe_title}_<sha8>.txt` filenames. `.parsed.json` is a parse cache.
+  `{safe_title}_<sha8>.txt` filenames. The parse cache is
+  `data/derived/wiki_parsed.json`.
 - **Metadata is scalar-only by contract.** Every metadata value is
   `str`/`int`/`float`/`bool`; multi-value fields MUST be joined
   (`" | ".join(...)`). The dense Chroma filter that originally drove this is

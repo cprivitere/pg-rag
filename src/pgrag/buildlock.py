@@ -16,11 +16,13 @@ job-completion event), so a hook-held lock was released mid-build.
 
 Ownership is ``pid`` + ``startedAt`` (epoch ms, the shape the hook reads). A
 pid alone cannot distinguish the build from a recycled pid; the start time can.
-A lock is stealable when its pid is gone, its record is unreadable, or it is
-older than ``TTL_S`` (a holder killed between acquire and release — a 3 h build
-is far outside this repo's build times). Everything here is stdlib and, like
-the hook, fails open on filesystem trouble: an unwritable lock path reports a
-clear error instead of wedging the build forever.
+A lock is stealable when its pid is gone, its record is unreadable (non-JSON,
+non-UTF-8 bytes, missing fields), or it is older than ``TTL_S`` (a holder
+killed between acquire and release — a 3 h build is far outside this repo's
+build times). Everything here is stdlib and, like the hook, fails open on
+filesystem trouble: an unwritable lock path reports a clear
+:class:`BuildLockUnavailable` instead of wedging the build forever, and is
+never confused with the :class:`BuildLocked` contention a caller may wait out.
 """
 
 from __future__ import annotations
@@ -48,7 +50,17 @@ POLL_S = 0.5
 EMPTY_GRACE_S = 5.0
 
 
-class BuildLocked(RuntimeError):
+class BuildLockError(RuntimeError):
+    """Base of every corpus-build lock failure.
+
+    A caller that must keep going (the agentic `corpus_search`, whose contract
+    is errors-as-data) catches this base; a caller that *waits* for a peer
+    catches :class:`BuildLocked`, so an unusable lock path is never mistaken
+    for a build it could wait out.
+    """
+
+
+class BuildLocked(BuildLockError):
     """Another live process holds the corpus-build lock."""
 
     def __init__(self, path: Path, pid: int, age_s: float) -> None:
@@ -60,6 +72,21 @@ class BuildLocked(RuntimeError):
         self.path = path
         self.pid = pid
         self.age_s = age_s
+
+
+class BuildLockUnavailable(BuildLockError):
+    """The lock path could not be created — a filesystem error, not contention.
+
+    Reported separately from :class:`BuildLocked` because the two call for
+    opposite reactions: contention means "wait for the peer", while an
+    unusable path names no holder at all and the lock-file remedy cannot work.
+    The underlying ``OSError`` is kept in the message (and on ``exc``).
+    """
+
+    def __init__(self, path: Path, exc: OSError) -> None:
+        super().__init__(f"cannot create the corpus-build lock {path}: {exc}")
+        self.path = path
+        self.exc = exc
 
 
 def lock_path(data_dir: str | os.PathLike[str]) -> Path:
@@ -102,7 +129,12 @@ def read_owner(path: str | os.PathLike[str]) -> tuple[int, float] | None:
     target = Path(path)
     try:
         raw = target.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # `UnicodeDecodeError` is a ValueError, not an OSError: a lock file
+        # holding non-UTF-8 bytes is an unreadable record, i.e. corrupt and
+        # stealable exactly like non-JSON text — never an exception out of the
+        # acquire path (a leaked binary-garbled lock would otherwise wedge the
+        # repo for good).
         return None
     if not raw.strip():
         try:
@@ -163,20 +195,34 @@ def _release_if_ours(path: Path) -> None:
 def corpus_lock(
     data_dir: str | os.PathLike[str], wait: float = 0.0, poll: float = POLL_S
 ) -> Iterator[Path]:
-    """Hold `data_dir`'s corpus-build lock, or raise :class:`BuildLocked`.
+    """Hold `data_dir`'s corpus-build lock, or raise :class:`BuildLockError`.
 
     `wait` seconds are spent polling for a live holder to finish before
     raising — 0 means fail fast (an explicit build should not start work it
     cannot finish exclusively); a lazy rebuild inside a request passes a small
-    wait so a peer's short step does not fail the answer.
+    wait so a peer's short step does not fail the answer. Contention raises
+    :class:`BuildLocked`; a lock path that cannot be created raises
+    :class:`BuildLockUnavailable` (same base, carrying the ``OSError``) rather
+    than being misreported as a build that does not exist.
     """
     path = lock_path(data_dir)
     deadline = time.monotonic() + max(0.0, wait)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:  # unwritable artifact dir is a real error
+        raise BuildLockUnavailable(path, exc) from exc
     while True:
         try:
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
+            if path.is_dir():
+                # A directory at the lock name can never be opened as a lock
+                # file — POSIX reports the O_EXCL hit as EEXIST, win32 as the
+                # EACCES of the arm below. An unusable path, not a peer.
+                raise BuildLockUnavailable(
+                    path,
+                    IsADirectoryError(errno.EISDIR, os.strerror(errno.EISDIR), str(path)),
+                ) from None
             judged = _signature(path)
             owner = read_owner(path)
             if owner is None:
@@ -202,7 +248,7 @@ def corpus_lock(
             time.sleep(poll)
             continue
         except OSError as exc:  # unwritable path is a real error, not contention
-            raise BuildLocked(path, -1, 0.0) from exc
+            raise BuildLockUnavailable(path, exc) from exc
         try:
             os.write(fd, json.dumps({"pid": os.getpid(), "startedAt": int(time.time() * 1000)}).encode())
         finally:

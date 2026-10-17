@@ -85,7 +85,20 @@ def _missing_doc_refs(text: str, base: Path | None = None) -> list[str]:
 def _doc_sources() -> list[Path]:
     """AGENTS.md (repo-root-relative) + every skill's SKILL.md (which may point
     at its own bundled scripts)."""
-    return [ROOT / "AGENTS.md", *(ROOT / ".agents" / "skills").glob("*/SKILL.md")]
+    return [ROOT / "AGENTS.md", *sorted((ROOT / ".agents" / "skills").glob("*/SKILL.md"))]
+
+
+# Skills the repo promises to ship. The union with the tree-derived names is
+# deliberate: a tree-only list silently drops a skill that was deleted outright
+# (globbing cannot report what is gone), while a canonical-only list silently
+# drops a new skill (nothing names it until someone remembers this tuple).
+CANONICAL_SKILLS = ("pg-data", "pg-rag", "retrieval", "evaluation", "testing")
+
+
+def _expected_skills() -> list[str]:
+    """Every skill that must exist: `CANONICAL_SKILLS` plus the tree."""
+    present = {p.parent.name for p in (ROOT / ".agents" / "skills").glob("*/SKILL.md")}
+    return sorted(set(CANONICAL_SKILLS) | present)
 
 
 def _all_missing_doc_refs() -> list[str]:
@@ -100,11 +113,6 @@ def _all_missing_doc_refs() -> list[str]:
             for ref in _missing_doc_refs(source.read_text(encoding="utf-8"), base)
         ]
     return missing
-
-
-def _doc_blob() -> str:
-    """AGENTS.md + every skill's SKILL.md, concatenated."""
-    return "\n".join(f.read_text(encoding="utf-8") for f in _doc_sources() if f.exists())
 
 
 def main() -> int:
@@ -240,13 +248,11 @@ def main() -> int:
             _report("OK", "golden_check.py carries the documented flags")
 
     # --- 5. Expected skills exist and are well-formed -----------------------
-    # Derived from the tree, NOT a hardcoded list: the list silently stopped
-    # covering `molab-notebook` when that skill landed, so a broken frontmatter
-    # there produced no drift while the same directory was being scanned.
-    expected_skills = sorted(
-        p.parent.name for p in (ROOT / ".agents" / "skills").glob("*/SKILL.md")
-    )
-    for name in expected_skills:
+    # `CANONICAL_SKILLS` plus the tree, NOT the tree alone: the list silently
+    # stopped covering `molab-notebook` when that skill landed (a broken
+    # frontmatter there produced no drift), but a tree-only list also cannot
+    # report a whole canonical skill being deleted. See `_expected_skills`.
+    for name in _expected_skills():
         p = ROOT / ".agents" / "skills" / name / "SKILL.md"
         if not p.exists():
             _drift(f"missing skill: {name}")

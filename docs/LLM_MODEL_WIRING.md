@@ -30,7 +30,10 @@ as comparative evidence for model/flag choices, not as current golden verdicts.
   reasoning@4096 + ≤8k answer the worst case ≈ 32k, so 64k keeps headroom on
   the production model while 32k was safe for the contender rows.
 - `-ctk q8_0 -ctv q8_0` — Q8 KV. **Never Q4 on the V axis** (the fact-extraction
-  axis golden measures). Keep unless VRAM forbids.
+  axis golden measures). Keep unless VRAM forbids. Re-measure before relaxing
+  it: the probe scripts that produced the figures below were deleted with this
+  branch, so read `nvidia-smi`, Task Manager's *Dedicated GPU memory* column,
+  or llama-server's own startup buffer-size lines.
 - `--no-mmproj` (double-dash; this build rejects `-no-mmproj`) — drop the vision
   projector for text-only RAG (~0.16 GiB). Add to any model bundled with an
   `mmproj` whose RAG path never sends images.
@@ -52,8 +55,12 @@ LLM_FLAGS = "--no-mmproj -ngl 999 -fa on -c 65536 -ctk q8_0 -ctv q8_0 --reasonin
 ```
 
 - Weights 5.78 GiB (Q4_K_M); measured **6,580 MiB** (~6.6 GB — lightest of all
-  contenders). 64k context because reasoning@4096 + ≤~20k ctx + ≤8k ans ≈ ≤32k,
-  and the densest content edge (~2.4 chars/token) can approach 32k.
+  contenders). Every MiB figure in this doc (here, the per-model rows below and
+  the leaderboard's VRAM column) is a historical reading taken with the
+  since-deleted probe scripts at the time — not re-derivable from the repo;
+  re-measure per *Common flags* above. 64k context because reasoning@4096 +
+  ≤~20k ctx + ≤8k ans ≈ ≤32k, and the densest content edge (~2.4 chars/token)
+  can approach 32k.
 - Its record run reported **0 facts missing on the 38-case set** of the time
   (presence-only, single noisy reasoning-ON draw — verbosity games the metric;
   hallucination is not penalized). Deterministic re-baseline was captured on the

@@ -8,5 +8,5 @@
   ]
  ],
  "store": true,
- "notes": "Store-only case: facts live in data/sqlite_gorgon.db (glogger play history), not in the RAG corpus. Run via the agentic loop (`mise golden-one <id>` / `mise golden`), not pipeline golden checks."
+ "notes": "Store-only case: facts live in data/sqlite_gorgon.db (glogger play history), not in the RAG corpus. Run via the agentic loop (`mise golden-short` / `mise golden-one <id>` / `mise golden`), not pipeline golden checks."
 }

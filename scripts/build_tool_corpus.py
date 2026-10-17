@@ -11,7 +11,10 @@ curated.
 
 Refuses to run on a documents.json stamped with a different DOCUMENTS_VERSION
 (the old build-index staleness refusal, ported to the artifact that now
-consumes documents.json).
+consumes documents.json). That refusal is checked BEFORE the build lock — a
+stale tree fails fast without touching it — and both the stamp and the corpus
+it guards are addressed from the CWD (see DOCUMENTS_VERSION_FILE), so a
+CWD-rooted data tree builds.
 
 Run: mise build-tool-corpus   (also part of the sync-* pipelines)
 """
@@ -25,12 +28,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from pgrag.config import DOCUMENTS_VERSION, DOCUMENTS_VERSION_FILE
+from pgrag.config import (
+    DOCUMENTS_VERSION,
+    DOCUMENTS_VERSION_FILE as _ABS_STAMP,
+    PROJECT_ROOT,
+)
 from pgrag.rag.bm25 import BM25, save_bm25_index
 
 SRC = Path("data/documents.json")
 OUT = Path("data/tool_documents.json")
 PKL = Path("data/tool_bm25.pkl")
+
+# The freshness stamp and the corpus are a *pair*, both addressed from the CWD:
+# `SRC`/`OUT`/`PKL` are CWD-relative, `build.py` stamps this same repo-relative
+# path, and a CWD-rooted data tree (the molab sandbox's `corpus_docs` cell,
+# whose package lives in `pg-rag-src/`) therefore resolves both. Addressing it
+# from the imported package root instead — `pgrag.config` anchors it at
+# `PROJECT_ROOT` — looks for `pg-rag-src/data/derived/documents_version.json`
+# there and aborts every build on a missing stamp.
+DOCUMENTS_VERSION_FILE = _ABS_STAMP.relative_to(PROJECT_ROOT)
 
 # Stage-1 drop list (plan): per-row renderings of tables whose facts are
 # first-class SQL tables in the SQLite store.
@@ -79,22 +95,25 @@ def _require_fresh_documents() -> None:
 
 
 def main() -> int:
-    """Hold the corpus-build lock around the whole derive.
+    """Refuse a stale corpus first, then hold the build lock around the derive.
 
-    The lock lives with the artifacts (`SRC.parent`, i.e. `data/` by default),
-    which is where the pre-hook probes for a live owner — this script is a
-    corpus writer, so it *owns* the lock for the duration of the build rather
-    than relying on the hook (whose lifetime is one tool call).
+    The freshness check runs *before* the lock so a stale repo fails fast
+    without touching it — a tree that cannot produce output need not queue
+    behind (or abort inside) a peer's build. The lock itself lives with the
+    artifacts (`SRC.parent`, i.e. `data/` by default), which is where the
+    pre-hook probes for a live owner — this script is a corpus writer, so it
+    *owns* the lock for the duration of the build rather than relying on the
+    hook (whose lifetime is one tool call).
     """
     from pgrag.buildlock import corpus_lock
 
+    _require_fresh_documents()
     with corpus_lock(SRC.parent):
         return _build()
 
 
 def _build() -> int:
     start = time.time()
-    _require_fresh_documents()
     docs = json.loads(SRC.read_text(encoding="utf-8"))
     kept = [
         d for d in docs if (d.get("metadata") or {}).get("table") not in DROP_TABLES

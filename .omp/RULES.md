@@ -3,7 +3,7 @@
 Hard requirements for pg-rag sessions. Sticky: re-attached near the current turn, so they apply even after the opening context scrolls away.
 
 1. **Never rebuild the entire corpus unless explicitly requested.** Prefer the incremental paths: `mise build-bm25` / `mise build-tool-corpus` for the derived indexes; full `mise sync-full` only when the user asks for a full refresh.
-2. **Never modify generated documents manually.** `data/documents.json`, `data/wiki/.parsed.json`, `data/bm25_index.pkl`, `data/tool_documents.json`, `data/tool_bm25.pkl` are build outputs — change builders/loaders, never the artifacts.
+2. **Never modify generated documents manually.** `data/documents.json`, `data/derived/wiki_parsed.json`, `data/bm25_index.pkl`, `data/tool_documents.json`, `data/tool_bm25.pkl` are build outputs — change builders/loaders, never the artifacts.
 3. **Preserve source IDs and metadata.** Doc `id`, `metadata.source`, `metadata.table` are the identity contract. Do not rename or drop them; the BM25 corpus and the SQLite store are keyed off them.
 4. **Never replace the retrieval path without first identifying the existing implementation.** The agentic tool loop (`pgrag.agentic.loop.run_loop` driving `sql_query`/`find_entities`/`get_page`/`corpus_search`/`player_state`) is the only retrieval architecture. A dense/vector-store, RRF, or reranker proposal is a NEW architecture, not a fix — there is no existing component to "upgrade".
 5. **Before proposing architecture changes, inspect the relevant implementation.** The loop is blocking and bounded (`DEFAULT_MAX_ROUNDS` rounds, then a forced no-tools answer); only the model's own tool rounds re-query, and each tool-result payload is capped. Read `src/pgrag/agentic/tools.py` and `loop.py` first.

@@ -272,11 +272,11 @@ def _enforce_embed_window(chunks):
     token-budget splitter (token totals preserved exactly; sub-chunks splice
     in at the original position, with the splitter's usual whitespace
     normalization). One pathological case passes through unsplit: a single
-    "word" longer than the budget (see ``_split_words_by_tokens``) stays whole
-    — only the pre-embed guard in build_index catches that, and it keeps the
-    failure loud. If the tokenizer is unavailable, degrade to a no-op like
-    ``_split_token_budget``'s fallback: the pre-embed guard in build_index
-    keeps the failure loud.
+    "word" longer than the budget (see ``_split_words_by_tokens``) stays whole.
+    Nothing checks that window downstream any more — the pre-embed
+    ``build_index`` guard that used to was deleted with the dense path. If the
+    tokenizer is unavailable, degrade to a no-op like
+    ``_split_token_budget``'s fallback (logged as a warning).
     """
     if not chunks:
         return chunks

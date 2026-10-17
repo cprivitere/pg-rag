@@ -272,7 +272,8 @@ in the first pass are addressed in the second.
   (`mise run --force syf`, `mise run <task> ::: syf`, glued `-m pgrag.rag.bm25`)
   which the writer-side lock now covers regardless of invocation. Layer **L11**
   in `docs/TEST_CONTRACTS.md`; `tests/test_buildlock.py` +
-  `tests/test_build_tool_corpus.py` pin it (cross-process refusal verified live).
+  `tests/test_build_tool_corpus.py` pin it in-process (the cross-process
+  refusal was observed by hand, not by the suite).
 - **`scripts/services.py` hardened**: strict-UTF-8 child output read with
   `errors="replace"` (a non-UTF-8 process name previously killed `stop`/`start`
   with `AttributeError` — reproduced), POSIX `killpg` gated on pidfile
@@ -283,8 +284,8 @@ in the first pass are addressed in the second.
   `logs`/`tail-llm`/`golden-type` do, so the service tasks really are runnable
   on POSIX), the `[env]` consumer lists include `scripts/agentic_tune.py`,
   AGENTS/TEST_CONTRACTS/testing-skill names and counts were corrected
-  (**503 collected / 78 deselected / 425 default** after the L11/L12 tests
-  landed), the L4 Change ⇒ command runs
+  (re-pinned after the L11/L12 tests landed; the third pass below carries the
+  current numbers), the L4 Change ⇒ command runs
   its new `test_publish_store.py`, and the orphan
   `tests/fixtures/retrieval_cases.json` (a dense-path leftover) was deleted.
 
@@ -292,8 +293,9 @@ in the first pass are addressed in the second.
 
 1. `scripts/check_docs.py` now resolves backticked
    `scripts|src|tests|docs|.mise/tasks` pointers over **`.py`, `.sh` and
-   `.ps1`** — with `-` in the name class, because the deleted names are
-   hyphenated (`execute-code.ps1`, `dxgi_vram.ps1`) — and resolves a skill's own
+   `.ps1`** — with `-` in the name class, because hyphenated names are exactly
+   what the prefix space carries (the deleted `dxgi_vram.ps1`, the surviving
+   `molab-connect.ps1`) — and resolves a skill's own
    `scripts/…` reference next to its `SKILL.md` (which is how the molab skill
    names `execute-code.ps1`). Split into testable helpers (`_doc_refs` /
    `_missing_doc_refs` / `_all_missing_doc_refs`); the expected-skills list is
@@ -302,8 +304,11 @@ in the first pass are addressed in the second.
    the widened capture, a vanished pointer being reported, skill-local
    resolution, and the real AGENTS.md + skills blob staying clean. Verified
    `mise drift` → 22 OK / 0 drift with the wider scan. Note the first round's
-   claim that the widening "let 12 deletions pass" was too broad: only the four
-   `scripts/*` ones were ever in the scanned prefix space.
+   claim that the widening "let 12 deletions pass" was too broad in the other
+   direction: of the 22 files `479b6bc` deleted, the `.py`-only pattern already
+   matched the 10 `scripts/*.py` ones, and the widening was what covered the
+   remaining 12 — the four `scripts/*` `.ps1`/`.sh` and the eight
+   `.mise/tasks/*.ps1` (the `.mise/tasks` prefix is precisely what it added).
 2. `.agents/skills/molab-notebook/scripts/execute-code.ps1` pointed at
    `discover-servers.ps1`, which never existed in the skill; the URL/token flow
    is its sibling `molab-connect.ps1` (`-Pasteline "<block>" -Save`, then
@@ -344,3 +349,76 @@ in the first pass are addressed in the second.
   `pid <= 1` guard, bounded child reads (a wedged probe can no longer hang
   `stop`), ASCII-only pid cells, dead 503 branch removed, and the
   `LLM_REASONING` dev gate is case-insensitive like the PowerShell it replaced.
+
+**Third pass (2026-10-17) — the 61-file PR review, every finding fixed.**
+
+Sixteen reviewers covered the range `479b6bc..d048ce3` slice by slice; every
+finding below is fixed and pinned, and the suite is green
+(**537 collected / 78 deselected / 459 default**, one POSIX-only port-owner case
+skipping on Windows) with `mise lint`, `mise drift` (0 drift) and
+`mise compliance` clean.
+
+- **The molab stamp never reached the builder (the review's P1).** `corpus_docs`
+  fetched `data/derived/documents_version.json` next to the corpus, but
+  `build_tool_corpus.py` read `pgrag.config.DOCUMENTS_VERSION_FILE`, which is
+  anchored at the *imported package root* — in the sandbox that is
+  `pg-rag-src/data/derived/…`, so the refusal aborted every in-sandbox build
+  (reproduced: exit 1, `check=True` → the `pgrag_src` cell raised and the tool
+  loop stayed unreachable). The stamp is now addressed **from the CWD** like
+  `SRC`/`OUT`/`PKL` (identical in the repo, where every task runs from the repo
+  root), pinned by a subprocess test that builds in a CWD-rooted tmp data tree
+  *and* a discriminating one that proves the CWD stamp is the file consulted.
+  The cell also stages both files and promotes them as a pair, so a missing
+  stamp can no longer leave a fresh 185 MB `documents.json` behind; the docs
+  attribute the build to `pgrag_src` (it was never `corpus_docs`).
+- **A corrupt lock could wedge every writer.** `read_owner` caught only
+  `OSError`, so a non-UTF-8 record raised `UnicodeDecodeError` out of
+  `corpus_lock` (reproduced) — and `corpus_search` catches only the lock error,
+  so it killed the answer too. Non-UTF-8 bytes are now judged corrupt and stolen
+  like any other bad record, and a lock path that cannot be created at all
+  raises the new `BuildLockUnavailable` (`BuildLockError` base) instead of
+  claiming contention with a remedy that cannot work — the tool catches the base
+  class and returns an error string.
+- **`mise drift` had lost the canonical-skill guard.** The skills list became
+  tree-derived, which made the `missing skill` branch unreachable: deleting
+  `.agents/skills/pg-rag/` reported zero drift. The list is now
+  `CANONICAL_SKILLS` ∪ tree-derived (both directions documented), pinned by a
+  test and by an in-memory proof that a deleted canonical skill still reports.
+- **`--model current` silently dropped a swept reasoning budget** (the docstring
+  introduced in this branch claimed the opposite, then contradicted itself).
+  `current` and `ornith` now both resolve the live `[env]` pair, so the direct
+  spawn path really applies `--reasoning-budget`; a restart that does not reach
+  the requested state aborts the run instead of persisting mislabeled rows, and
+  the post-sweep restore re-asserts the production pair explicitly. The health
+  probe builds its URL from `LLM_PORT` instead of a literal.
+- **The pre-hook could block or mis-probe.** It ignored the bash call's own
+  `cwd`, so a build in another checkout was blocked by the session repo's lock
+  (and the reverse lost the warning) — reproduced both ways in-process. The mise
+  flag group was exponentially backtracking (measured 21 s for 44 flag tokens at
+  a 30 s fail-closed timeout) and is now a bounded token skip: 0.016 ms at 4000
+  flags, with 26-command detection equivalence against the old pattern.
+- **`stop` waited out the grace window and dropped the pidfile it never acted
+  on** (`taskkill`'s return code was discarded): `_kill_tree` now returns a
+  verdict, the poll runs only after a real signal, and a refused kill keeps the
+  pidfile and says nothing was signalled. The `start` spawn contract
+  (env merge / `cwd` / `start_new_session` / `creationflags`) is pinned for
+  background *and* foreground, and `debug-llm`'s Ctrl-C exits cleanly.
+- **`curator_scheduler.py` called a dead subcommand** (`pgrag.cli build-index`,
+  argparse exit 2 → the state file was never saved, so the curator re-ran every
+  invocation). It now runs the two derived corpora that exist
+  (`scripts.build_tool_corpus`, then `pgrag.rag.bm25`) in the same gated chain,
+  and the test asserts the whole ordered chain with no dead argv.
+- **Publish/docs/counts**: the `--docs` stamp parse is guarded (a hand-edited
+  stamp aborts actionably instead of raising `JSONDecodeError`); `AGENTS.md`'s
+  model-consumer trio now names the set `mise drift` actually enforces; L12
+  describes the enforced rule (a leaked literal *value*) and the coverage
+  (pointer scan unit-tested, the rest only under `mise drift`); the never-edit
+  parse cache is named by its live path (`data/derived/wiki_parsed.json`) in
+  RULES/testing/pg-data/TEST_CONTRACTS and `tests/conftest.py`; `pyproject.toml`'s
+  golden counts (62/8/54) match reality; `docs/LLM_MODEL_WIRING.md` names how to
+  re-measure VRAM now that the probe scripts are deleted, and labels its MiB
+  figures historical; the golden `notes` point at `mise golden-short` too; a
+  stale `.tmp` scratch dir is gitignored.
+- **Verified end to end**: `mise build-tool-corpus` against the real corpus
+  (204,232 docs kept / 65,491 dropped, 6 s, lock released) proves the CWD stamp
+  path and the cross-instance lock still work in the repo, not just in tmp.

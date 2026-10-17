@@ -1,4 +1,4 @@
-"""Curator scheduler — run curator periodically, detect changes, rebuild index."""
+"""Curator scheduler — run curator periodically, detect changes, rebuild corpora."""
 
 import json
 import subprocess
@@ -91,14 +91,28 @@ def run_curator_with_scheduler():
         print(f"Documents rebuild failed: {docs_result.stderr}")
         return
 
-    # Rebuild index if curator created new files
-    print("Rebuilding index...")
-    rebuild_result = subprocess.run(
-        [sys.executable, "-m", "pgrag.cli", "build-index"], capture_output=True, text=True
+    # Rebuild the derived corpora the query path reads, both from the
+    # documents.json the previous step just wrote: the tool corpus that
+    # corpus_search searches, then the full BM25 index (pre-warming it here
+    # keeps the first query from paying the multi-minute inline rebuild).
+    # Both are corpus writers and take the cross-instance build lock
+    # themselves, so a concurrent instance serializes instead of interleaving.
+    print("Rebuilding tool corpus...")
+    tool_corpus_result = subprocess.run(
+        [sys.executable, "-m", "scripts.build_tool_corpus"], capture_output=True, text=True
     )
 
-    if rebuild_result.returncode != 0:
-        print(f"Index rebuild failed: {rebuild_result.stderr}")
+    if tool_corpus_result.returncode != 0:
+        print(f"Tool corpus rebuild failed: {tool_corpus_result.stderr}")
+        return
+
+    print("Rebuilding BM25 index...")
+    bm25_result = subprocess.run(
+        [sys.executable, "-m", "pgrag.rag.bm25"], capture_output=True, text=True
+    )
+
+    if bm25_result.returncode != 0:
+        print(f"BM25 index rebuild failed: {bm25_result.stderr}")
         return
 
     # Update state

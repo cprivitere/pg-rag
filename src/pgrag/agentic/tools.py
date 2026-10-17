@@ -13,7 +13,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from pgrag.buildlock import BuildLocked
+from pgrag.buildlock import BuildLockError
 from pgrag.rag.bm25 import load_bm25_index
 
 DEFAULT_STORE = "data/sqlite_gorgon.db"
@@ -298,12 +298,12 @@ def _corpus_search(store_path: str, args: dict, corpus: str = "full") -> str:
             model, docs = load_bm25_index(path=DEFAULT_TOOL_DOCS, pkl_path=DEFAULT_TOOL_PKL)
         else:
             model, docs = load_bm25_index()
-    except BuildLocked as exc:
-        # A peer process is rebuilding the index (cross-instance corpus lock).
-        # The tool contract is errors-as-data, and `run_loop` calls this for its
-        # SEED before any round: raising here would kill the whole answer, so
-        # report the contention and let the model retry or use sql_query /
-        # find_entities.
+    except BuildLockError as exc:
+        # A peer process is rebuilding the index (cross-instance corpus lock),
+        # or the lock path itself is unusable (BuildLockUnavailable). Both are
+        # errors-as-data here: `run_loop` calls this for its SEED before any
+        # round, so raising would kill the whole answer — report it and let the
+        # model retry or use sql_query / find_entities.
         return f"corpus_search error: {exc}"
     ids, _scores = model.search(query, k=k)
     if not ids:

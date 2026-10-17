@@ -5,6 +5,8 @@ Locks:
 - cache rebuilds when documents.json mtime changes
 - cache is NOT rebuilt when documents.json is unchanged
 - cache survives stale/corrupt pickles by rebuilding
+- the atomic write's temp file is unique per call and never left behind, so
+  two saves in one process cannot collide
 """
 
 import json
@@ -102,6 +104,21 @@ def test_save_returns_nothing_and_writes_pickle(tmp_path):
     save_bm25_index(model, [{"id": "a", "text": "some text"}], str(pkl))
     assert pkl.exists()
     assert pkl.stat().st_size > 0
+
+
+def test_two_saves_in_one_process_leave_no_temp_file(tmp_path):
+    """The temp name is unique per CALL (pid + a random suffix), not just per
+    process: two saves racing each other in one process must not share a name,
+    or one's dump/unlink would clobber the other mid-write. Either way nothing
+    but the cache may be left behind."""
+    model = BM25()
+    model.index(["some text"])
+    pkl = tmp_path / "bm25_index.pkl"
+    docs = [{"id": "a", "text": "some text"}]
+    save_bm25_index(model, docs, str(pkl))
+    save_bm25_index(model, docs, str(pkl))
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["bm25_index.pkl"]
 
 
 def test_save_writes_atomically_and_leaves_no_temp_file(tmp_path, monkeypatch):

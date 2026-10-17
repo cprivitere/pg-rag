@@ -132,7 +132,8 @@ categories, plus `docs/**/*.md`, `.agents/**/*.md`, root `*.md` and root
 wire-protocol names. `notebooks/`, `.omp/`, and any `*.ps1` file are
 outside the globs by construction.
 
-Verified 2026-10-13 on the clean repo: `compliance check: OK (101 files
+Verified 2026-10-13, re-verified 2026-10-17 after the task/script audit
+deleted files: `compliance check: OK (99 files
 scanned, 4 categories clean)`; with a probe file containing `ReadProcessMemory`
 under `scripts/`, it exits 1 naming the file. Skippable
 only with `PG_SKIP_CONSTRAINTS=1` (prints a warning — never silent). The

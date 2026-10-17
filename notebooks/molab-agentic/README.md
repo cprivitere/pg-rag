@@ -47,7 +47,7 @@ What makes it small:
 | `store_token` | resolves an HF token for the private bucket (sandbox `/marimo/.env` token first, password widget overrides) and owns that widget — its own cell because marimo forbids reading a UIElement's value in the cell that created it |
 | `store_access` | reads the typed token (or the sandbox one) and validates the private store manifest |
 | `store_snapshot` | downloads `data/sqlite_gorgon.db` (938 MiB) from `hf://buckets/Nubula/paddock-private`, verifies size + sha256 from the manifest before promoting it, then `PRAGMA quick_check` + row-count parity; cache keyed on size + last-verified sha |
-| `corpus_docs` | fetches the public `documents.json` (185 MB) — `corpus_search`'s tool corpus is built from it |
+| `corpus_docs` | fetches the public corpus pair — `documents.json` (185 MB) + `derived/documents_version.json` — into `data/`: both are staged to `.part` and parsed, then promoted only once both parse (a failed/missing stamp leaves the previous `documents.json` intact instead of a half-refreshed cache) |
 | `pgrag_src` | downloads + sha256-checks `pgrag-src.tar.gz`, extracts it, imports `pgrag.agentic.loop` off `pg-rag-src/src`, builds `data/tool_documents.json` + `tool_bm25.pkl` with the tarball's own `scripts/build_tool_corpus.py` |
 | `sidecar_llm` | probes `http://127.0.0.1:8000/v1`; if down, launches `pg-rag-src/scripts/molab_vllm_launch.sh` and waits (≤15 min) for the model. If the wait expires it digests `/tmp/vllm.log` (first traceback block + error-ish lines + tail) and prints the `PGRAG_VLLM_*` retry knobs (`PGRAG_VLLM_MAXLEN` / `PGRAG_VLLM_MTP` / `PGRAG_VLLM_FLASHINFER_SAMPLER`). On a CPU-only sandbox it **refuses to launch** and says to attach the GPU first (that recreates the sandbox at a new URL) instead of burning the wait |
 | `tools_protocol` | one minimal `tools=` request decides native `tool_calls` vs the fenced ```` ```tool ```` text protocol (`PGRAG_LLM_NATIVE_TOOLS`) |
@@ -72,14 +72,16 @@ Nothing degrades silently: a missing store/source/sidecar yields an explicit
 
 Publishing the data is explicit and separate: `mise sql-store` refreshes the
 local store, `mise upload-store` snapshots + uploads it (snapshot + manifest +
-`src`/`scripts` tarball, privacy asserted before the first byte).
+`src`/`scripts` tarball, privacy asserted before the first byte), and
+`mise upload-docs` publishes the corpus pair (`documents.json` +
+`derived/documents_version.json`) that `corpus_docs` fetches.
 
 ## Platform mechanics
 
 - This notebook is **tool loop only**: store-backed, no torch in the kernel.
 - It reads the private store bucket (`mise upload-store`); the public corpus
-  bucket supplies `data/documents.json`, from which the sandbox builds the tool
-  corpus.
+  bucket supplies `data/documents.json` + its `derived/documents_version.json`
+  stamp as a pair, from which the sandbox builds the tool corpus.
 - Platform mechanics: `docs/MOLAB_OPS.md`.
 
 ## Local development

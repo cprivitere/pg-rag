@@ -71,10 +71,13 @@ the notebook's PEP 723 header on upload — a notebook cannot override it
   `DOCUMENTS_VERSION` stamp; publish BOTH with `mise upload-docs` after a
   rebuild (writes `data/documents.json` with your `HF_TOKEN`, then verifies
   remote size == local). A rebuild never auto-publishes. The notebook's
-  `corpus_docs` cell downloads both and builds the tool corpus from them via the
-  tarball's `scripts/build_tool_corpus.py` — which REFUSES to run without the
-  stamp, so publishing the corpus alone leaves a fresh sandbox unable to reach
-  the tool loop.
+  `corpus_docs` cell only fetches + parses that pair — both files are staged to
+  `.part` and promoted only once BOTH parse, so a stamp-less bucket cannot leave
+  a half-refreshed cache (fresh `documents.json` without its stamp) behind. The
+  tool corpus is built from them in the `pgrag_src` cell, gated on `DOCS_OK`,
+  via the tarball's `scripts/build_tool_corpus.py` — which REFUSES to run
+  without the stamp, so publishing the corpus alone leaves a fresh sandbox
+  unable to reach the tool loop.
 - Private store bucket: `hf://buckets/Nubula/paddock-private/` (next section).
 - Access from the sandbox is token-based: molab injects the account's
   `HF_TOKEN` into `/marimo/.env`, and `huggingface_hub` picks it up. The corpus

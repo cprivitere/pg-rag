@@ -60,6 +60,27 @@ def test_a_skill_resolves_its_own_bundled_scripts(tmp_path, monkeypatch):
     assert cd._missing_doc_refs(ref, skill) == []  # but real next to the skill
 
 
+def test_expected_skills_unions_canonical_and_tree(tmp_path, monkeypatch):
+    """Contract: `_expected_skills()` names `CANONICAL_SKILLS` *and* the tree.
+
+    A tree-only list cannot report a deleted canonical skill (a glob cannot name
+    what is gone), so `main()`'s missing-skill branch would be unreachable; a
+    canonical-only list cannot report a newly landed skill. The union keeps both
+    branches live: here a tmp tree carries only `demo` — every canonical name is
+    still listed, so `pg-rag` is reported missing, while `demo` (tree-present)
+    is named too.
+    """
+    monkeypatch.setattr(cd, "ROOT", tmp_path)
+    demo = tmp_path / ".agents" / "skills" / "demo"
+    demo.mkdir(parents=True)
+    (demo / "SKILL.md").write_text("---\nname: demo\n---\n", encoding="utf-8")
+
+    expected = cd._expected_skills()
+    assert set(cd.CANONICAL_SKILLS) <= set(expected)
+    assert "demo" in expected
+    assert "pg-rag" in expected  # named although no such directory exists
+
+
 def test_the_real_docs_point_only_at_live_files():
     """The actual AGENTS.md + skill blobs are clean under the widened scan — the
     invariant `mise drift` reports, pinned here so a doc edit that names a

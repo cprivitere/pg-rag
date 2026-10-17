@@ -85,6 +85,10 @@ def llm_argv(model: str, flags: str) -> list[str]:
     Shared with `scripts/agentic_tune.py --llm-restart`, which launches a
     candidate from its sweep registry rather than `mise.toml [env]`: a port or
     flag-assembly change has to reach both launchers, so both go through here.
+
+    `flags` is whitespace-split with no quoting, so a flag *value* containing a
+    space (a template path under `Program Files`, say) would be shredded into
+    separate argv elements — keep such values out of `LLM_FLAGS`.
     """
     return [
         "llama-server",
@@ -394,8 +398,8 @@ def _wait_dead(pid: int, timeout: float = STOP_GRACE_S) -> None:
         time.sleep(0.2)
 
 
-def _kill_tree(pid: int, ours: bool) -> None:
-    """Kill a service process tree.
+def _kill_tree(pid: int, ours: bool) -> bool:
+    """Kill a service process tree; return whether anything was signalled.
 
     Windows: `taskkill /PID <pid> /T /F` — unchanged; `/T` reaches the children
     holding the port whatever their process group.
@@ -409,6 +413,13 @@ def _kill_tree(pid: int, ours: bool) -> None:
     `killpg` there would SIGTERM a foreign group — and, when that group is the
     caller's own, this script with it. Anything short of both signals the single
     pid and warns, naming the reason.
+
+    The verdict is what the caller's grace window hangs on: True when a signal
+    was handed to a live process **or** the process was already gone (nothing
+    left to stop), False when nothing could be sent at all — an unattributable
+    pid <= 1, a `getpgid`/`kill` refused for lack of permission, or a `taskkill`
+    that failed. `stop` waits out `STOP_GRACE_S` only on True: with no signal
+    sent, no amount of waiting can free the port.
     """
     if os.name == "nt":
         # Windows has no process groups to reason about, but it must not be
@@ -417,21 +428,35 @@ def _kill_tree(pid: int, ours: bool) -> None:
         # the deleted `*-stop.ps1` is `/T /F`, not a licence to guess).
         if pid <= 1:
             print(f"warning: {pid} is not a service we spawned; not signalling it")
-            return
+            return False
         try:
-            subprocess.run(
+            # `check=False` (a refused kill is best-effort, not a crash), but the
+            # code and stderr are reported rather than discarded: a silent
+            # failure is indistinguishable from a successful kill, and `stop`
+            # would then blame surviving children of a taskkill that never ran.
+            done = subprocess.run(
                 ["taskkill", "/PID", str(pid), "/T", "/F"],
                 capture_output=True,
+                text=True,
+                errors="replace",
                 timeout=_CHILD_TIMEOUT_S,
             )
         except (OSError, subprocess.TimeoutExpired):
             print(f"warning: taskkill could not be run for {pid}")
+            return False
+        if done.returncode != 0:
+            detail = (done.stderr or "").strip()
+            print(
+                f"warning: taskkill exited {done.returncode} for {pid}"
+                + (f": {detail}" if detail else "")
+            )
+            return False
         if not ours:
             print(
                 f"warning: {pid} came from the port owner, not a pidfile we recorded; "
                 "its whole tree was killed"
             )
-        return
+        return True
     if pid <= 1:
         reason = "a pid <= 1 is never a service we spawned"
     elif not ours:
@@ -440,11 +465,11 @@ def _kill_tree(pid: int, ours: bool) -> None:
         try:
             pgid = os.getpgid(pid)
         except ProcessLookupError:
-            return  # already gone
+            return True  # already gone: nothing was left to signal
         except PermissionError:
             # Another user's process holds the port: it is not ours to signal.
             print(f"warning: cannot signal {pid} (permission denied); not stopping it")
-            return
+            return False
         if pgid != pid:
             reason = "it does not lead its own process group"
         else:
@@ -462,10 +487,11 @@ def _kill_tree(pid: int, ours: bool) -> None:
     kill = os.killpg if reason is None else os.kill
     try:
         kill(pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError) as exc:
-        if isinstance(exc, PermissionError):
-            print(f"warning: cannot signal {pid} (permission denied); not stopping it")
-        return
+    except ProcessLookupError:
+        return True  # already gone: nothing was left to signal
+    except PermissionError:
+        print(f"warning: cannot signal {pid} (permission denied); not stopping it")
+        return False
     _wait_dead(pid)
     with contextlib.suppress(ProcessLookupError, PermissionError):
         kill(pid, signal.SIGKILL)
@@ -474,6 +500,7 @@ def _kill_tree(pid: int, ours: bool) -> None:
             f"warning: {pid} was not started by this script ({reason}); "
             "only the top process was signalled"
         )
+    return True
 
 
 def _tail(path: Path, lines: int = 20) -> str:
@@ -493,7 +520,11 @@ def start(name: str, foreground: bool = False) -> int:
     label = str(svc["label"])
     port = int(svc["port"])
     if _port_open(port):
-        print(f"{label} already running on :{port}")
+        # `_port_owner` is free here: name the holder when the OS can (an
+        # unprivileged POSIX probe often cannot), so the message tells the
+        # operator what to inspect instead of only which port is taken.
+        holder = _port_owner(port)
+        print(f"{label} already running on :{port}" + (f" (pid {holder})" if holder else ""))
         return 0
     if name == "llm":
         cmd = _llm_command()
@@ -533,6 +564,13 @@ def start(name: str, foreground: bool = False) -> int:
         if foreground:
             try:
                 return proc.wait()
+            except KeyboardInterrupt:
+                # Ctrl-C in the foreground (the `mise debug-llm` path): the child
+                # shares our console and session, so it saw the same interrupt.
+                # Report a clean stop instead of letting the traceback out of
+                # `main` (parity with `scripts/agentic_chat.py`).
+                print(f"\ninterrupted; stopping {label}")
+                return 0
             finally:
                 _clear_pid(name)
         pid = proc.pid
@@ -588,14 +626,28 @@ def stop(name: str) -> int:
         print("Not running")
         _clear_pid(name)
         return 0
-    _kill_tree(pid, ours=ours)
-    deadline = time.monotonic() + STOP_GRACE_S
-    while time.monotonic() < deadline and _port_open(port):
-        time.sleep(0.2)
-    _clear_pid(name)
+    signalled = _kill_tree(pid, ours=ours)
+    if signalled:
+        # A signal went out: the tree may still be dying, so give it the grace
+        # window before declaring the port stuck. Nothing signalled = nothing to
+        # wait for — burning STOP_GRACE_S there delays the verdict without
+        # changing it.
+        deadline = time.monotonic() + STOP_GRACE_S
+        while time.monotonic() < deadline and _port_open(port):
+            time.sleep(0.2)
     if _port_open(port):
-        print(f"failed to free :{port}; pid {pid} may have surviving children")
+        # The pidfile is cleared only against a port that is actually free: it is
+        # still the only record we have of the service, and a held port with no
+        # signal sent is not "surviving children" of a kill that never ran.
+        if signalled:
+            print(f"failed to free :{port}; pid {pid} may have surviving children")
+        else:
+            print(
+                f"failed to free :{port}; nothing was signalled to pid {pid} "
+                "— it may not be ours to stop"
+            )
         return 1
+    _clear_pid(name)
     print(f"Stopped {svc['label']}")
     return 0
 

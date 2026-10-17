@@ -5,7 +5,10 @@ need pinning: the docs path must reach the PUBLIC corpus bucket and must never
 open the store, and the two paths must never collapse onto one bucket. Everything
 here is offline — the HF client is replaced by a fake module."""
 # contract: docs mode publishes data/documents.json to the PUBLIC bucket and
-# reads no store data; store mode refuses the public bucket before any HF call.
+# reads no store data; store mode refuses the public bucket before any HF call;
+# docs mode validates the corpus AND its version stamp before the first byte, so
+# a corrupt, missing or stale stamp (including a non-dict payload) aborts with an
+# actionable message and touches no bucket.
 
 import json
 import sys
@@ -67,7 +70,9 @@ def _write_corpus(tmp_path, monkeypatch, *, stamp: int | None = None, payload: s
     docs = tmp_path / "documents.json"
     docs.write_text(payload if payload is not None else '[{"id": "fireball-ability"}]')
     stamp_file = tmp_path / "documents_version.json"
-    stamp_file.write_text(json.dumps({"version": pub.DOCUMENTS_VERSION if stamp is None else stamp}))
+    stamp_file.write_text(
+        json.dumps({"version": pub.DOCUMENTS_VERSION if stamp is None else stamp})
+    )
     monkeypatch.setattr(pub, "DOCS", docs)
     monkeypatch.setattr(pub, "DOCS_STAMP", stamp_file)
     return docs
@@ -91,7 +96,11 @@ def test_docs_mode_publishes_to_the_public_bucket(monkeypatch, tmp_path):
     # reads: the sandbox's tool-corpus build refuses without the stamp.
     assert objects == {
         f"hf://buckets/{pub.PUBLIC_BUCKET}/{pub.REMOTE_DOCS}": docs.stat().st_size,
-        f"hf://buckets/{pub.PUBLIC_BUCKET}/{pub.REMOTE_DOCS_STAMP}": (tmp_path / "documents_version.json").stat().st_size,
+        f"hf://buckets/{pub.PUBLIC_BUCKET}/{pub.REMOTE_DOCS_STAMP}": (
+            tmp_path / "documents_version.json"
+        )
+        .stat()
+        .st_size,
     }
 
 
@@ -114,6 +123,29 @@ def test_docs_mode_refuses_a_stale_stamp(monkeypatch, tmp_path):
     with pytest.raises(SystemExit) as exc:
         pub.main(["--docs"])
     assert "expected" in str(exc.value)
+
+
+@pytest.mark.parametrize("stamp_text", ['{"version": ', "[]", '"x"'])
+def test_docs_mode_refuses_a_corrupt_stamp(monkeypatch, tmp_path, stamp_text):
+    """`data/derived/documents_version.json` is plain JSON and the one artifact a
+    human might hand-edit, so a truncated file (invalid JSON) or a non-dict payload
+    must abort with the same actionable message as a stale stamp — a raw
+    JSONDecodeError/AttributeError here would be an unactionable traceback, and any
+    fallthrough would publish without a verified version match."""
+    _write_corpus(tmp_path, monkeypatch)
+    (tmp_path / "documents_version.json").write_text(stamp_text)
+    probed: list[str] = []
+    monkeypatch.setattr(pub, "_auth_probe", lambda bucket=pub.BUCKET: probed.append(bucket))
+    objects: dict[str, int] = {}
+    _fake_hub(monkeypatch, objects)
+
+    with pytest.raises(SystemExit) as exc:
+        pub.main(["--docs"])
+    assert "documents_version.json" in str(exc.value)
+    assert "generate-docs" in str(exc.value)
+    # Abort happens before the auth probe and before any upload: closed, not partial.
+    assert probed == []
+    assert objects == {}
 
 
 def test_docs_mode_needs_the_version_stamp(monkeypatch, tmp_path):

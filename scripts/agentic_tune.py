@@ -15,11 +15,13 @@ load); otherwise the harness never touches the server. Every restart stops the
 old server with `mise run llm-stop`, then spawns `llama-server` directly with
 `scripts.services.llm_argv` — the same builder `mise run llm-start` uses,
 spawned directly because that task would re-apply `[env]` and override the
-candidate. `--model current` with a non-default budget therefore ends by
-relaunching production through the same direct path; only the plain
-`mise run llm-start` restore (budget back at the default) is reached by
-`--model current` at the default budget — which the guard above returns from
-before any restart.
+candidate. `current` and `ornith` are the same row: both read the live `[env]`
+pair, and a non-default --reasoning-budget is rewritten into those flags, so
+the server serves exactly the model/budget the run-id records — `llm-start` is
+never launched from here. A restart that does not reach the requested state
+(port still bound after `llm-stop`, server never accepting requests, unknown
+model key) makes the harness exit non-zero instead of persisting rows under a
+label nothing served.
 
 Usage:
   uv run python scripts/agentic_tune.py --eval-set cases --temperature 0.2
@@ -46,10 +48,11 @@ TUNE_DIR = Path("data/agentic_tune")
 DEFAULT_CASES = Path("data/eval/tune_cases.json")
 
 # CANDIDATES for --model sweep (the authoritative registry — the
-# llm_golden_bakeoff.py harness was deleted). The `ornith` row is the
-# production pair and is NOT a literal copy of mise.toml [env]: it is read from
-# the environment when used, so a model swap in [env] cannot leave the row
-# stale (scripts/check_docs.py gates this file as a consumer for that reason).
+# llm_golden_bakeoff.py harness was deleted). The `ornith`/`current` rows are
+# the production pair and are NOT a literal copy of mise.toml [env]: they are
+# read from the environment when used, so a model swap in [env] cannot leave
+# the row stale (scripts/check_docs.py gates this file as a consumer for that
+# reason).
 CANDIDATES = {
     "gemma-26b-qat": {
         "model": "unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL",
@@ -65,8 +68,8 @@ CANDIDATES = {
 
 
 def candidate(key: str) -> dict[str, str] | None:
-    """Registry row for `key`; `ornith` is the live `[env]` production pair."""
-    if key == "ornith":
+    """Registry row for `key`; `current`/`ornith` are the live `[env]` pair."""
+    if key in ("ornith", "current"):
         model = os.environ.get("LLM_MODEL", "").strip()
         flags = os.environ.get("LLM_FLAGS", "").strip()
         if not model or not flags:
@@ -205,11 +208,32 @@ def _set_reasoning_budget(flags: str, budget: int) -> str:
     return " ".join(out)
 
 
+def _services():
+    """`scripts.services` — the one owner of the launch shape (argv + port).
+
+    Imported lazily: running this file as a script puts `scripts/` on sys.path,
+    not the repo root, so the root has to be added before `scripts.services`
+    resolves.
+    """
+    repo_root = str(Path(__file__).resolve().parents[1])  # `scripts/` sits at the repo root
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    import scripts.services as services
+
+    return services
+
+
 def _server_running() -> bool:
+    """True while llama.cpp accepts requests on the port `llm_argv` launches on.
+
+    The port comes from `scripts.services.LLM_PORT` — the same knob baked into
+    the launch argv — so the probe and the launch cannot desync.
+    """
+    port = _services().LLM_PORT
     try:
         import requests
 
-        r = requests.get("http://localhost:8080/v1/models", timeout=2)
+        r = requests.get(f"http://localhost:{port}/v1/models", timeout=2)
         return r.ok
     except Exception:
         return False
@@ -222,63 +246,55 @@ def _spawn_server(model: str, flags: str) -> None:
     `mise llm-start` uses, so the host/port/-np/log-file assembly has one owner
     and a change to it lands in both launchers.
     """
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # `scripts/` sits at the repo root
-    from scripts.services import LOG_DIR, llm_argv
+    services = _services()
 
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    subprocess.Popen(llm_argv(model, flags), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    services.LOG_DIR.mkdir(parents=True, exist_ok=True)
+    subprocess.Popen(
+        services.llm_argv(model, flags), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
 
 
-def _maybe_restart_server(args) -> None:
-    """Stop/start llama.cpp when the sweep needs a different model or budget."""
-    needs = args.model != "current" or args.reasoning_budget != 4096
+def _maybe_restart_server(args, force: bool = False) -> bool:
+    """Stop/start llama.cpp when the sweep needs a different model or budget.
+
+    True when the server serves the requested pair (or no restart was needed);
+    False when the requested state was not reached, in which case the caller
+    aborts instead of running the sweep under a label nothing served. `force`
+    re-asserts the pair even when `args` already describe the default one — the
+    post-sweep restore knows the server was moved off it.
+    """
+    needs = force or args.model != "current" or args.reasoning_budget != 4096
     if not needs or not args.llm_restart:
-        return
+        return True
     cand = candidate(args.model)
-    if cand:
-        flags = cand["flags"]
-        if args.reasoning_budget != 4096:
-            flags = _set_reasoning_budget(flags, args.reasoning_budget)
-        print(f"[server] switching to {cand['model']} (budget {args.reasoning_budget})")
-        if _server_running():
-            subprocess.run(["mise", "run", "llm-stop"], check=False, capture_output=True)
-            # llm-stop is async: wait for :8080 to actually release, else
-            # the old server keeps answering and a new one can't bind.
-            for _ in range(60):
-                if not _server_running():
-                    break
-                time.sleep(1)
-            else:
-                print("[warn] :8080 still bound after llm-stop; relaunch skipped")
-                return
-        _spawn_server(cand["model"], flags)
-        # wait for the new server to accept requests (model load ~1-2 min)
-        for _ in range(240):
-            if _server_running():
-                time.sleep(2)  # settle
-                print("[server] up")
-                return
-            time.sleep(1)
-        print("[warn] :8080 not up after 240s")
-    elif args.model == "current" and args.llm_restart:
-        # Production config (mise [env]) — the mise task applies it; use for
-        # restoring the standard model after a candidate sweep.
-        if _server_running():
-            subprocess.run(["mise", "run", "llm-stop"], check=False, capture_output=True)
-            for _ in range(60):
-                if not _server_running():
-                    break
-                time.sleep(1)
-        subprocess.run(["mise", "run", "llm-start"], check=False, capture_output=True)
-        for _ in range(240):
-            if _server_running():
-                time.sleep(2)
-                print("[server] restored production model")
-                return
-            time.sleep(1)
-        print("[warn] :8080 not up after restore")
-    else:
+    if not cand:
         print(f"[warn] unknown model key {args.model}; skipping restart")
+        return False
+    flags = cand["flags"]
+    if args.reasoning_budget != 4096:
+        flags = _set_reasoning_budget(flags, args.reasoning_budget)
+    print(f"[server] switching to {cand['model']} (budget {args.reasoning_budget})")
+    if _server_running():
+        subprocess.run(["mise", "run", "llm-stop"], check=False, capture_output=True)
+        # llm-stop is async: wait for :8080 to actually release, else
+        # the old server keeps answering and a new one can't bind.
+        for _ in range(60):
+            if not _server_running():
+                break
+            time.sleep(1)
+        else:
+            print("[warn] :8080 still bound after llm-stop; relaunch skipped")
+            return False
+    _spawn_server(cand["model"], flags)
+    # wait for the new server to accept requests (model load ~1-2 min)
+    for _ in range(240):
+        if _server_running():
+            time.sleep(2)  # settle
+            print("[server] up")
+            return True
+        time.sleep(1)
+    print("[warn] :8080 not up after 240s")
+    return False
 
 
 def compare(paths: list[str]) -> int:
@@ -319,8 +335,8 @@ def main() -> int:
     parser.add_argument(
         "--model",
         default="current",
-        help="model key: `current` (mise [env], untouched), `ornith` ([env] production, "
-        "re-read live), or a CANDIDATES key",
+        help="model key: `current`/`ornith` (the live mise.toml [env] production pair, "
+        "re-read at restart) or a CANDIDATES key",
     )
     parser.add_argument(
         "--llm-restart",
@@ -353,12 +369,18 @@ def main() -> int:
     if args.sweep_reasoning:
         for b in [int(x) for x in args.sweep_reasoning.split(",")]:
             args.reasoning_budget = b
-            _maybe_restart_server(args)
+            if not _maybe_restart_server(args):
+                return 1  # never persist rows for a pair the server did not serve
             run_once(args)
-        _maybe_restart_server(args)  # restore
-        return 0
+        # The sweep left a candidate model/budget serving: put the production
+        # pair back through the same direct spawn path (the registry row
+        # re-reads [env]). Forced, because `args` now describes the default pair
+        # the guard above would skip.
+        args.model, args.reasoning_budget = "current", 4096
+        return 0 if _maybe_restart_server(args, force=True) else 1
 
-    _maybe_restart_server(args)
+    if not _maybe_restart_server(args):
+        return 1
     return 0 if run_once(args) is not None else 1
 
 
