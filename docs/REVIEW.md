@@ -537,19 +537,21 @@ Every finding below is fixed and pinned; the tree is green at
   rule, the dormant `lint.ignore` arm, the three docs in the count-quote set, the
   gate-summary format, "read-only" meaning *nothing git-visible*); REVIEW's own
   coverage clause, its `data/` gitignore parenthetical and its "this protocol in
-  prompt form" claim were corrected; `/frozen-review` documents a fallback for an
-  empty `$1` (this pass ran with an empty target) and its timings match
+  prompt form" claim were corrected; `/frozen` documents what an empty target does
+  (this pass ran with an empty one) and its timings match
   measurement.
 
 The ten items in "Leftovers for the next pass" above are untouched — they were
 declared out of scope for this pass and remain ordinary work.
 
-## Advice pass (2026-10-17) — the `/frozen-review` argument path
+## Advice pass (2026-10-17) — the `/frozen` argument path
 
 The sibling repo's session reviewed this command against the harness and found the
 argument plumbing broken. Both defects are fixed, and the mechanics were **measured
 on this harness** (v18.12.0, `omp -p` with a throwaway command, the saved session
-transcript read back) rather than taken from a disassembly:
+transcript read back) rather than taken from a disassembly. The command was renamed
+`/frozen-review` → `/frozen` the same day (nothing else referenced the old name, and
+neither name shadows a built-in).
 
 - **Only `$1` was read, so BASE and the focus never reached the prompt.** The
   expander appends the raw argument text *only when the body uses no inline
@@ -583,7 +585,7 @@ below removes one of those costs.
    (`git tag review-base-<sha>`); reviewers get that SHA — never a dirty working
    tree, never `origin/HEAD...main`. Every fix is a new commit and a new tag.
    The reviewer-side half of the same instruction lives as a project slash command —
-   `/frozen-review <tag|sha> [base tag or -] [focus...]` (`.omp/commands/frozen-review.md`) —
+   `/frozen <tag|sha> [base tag or -] [focus...]` (`.omp/commands/frozen.md`) —
    which hard-stops on an already-dirty tree. Its BASE defaults to
    `git describe --tags --match 'review-*' --abbrev=0 <target>^` — the base marker step 1
    created — and a checkout that is merely ahead of the tag is answered with

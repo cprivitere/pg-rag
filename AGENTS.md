@@ -141,9 +141,9 @@ corpus_search, player_state`.
   `rerank_stats.json`, `evaluation/queries.jsonl`) were deleted with the
   cutover — nothing reads them. `retrieval_traces/` is live (loop traces).
 - `.omp/` — oh-my-pi config: `RULES.md`, `config.yml`, `WATCHDOG.md`,
-  `hooks/pre/00-repo-lock.ts`, and `commands/frozen-review.md` (the review
+  `hooks/pre/00-repo-lock.ts`, and `commands/frozen.md` (the review
   protocol as a project slash command:
-  `/frozen-review <tag|sha> [base tag or -] [focus...]`).
+  `/frozen <tag|sha> [base tag or -] [focus...]`).
 - `.agents/skills/` — all agent skills, discoverable by any agent harness:
   `pg-rag`, `pg-data`, `retrieval`, `evaluation`, `testing` (project skills) +
   `molab-notebook` (pairing on the molab-hosted marimo notebook). Skills live
