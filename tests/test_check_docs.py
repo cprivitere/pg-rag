@@ -77,8 +77,7 @@ def test_a_vanished_pointer_is_reported(tmp_path, monkeypatch):
 
 def test_a_skill_resolves_its_own_bundled_scripts(tmp_path, monkeypatch):
     """A skill addresses its bundled scripts as `scripts/…`: that resolves next
-    to the SKILL.md, not only at the repo root (which is how
-    `.agents/skills/molab-notebook/SKILL.md` names `execute-code.ps1`)."""
+    to the SKILL.md, not only at the repo root."""
     monkeypatch.setattr(cd, "ROOT", tmp_path)
     skill = tmp_path / ".agents" / "skills" / "demo"
     (skill / "scripts").mkdir(parents=True)
@@ -125,9 +124,7 @@ def _clean_tree(tmp_path: Path, **overrides: str | None) -> Path:
     counts = "0 collected / 0 deselected / 0 default\n"
     files: dict[str, str] = {
         "AGENTS.md": (
-            "DOCUMENTS_VERSION\n"
-            + counts
-            + "The `mise.toml` `[tasks]` set is exactly: `demo`.\n"
+            "DOCUMENTS_VERSION\n" + counts + "The `mise.toml` `[tasks]` set is exactly: `demo`.\n"
         ),
         "docs/TEST_CONTRACTS.md": "DOCUMENTS_VERSION\n{id, question, type, facts\n",
         "docs/REVIEW.md": counts,
@@ -155,7 +152,7 @@ def _clean_tree(tmp_path: Path, **overrides: str | None) -> Path:
         ),
         ".agents/skills/pg-rag/SKILL.md": skill.format(n="pg-rag") + "DOCUMENTS_VERSION\n",
     }
-    for name in ("pg-data", "retrieval", "testing", "molab-notebook"):
+    for name in ("pg-data", "retrieval", "testing"):
         files[f".agents/skills/{name}/SKILL.md"] = skill.format(n=name)
     files[".agents/skills/testing/SKILL.md"] = skill.format(n="testing") + counts
     for gid in goldens:
@@ -231,12 +228,16 @@ def test_the_count_quote_is_checked(tmp_path, monkeypatch, capsys):
     collection is drift, and one that does not quote it at all is drift too —
     "537/459" outlived the tree by twelve tests because nothing computed it."""
     monkeypatch.setattr(
-        cd, "_collected_counts", lambda: ((557, 78, 479), "557 collected / 78 deselected / 479 default")
+        cd,
+        "_collected_counts",
+        lambda: ((557, 78, 479), "557 collected / 78 deselected / 479 default"),
     )
     monkeypatch.setattr(cd, "ROOT", _clean_tree(tmp_path))
     assert cd.main() == 1
     out = capsys.readouterr().out
-    assert "quotes stale suite counts" in out and "557 collected / 78 deselected / 479 default" in out
+    assert (
+        "quotes stale suite counts" in out and "557 collected / 78 deselected / 479 default" in out
+    )
 
     clean = _clean_tree(tmp_path / "quoted", **{"AGENTS.md": "DOCUMENTS_VERSION\n"})
     monkeypatch.setattr(cd, "ROOT", clean)
@@ -256,8 +257,7 @@ def test_the_count_quote_is_checked(tmp_path, monkeypatch, capsys):
             # first predicate matched is not what ruff matches.
             {
                 "ruff.toml": (
-                    '[lint]\nselect = ["B"]\n\n'
-                    '[lint.per-file-ignores]\n"scripts/**" = ["BLE001"]\n'
+                    '[lint]\nselect = ["B"]\n\n[lint.per-file-ignores]\n"scripts/**" = ["BLE001"]\n'
                 )
             },
             "lint suppressions name unselected rules",
@@ -270,7 +270,10 @@ def test_the_count_quote_is_checked(tmp_path, monkeypatch, capsys):
             {"src/pgrag/cli.py": "def f():\n    with corpus_lock(DATA_DIR):\n        pass\n"},
             "does not lock its data tree",
         ),
-        ({"src/pgrag/cli.py": "def f():\n    generate_documents()\n"}, "does not lock its data tree"),
+        (
+            {"src/pgrag/cli.py": "def f():\n    generate_documents()\n"},
+            "does not lock its data tree",
+        ),
         (
             {"AGENTS.md": "DOCUMENTS_VERSION\n0 collected / 0 deselected / 0 default\n"},
             "does not list the task set",
@@ -409,7 +412,9 @@ def test_a_provisioned_tree_reports_no_drift(tmp_path, monkeypatch, capsys):
         (".agents/skills/evaluation/SKILL.md", "evaluation skill missing"),
     ],
 )
-def test_a_missing_input_is_loud_and_never_a_traceback(tmp_path, monkeypatch, capsys, missing, label):
+def test_a_missing_input_is_loud_and_never_a_traceback(
+    tmp_path, monkeypatch, capsys, missing, label
+):
     """Every input the gate reads is either reported or absent-loud.
 
     Two failure modes are pinned here: a *silent* skip (the doc sources and the

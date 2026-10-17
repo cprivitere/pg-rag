@@ -25,7 +25,7 @@ Hard requirements for pg-rag sessions. Sticky: re-attached near the current turn
     same file and blocks destructive corpus commands while a live owner holds it
     (never taking the lock itself — a hook's tool call ends long before a build
     does). `mise sql-store`/`sq` is *not* guarded (private additive store, not
-    corpus state) and neither are publishes (`upload-docs`/`upload-store`). A
+    corpus state). A
     pure read that merely *names* a task (`grep -rn build-bm25 .`,
     `git commit -m 'fix build-documents stamp'`, `mise tasks | grep build-bm25`)
     is never blocked, but the reader list is a heuristic: an unusual spelling

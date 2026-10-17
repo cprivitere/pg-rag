@@ -11,8 +11,7 @@ The derive is also a corpus write, so it holds the cross-instance build lock
 directory must abort the run before any output is written.
 
 The stamp is a *pair* with the corpus it guards: both are addressed from the
-CWD (as ``SRC``/``OUT``/``PKL`` are), so a CWD-rooted data tree — the molab
-sandbox's ``corpus_docs`` cell, whose package lives in ``pg-rag-src/`` — builds
+CWD (as ``SRC``/``OUT``/``PKL`` are), so a CWD-rooted data tree builds
 instead of aborting on a stamp looked up under the imported package root. The
 refusal also runs BEFORE the lock: a stale tree fails fast without touching it.
 """
@@ -97,17 +96,16 @@ def test_main_checks_freshness_before_the_lock(tmp_path, monkeypatch):
 
 
 def test_builds_against_a_cwd_rooted_data_tree(tmp_path):
-    """End-to-end contract (the molab failure mode): the version stamp is
-    addressed from the CWD, like documents.json/OUT/PKL themselves.
+    """End-to-end contract: the version stamp is addressed from the CWD, like
+    documents.json/OUT/PKL themselves.
 
-    The molab sandbox keeps the corpus and its stamp as a CWD-rooted pair
-    (`data/documents.json` + `data/derived/documents_version.json`, written by
-    the `corpus_docs` cell) while the package lives in `pg-rag-src/`;
-    anchoring the stamp at the imported package root looked for
-    `pg-rag-src/data/derived/documents_version.json` and aborted every build
-    with "missing — run `mise generate-docs`". A real subprocess with
-    `cwd=tmp_path` is the only faithful check: in-process tests monkeypatch the
-    module globals and so never exercise the package-root anchor.
+    A CWD-rooted data tree (`data/documents.json` +
+    `data/derived/documents_version.json` under the CWD while the package lives
+    elsewhere) must build; anchoring the stamp at the imported package root
+    instead aborts such a build with "missing — run `mise generate-docs`". A
+    real subprocess with `cwd=tmp_path` is the only faithful check: in-process
+    tests monkeypatch the module globals and so never exercise the
+    package-root anchor.
     (In this repo the anchored candidate happens to exist and match, so the
     sibling `test_the_cwd_stamp_is_the_one_consulted` is what pins the anchor
     on a healthy checkout.)

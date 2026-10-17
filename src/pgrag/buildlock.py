@@ -123,14 +123,22 @@ def _pid_alive(pid: int) -> bool:
     trusted pid source. So this is deliberately the weaker probe, with its
     residual stated:
 
-    * a fully released pid → `OSError` (win32: `errno 22 / winerror 87`),
-      classified dead — the crashed-writer recovery that matters;
-    * a pid the process table still answers for — including one that *exited*
-      while a supervisor (`mise`, an omp background job) still holds its handle —
-      classified alive. Such a lock is then only reclaimed by `TTL_S`, and the
-      pre-hook, which asks the OS the libuv way, may call it dead and let a
-      command through that this module then refuses.
-    Pinned by `tests/test_buildlock.py::test_liveness_residuals_are_the_documented_ones`.
+    * POSIX: a fully released pid → `ProcessLookupError`, classified dead —
+      the crashed-writer recovery that matters there;
+    * win32: `os.kill(pid, 0)` answers `OSError` (errno 22 / winerror 87) for
+      released pids *and* for live ones — measured on an unrelated live
+      `explorer.exe` pid (87) while a live sibling child read alive and a dead
+      one read alive too — so the signal is ambiguous and every `OSError`
+      reads alive. Stopgap (review critical; Pass B deletes this mechanism):
+      the old dead-arm stole live locks. Cost, stated: on win32 a crashed
+      writer's lock is reclaimed only by `TTL_S`.
+    * either platform: a pid the process table still answers for — including
+      one that *exited* while a supervisor (`mise`, an omp background job)
+      still holds its handle — classified alive. Such a lock is then only
+      reclaimed by `TTL_S`, and the pre-hook, which asks the OS the libuv way,
+      may call it dead and let a command through that this module then refuses.
+    Pinned by `tests/test_buildlock.py::test_liveness_residuals_are_the_documented_ones`
+    (+ `test_a_live_owner_in_another_process_is_never_stolen`).
     """
     if pid <= 0:
         return False
@@ -140,14 +148,15 @@ def _pid_alive(pid: int) -> bool:
         return False
     except PermissionError:  # exists, owned by someone else
         return True
-    except OSError as exc:
-        # win32 raises no ProcessLookupError: opening a released pid fails with
-        # ERROR_INVALID_PARAMETER, surfaced as errno 22 / winerror 87 (measured
-        # on py3.15/win32 for 2147483646, 999999 and 1) — that is the dead
-        # signal. Every other failure stays conservative: stealing a live
+    except OSError:
+        # Every OSError is ambiguous → alive. win32 never raises
+        # ProcessLookupError here: a released pid fails with
+        # ERROR_INVALID_PARAMETER (errno 22 / winerror 87, measured on
+        # py3.15/win32 for 2147483646, 999999 and 1) — and so does a LIVE
+        # process (a live `explorer.exe` pid reads 87, while a live sibling
+        # child reads alive), so 87/EINVAL cannot mean "dead". Stealing a live
         # build's lock is worse than waiting, and TTL_S is the escape hatch.
-        dead = getattr(exc, "winerror", None) == 87 or exc.errno == errno.EINVAL
-        return not dead
+        return True
     return True
 
 

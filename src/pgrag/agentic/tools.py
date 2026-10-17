@@ -285,9 +285,6 @@ def _corpus_search(store_path: str, args: dict, corpus: str = "full") -> str:
     query = (args.get("query") or "").strip()
     if not query:
         return "corpus_search error: missing required argument 'query'."
-    # Parenthesized except on purpose: this module ships as source into the molab
-    # sandbox (Python 3.13), where bare `except A, B:` (PEP 758, 3.14-only) is a
-    # syntax error and the whole agentic loop becomes unimportable.
     try:
         k = int(args.get("k") or 10)
     except (TypeError, ValueError):
@@ -350,8 +347,7 @@ _CHAT_PRICE_HEADER = (
 )
 
 _WORK_ORDER_HEADER = (
-    "WORK ORDER (fixed turn-in payout — a guaranteed floor, not a market price"
-    " and not your stall):"
+    "WORK ORDER (fixed turn-in payout — a guaranteed floor, not a market price and not your stall):"
 )
 
 
@@ -448,15 +444,11 @@ def _work_order_lines(conn: sqlite3.Connection, query: str) -> list[str]:
             rw = json.loads(rewards or "[]")
         except ValueError:
             rw = []
-        amount = next(
-            (w.get("Amount") for w in rw if w.get("T") == "WorkOrderCurrency"), None
-        )
+        amount = next((w.get("Amount") for w in rw if w.get("T") == "WorkOrderCurrency"), None)
         if not amount:
             continue
         n = count or 1
-        xp = next(
-            (w for w in rw if w.get("T") == "SkillXp" and w.get("Xp")), None
-        )
+        xp = next((w for w in rw if w.get("T") == "SkillXp" and w.get("Xp")), None)
         xp_txt = f" + {xp['Xp']:g} {xp.get('Skill', '')} XP".rstrip() if xp else ""
         lines = [
             (
@@ -486,18 +478,14 @@ def _stall_item_base_value(conn: sqlite3.Connection, query: str) -> str | None:
             pats = _item_name_like(query)
             clause = " OR ".join("name LIKE ?" for _ in pats)
             row = conn.execute(
-                f"SELECT name, value FROM items WHERE {clause}"
-                " ORDER BY LENGTH(name), name LIMIT 1",
+                f"SELECT name, value FROM items WHERE {clause} ORDER BY LENGTH(name), name LIMIT 1",
                 pats,
             ).fetchone()
     except sqlite3.Error:
         return None
     if row is None or row[1] is None:
         return None
-    return (
-        f"base value (items.value, the vendor floor — NOT a stall price):"
-        f" {row[0]} {row[1]:g}"
-    )
+    return f"base value (items.value, the vendor floor — NOT a stall price): {row[0]} {row[1]:g}"
 
 
 def _stall_source_lines(conn: sqlite3.Connection, query: str) -> list[str]:
@@ -515,8 +503,7 @@ def _stall_source_lines(conn: sqlite3.Connection, query: str) -> list[str]:
             pats = _item_name_like(query)
             clause = " OR ".join("name LIKE ?" for _ in pats)
             code = conn.execute(
-                f"SELECT code FROM items WHERE {clause}"
-                " ORDER BY LENGTH(name), name LIMIT 1",
+                f"SELECT code FROM items WHERE {clause} ORDER BY LENGTH(name), name LIMIT 1",
                 pats,
             ).fetchone()
         if code is None:
@@ -536,19 +523,13 @@ def _stall_source_lines(conn: sqlite3.Connection, query: str) -> list[str]:
         kind = e.get("type") or "source"
         target = None
         if e.get("npc"):
-            row = conn.execute(
-                "SELECT name FROM npcs WHERE key = ?", (e["npc"],)
-            ).fetchone()
+            row = conn.execute("SELECT name FROM npcs WHERE key = ?", (e["npc"],)).fetchone()
             target = (row[0] if row else None) or e["npc"]
         elif e.get("questId"):
-            row = conn.execute(
-                "SELECT name FROM quests WHERE id = ?", (e["questId"],)
-            ).fetchone()
+            row = conn.execute("SELECT name FROM quests WHERE id = ?", (e["questId"],)).fetchone()
             target = (row[0] if row else None) or str(e["questId"])
         elif e.get("recipeId"):
-            row = conn.execute(
-                "SELECT name FROM recipes WHERE id = ?", (e["recipeId"],)
-            ).fetchone()
+            row = conn.execute("SELECT name FROM recipes WHERE id = ?", (e["recipeId"],)).fetchone()
             target = (row[0] if row else None) or str(e["recipeId"])
         if target:
             out.append(f"source: {kind} via {target}")
@@ -573,8 +554,7 @@ def _other_stall_lines(conn: sqlite3.Connection, query: str, limit: int = 20) ->
     player's own realized sales, and never averaged into a market price."""
     try:
         exists = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table'"
-            " AND name='stall_price_observations'"
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stall_price_observations'"
         ).fetchone()
         if not exists:
             return []
@@ -740,9 +720,7 @@ def _player_state(store_path: str, args: dict) -> str:
         # pseudo-skill "Unknown". They are NOT part of this skill's family:
         # count them separately instead of folding them into the diff (they
         # would otherwise all show as 'not in CDN' noise).
-        unknown_bucket = (
-            (skills.get("Unknown") or {}).get("Abilities") or []
-        )
+        unknown_bucket = (skills.get("Unknown") or {}).get("Abilities") or []
         level = sheet.get("Level") or 0
         bonus = sheet.get("BonusLevels") or 0
         if not known:
@@ -932,7 +910,7 @@ def execute_tool(
     """Run one tool call and return LLM-facing markdown (errors are strings)."""
     try:
         args = dict(args or {})
-    except (TypeError, ValueError):  # parenthesized for the 3.13 sandbox (see _corpus_search)
+    except (TypeError, ValueError):
         return f"Tool '{name}' error: args must be an object."
     if name == "sql_query":
         return _sql_query(store_path, args)

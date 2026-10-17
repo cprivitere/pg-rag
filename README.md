@@ -11,20 +11,12 @@ issues bounded rounds of `sql_query`, `find_entities`, `get_page`,
 The earlier dense path (embeddings + Chroma → RRF fusion → cross-encoder
 reranker) was deleted; there is no vector store or reranker service.
 
-## Chat on molab
+## Chat
 
-A marimo notebook runs on [molab](https://molab.marimo.io) (marimo's free cloud
-notebooks) on an RTX PRO 6000 (96 GB VRAM): click the badge to open it from
-GitHub, attach the GPU from the notebook specs button, and ask questions.
-
-- **agentic tool loop** — the production `run_loop` answering from a snapshot of
-  the local SQLite store (CDN tables, wiki, and the owner's own play history),
-  published privately by `mise upload-store`; no torch in its kernel, it starts
-  the vLLM sidecar itself and needs no repo checkout:
-  [![Open in molab](https://marimo.io/molab-shield.svg)](https://molab.marimo.io/github/cprivitere/pg-rag/blob/main/notebooks/molab-agentic/notebook.py)
-
-Details: [agentic README](https://github.com/cprivitere/pg-rag/blob/main/notebooks/molab-agentic/README.md);
-platform mechanics in `docs/MOLAB_OPS.md`.
+The product is the local agentic method: `mise agentic-chat` (CLI) and
+`mise chat` (Gradio UI, part of `mise start`), both driving the production
+`run_loop` over the local SQLite store through the local LLM. (The molab-hosted
+marimo notebook was retired — old-style delivery.)
 
 ## Pipeline
 

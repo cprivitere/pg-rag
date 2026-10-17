@@ -89,9 +89,7 @@ def test_wait_polls_then_raises(tmp_path):
     can finish first (the lazy-rebuild path relies on this)."""
     _hold(buildlock.lock_path(tmp_path))
     start = time.monotonic()
-    with pytest.raises(buildlock.BuildLocked), buildlock.corpus_lock(
-        tmp_path, wait=0.6, poll=0.05
-    ):
+    with pytest.raises(buildlock.BuildLocked), buildlock.corpus_lock(tmp_path, wait=0.6, poll=0.05):
         pytest.fail("acquired a lock a live owner holds")
     assert time.monotonic() - start >= 0.5
 
@@ -105,12 +103,17 @@ def test_wait_polls_then_raises(tmp_path):
         # of being judged corrupt and stolen (the hook, which reads differently,
         # called it corrupt — that is the promise kept here).
         pytest.param(b'{"pid": 1, "startedAt": 0}\xff', id="non-utf-8"),
-        # A pid that cannot exist. This is the win32 regression: `os.kill(dead,
-        # 0)` raises OSError(22/winerror 87), NOT ProcessLookupError, so reading
-        # it as "alive" left a crashed writer's lock unbroken for the whole TTL.
+        # A pid that cannot exist (POSIX: `ProcessLookupError` → dead). On
+        # win32 `os.kill` answers 87/EINVAL for released pids AND live ones —
+        # contract: `test_win32_ambiguous_liveness_is_never_stolen` — so the
+        # stopgap reads every `OSError` alive and this lock survives to
+        # `TTL_S`: expect `BuildLocked`, not a steal.
         pytest.param(
             json.dumps({"pid": 2147483646, "startedAt": int(time.time() * 1000)}).encode(),
             id="dead-pid",
+            marks=pytest.mark.skipif(
+                os.name == "nt", reason="win32 liveness is ambiguous: TTL_S reclaims it"
+            ),
         ),
         pytest.param(
             json.dumps({"pid": 0, "startedAt": int(time.time() * 1000)}).encode(), id="zero-pid"
@@ -184,10 +187,12 @@ def test_a_peer_winning_inside_the_claim_window_keeps_its_lock(tmp_path, monkeyp
     result is judged again before it is deleted.
     """
     lock = buildlock.lock_path(tmp_path)
-    lock.write_text(json.dumps({"pid": 2147483646, "startedAt": int(time.time() * 1000)}))
-    # `os.getpid()` is the only pid guaranteed alive here; the start time is
-    # recent enough to stay inside the TTL, and the peer dict is what the
-    # restore must reproduce byte for byte.
+    lock.write_text(json.dumps({"pid": 0, "startedAt": int(time.time() * 1000)}))
+    # `os.getpid()` is the peer's live pid; the peer dict is what the restore
+    # must reproduce byte for byte. The stale seed is pid 0 (never a pid, dead
+    # on every platform): the impossible-pid seed the test used to carry reads
+    # alive on win32 now — contract: `test_win32_ambiguous_liveness_is_never_stolen`
+    # — so it would refuse before the claim window ever opened.
     peer = {"pid": os.getpid(), "startedAt": int(time.time() * 1000) - 1000}
     real_replace = os.replace
     raced = False
@@ -326,12 +331,21 @@ def test_liveness_residuals_are_the_documented_ones():
     `scripts/check_constraints.py`; the gate caught exactly this change). What
     the weak probe costs is pinned here so nobody "fixes" it back:
 
-    * a pid nothing answers for is dead — the crashed-writer recovery, and
-    * a pid whose process *exited* while its parent had not reaped it is alive
-      (POSIX zombie / win32 open handle). Such a lock survives to `TTL_S`, and
-      the pre-hook, which asks libuv, may call that same owner dead.
+    contract: on POSIX a pid nothing answers for is dead (the crashed-writer
+    recovery); on win32 EVERY `OSError` reads alive, because 87/EINVAL is what
+    released pids AND live ones answer (measured: an unrelated live
+    `explorer.exe` reads 87 while a live sibling child reads alive) — so a
+    crashed writer's lock survives to `TTL_S` there. And on either platform a
+    pid whose process *exited* while its parent had not reaped it is alive
+    (POSIX zombie / win32 open handle). Such locks survive to `TTL_S`, and
+    the pre-hook, which asks libuv, may call that same owner dead.
     """
-    assert buildlock._pid_alive(2147483646) is False  # released: no such process
+    if os.name == "nt":
+        # contract: ambiguous signal reads alive — the stopgap; a crashed
+        # writer's win32 lock is reclaimed only by TTL_S (Pass B deletes this).
+        assert buildlock._pid_alive(2147483646) is True
+    else:
+        assert buildlock._pid_alive(2147483646) is False  # released: no such process
     assert buildlock._pid_alive(0) is False  # never a pid
     assert buildlock._pid_alive(os.getpid()) is True  # ourselves
 
@@ -347,6 +361,59 @@ def test_liveness_residuals_are_the_documented_ones():
         assert buildlock._pid_alive(child.pid) is True
     finally:
         child.wait()
+
+
+def test_a_live_owner_in_another_process_is_never_stolen(tmp_path):
+    """A live holder's lock is never stolen by a contender in a THIRD process.
+
+    contract: the review critical — on win32 the holder's pid answers 87/EINVAL
+    to a contender with no handle lineage to it (a live `explorer.exe` reads
+    the same way), and the old dead-arm let `read_owner` return `None` for
+    that live owner, so the contender stole the live lock. Every existing
+    lock test seeded `os.getpid()`, which is exactly why the suite was blind
+    to it: owner and contender shared one process, so `os.kill` never
+    answered 87. Here the holder, the contender, and this test are three
+    branches: the holder is `--separate-detached` (`DETACHED_PROCESS`), so the
+    contender's probe crosses the lineage gap that produces the ambiguous
+    signal — while the holder's stdout pipe proves it is alive at contend
+    time. Failure mode without the stopgap: contender prints STOLEN.
+    """
+    holder_code = (
+        "import time\n"
+        "from pgrag import buildlock\n"
+        f"with buildlock.corpus_lock({str(tmp_path)!r}):\n"
+        '    print("HOLDING", flush=True)\n'
+        "    time.sleep(60)\n"
+    )
+    kwargs: dict = {"stdout": subprocess.PIPE, "text": True}
+    if os.name == "nt":  # separate the lineage: no handle from contender to holder
+        kwargs["creationflags"] = 0x00000008  # DETACHED_PROCESS
+    holder = subprocess.Popen([sys.executable, "-c", holder_code], **kwargs)
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "HOLDING"  # alive, lock held
+        contender_code = (
+            "from pgrag import buildlock\n"
+            f"owner = buildlock.read_owner({str(buildlock.lock_path(tmp_path))!r})\n"
+            "print(f'OWNER={owner}')\n"
+            f"with buildlock.corpus_lock({str(tmp_path)!r}):\n"
+            "    print('STOLEN')\n"
+        )
+        contender = subprocess.run(
+            [sys.executable, "-c", contender_code], capture_output=True, text=True, timeout=60
+        )
+        assert "OWNER=" in contender.stdout, contender.stderr[-500:]
+        assert "STOLEN" not in contender.stdout, (
+            f"a contender in another process stole a live holder's lock: {contender.stdout.strip()}"
+        )
+        assert (
+            "BuildLocked" in (contender.stderr + contender.stdout) or contender.returncode != 0
+        ), (
+            f"contender neither stole nor refused: rc={contender.returncode} {contender.stdout.strip()}"
+        )
+    finally:
+        holder.terminate()
+        holder.wait()
 
 
 def test_the_lock_lives_beside_the_artifacts(tmp_path):

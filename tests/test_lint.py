@@ -67,32 +67,6 @@ def test_ruff_clean():
     assert rc == 0, "{} ruff findings:\n{}".format(len(findings), "\n".join(findings[:40]))
 
 
-def _pep758_offenders() -> list[str]:
-    """Shipped files using PEP 758 ``except A, B:`` (parenthesis-free tuple)."""
-    import re
-
-    pattern = re.compile(r"^\s*except\s+[A-Za-z_.]+(?:\s*,\s*[A-Za-z_.]+)+\s*:")
-    roots = [*sorted((ROOT / "src" / "pgrag").rglob("*.py")), *sorted((ROOT / "scripts").glob("*.py"))]
-    offenders = []
-    for path in roots:
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if pattern.match(line):
-                offenders.append(f"{path.relative_to(ROOT)}:{lineno}")
-    return offenders
-
-
-def test_shipped_source_stays_python_313_parseable():
-    """`mise upload-store` ships `src/` + `scripts/` into the molab sandbox,
-    whose kernel is Python 3.13. PEP 758 `except A, B:` is valid in this repo
-    (>=3.15) but a *SyntaxError* there, which makes the whole tool loop
-    unimportable in the notebook. Parenthesize: `except (A, B):`."""
-    offenders = _pep758_offenders()
-    assert offenders == [], (
-        "PEP 758 unparenthesized except in sandbox-shipped source "
-        f"(needs `except (A, B):`): {offenders}"
-    )
-
-
 def _require_ts_parser():
     if NODE is None:
         pytest.skip("node not on PATH — the .omp/hooks TypeScript gate needs it (`npm install`)")

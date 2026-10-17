@@ -3,10 +3,10 @@
 Oh My Pi agent guide for **pg-rag** — the unified repo for the Project
 Gorgon knowledge base: corpus build (documents + BM25 + tool corpus), the
 agentic SQLite store, and the single retrieval path — the agentic tool loop —
-in one place.
-The marimo notebook lives in `notebooks/molab-agentic/` (the tool loop over a
-private store snapshot); the corpus-chat **mirror notebook was deleted** with
-the dense-RAG cutover.
+in one place. The corpus-chat **mirror notebook was deleted** with
+the dense-RAG cutover, and the molab-hosted tool-loop notebook
+(`notebooks/molab-agentic/`) was retired after it — the product is the local
+agentic method.
 
 ---
 
@@ -146,36 +146,25 @@ corpus_search, player_state`.
   -] [focus...]`); it is retired — a pass now runs from the shared skill, see
   **Code review loop**.
 - `.agents/skills/` — all agent skills, discoverable by any agent harness:
-  `pg-rag`, `pg-data`, `retrieval`, `evaluation`, `testing` (project skills) +
-  `molab-notebook` (pairing on the molab-hosted marimo notebook). Skills live
-  here only — commit changes here, never re-create `.omp/skills/` copies.
+  `pg-rag`, `pg-data`, `retrieval`, `evaluation`, `testing` (project skills).
+  Skills live here only — commit changes here, never re-create `.omp/skills/` copies.
   The one skill this repo does not own but does use is the user-level
   `frozen-review` (`~/.agents/skills/frozen-review/SKILL.md`, the agents-standard
   root, shared with the sibling glogger repo) — this repo's review call.
-- `notebooks/molab-agentic/` — the **tool-loop-only** molab notebook:
-  `pgrag.agentic.loop.run_loop` against a snapshot of `data/sqlite_gorgon.db`
-  published to the private `hf://buckets/Nubula/paddock-private` by
-  `mise upload-store` (store + manifest + `src`/`scripts` tarball). No torch in
-  its kernel (inference is the vLLM sidecar, which the notebook launches from
-  the extracted tarball when `:8000` is down), so no env repair / session
-  restart / in-process fallback. PEP 723 deps: `marimo[mcp]`,
-  `huggingface-hub`, `requests` — the kernel is Python 3.13, so everything the
-  tarball ships (`src/`, `scripts/`) must stay 3.13-parseable: no PEP 758
-  `except A, B:` (valid here on ≥3.15, a SyntaxError there). Gated by
-  `tests/test_lint.py::test_shipped_source_stays_python_313_parseable` —
-  write `except (A, B):`. Platform mechanics:
-  `docs/MOLAB_OPS.md`. Pairing/protocol: the `molab-notebook` skill.
+  (The molab notebook, its ops doc and its pairing skill were retired with the
+  notebook — the product is the local agentic method. With them went the Python
+  3.13-parseability gate: PEP 758 `except A, B:` is legal repo-wide again; the
+  parenthesized handlers stay.)
 - `docs/` — `TEST_CONTRACTS.md` (the authoritative layer→tests→contract map),
   `REVIEW.md` (audit findings + backlog), `LLM_MODEL_WIRING.md` (per-model
-  launch flags + determinism evidence), `MOLAB_OPS.md` (molab platform
-  mechanics), `research/` (policy docs).
+  launch flags + determinism evidence), `research/` (policy docs).
 
 ## Development Commands
 
 Python ≥3.15, managed with `uv`. `mise tasks` lists everything. The
 `mise.toml` `[tasks]` set is exactly: `test`, `sync-fast`, `sync-full`,
 `generate-docs`, `build-bm25`, `build-tool-corpus`, `sync-wiki`, `sql-store`,
-`upload-store`, `upload-docs`, `agentic-chat`, `agentic-tune`, `golden`,
+`agentic-chat`, `agentic-tune`, `golden`,
 `golden-short`, `golden-one`, `golden-type`, `golden-flaky`,
 `golden-flaky-list`, `debug-llm`, `chat`, `llm-start`, `llm-stop`,
 `chat-start`, `chat-stop`, `start-all`, `stop-all`, `status`, `drift`,
@@ -192,7 +181,6 @@ mise sync-wiki                      # converge wiki to current source, then docu
 mise generate-docs                  # bare idempotent documents rebuild (alias docs)
 mise build-bm25 / build-tool-corpus # rebuild the lexical index / tool-corpus variant (b25/btc)
 mise sql-store (alias sq)           # build data/sqlite_gorgon.db: CDN + wiki + session + glogger sources
-mise upload-docs (alias ud)         # publish data/documents.json to the PUBLIC corpus bucket for the molab notebook
 mise agentic-chat (alias ac)        # agentic CLI chat over the store (tool loop; needs only LLM :8080; pre-chat session+glogger refresh runs automatically, --no-sync skips)
 mise golden                         # full golden eval through the loop (LLM only; LONG — batch it in the background)
 mise golden-short                   # the 8-case fast tier (alias gds)
@@ -223,8 +211,8 @@ fails the second builder loudly). The pre-command hook
 probes the same file and blocks a destructive corpus command (`build-*`,
 `generate-docs`, `mise sync-*` and their aliases) while a live owner holds it —
 it never takes the lock itself, because a hook's tool call returns long before a
-build finishes. `mise sql-store` (private additive store, not corpus state) and
-the publish tasks are deliberately unguarded, and a pure read that only *names*
+build finishes. `mise sql-store` (private additive store, not corpus state) is
+deliberately unguarded, and a pure read that only *names*
 a build task (`grep -rn build-documents .`) is never blocked. Never bypass the
 lock by hand-editing it; to clear a stuck one, delete `data/.omp-build.lock`.
 
@@ -353,9 +341,7 @@ this protocol (`.omp/commands/frozen.md`) is retired; `docs/REVIEW.md` →
   rerun + flaky focus (`mise golden-one`/`golden-flaky`; appends miss history to
   `data/golden/history.jsonl`); `scripts/agentic_tune.py` — tuning sweeps.
 - `scripts/build_sqlstore.py` — SQLite store build; `scripts/build_tool_corpus.py`
-  — tool-corpus variant; `scripts/publish_store.py` — private-bucket publish
-  (`--docs` = `mise upload-docs`, the public corpus bucket);
-  `scripts/agentic_chat.py` — agentic CLI chat (+ pre-chat sync).
+  — tool-corpus variant; `scripts/agentic_chat.py` — agentic CLI chat (+ pre-chat sync).
 - `scripts/review_facts.py` — the read-only facts sheet a review pass pastes into
   every reviewer brief (suite counts, gate verdicts, task set, freeze state,
   platform liveness, clone-invisible inputs); the protocol that consumes it is
@@ -405,9 +391,9 @@ this protocol (`.omp/commands/frozen.md`) is retired; `docs/REVIEW.md` →
 ## Testing & QA
 
 - **Framework**: pytest via `uv run pytest`; the counts this doc quotes are
-  **584 collected / 78 deselected / 506 default** (asserted by `mise drift`
+  **572 collected / 78 deselected / 494 default** (asserted by `mise drift`
   against a real collection) — the 78 being 16 data-heavy tests + the 62
-  parametrized golden cases, so the default offline run leaves **506** (one POSIX-only port-owner case skips on Windows) — all
+  parametrized golden cases, so the default offline run leaves **494** (one POSIX-only port-owner case skips on Windows) — all
   offline (temp-dir integration, mocked servers). The golden gate is the only
   suite that needs any server.
 - **Golden eval** (`tests/test_golden_check.py`): parametrized over
@@ -483,8 +469,8 @@ this protocol (`.omp/commands/frozen.md`) is retired; `docs/REVIEW.md` →
   errors), `test_agentic_tools.py`/`test_agentic_loop.py` (the five tools + the
   round protocol), `test_sqlstore_build.py`/`test_session_ingest.py`/
   `test_glogger_ingest.py` (store ingestion), `test_golden_check.py` (the
-  golden gate), `test_services.py`/`test_publish_store.py` (service control +
-  the two publish paths), `test_download_wiki.py` (batching, redirects, orphan
+  golden gate), `test_services.py` (service control),
+  `test_download_wiki.py` (batching, redirects, orphan
   cleanup — patches `META_FILE`+`WIKI_DIR` to tmp).
 - **Coverage expectation**: one test defends each observable contract;
   integration tests use temp dirs and mocked servers rather than live ones.

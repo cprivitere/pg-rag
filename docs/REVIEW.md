@@ -354,7 +354,7 @@ in the first pass are addressed in the second.
 
 Sixteen reviewers covered the range `479b6bc..d048ce3` slice by slice; every
 finding below is fixed and pinned, and the suite is green on the tree this record
-was written against (**584 collected / 78 deselected / 506 default**, one
+was written against (**572 collected / 78 deselected / 494 default**, one
 POSIX-only port-owner case skipping on Windows; the pass-5 follow-up at the end
 moved these from 568/78/490) with `mise lint`, `mise drift` (0 drift) and
 `mise compliance` clean.
@@ -476,7 +476,7 @@ The fifth pass reviewed the frozen tag `review-pass5` (`918f510`) against
 `review-base-5ddd05b` — 18 files, one facts sheet, seven read-only slices, both
 lenses. Verdict: **ship-with-fixes** (0 critical, 0 high, 8 fix-now mediums).
 Every finding below is fixed and pinned; the tree is green at
-**584 collected / 78 deselected / 506 default** with `mise lint`, `mise drift`
+**572 collected / 78 deselected / 494 default** with `mise lint`, `mise drift`
 (0 drift) and `mise compliance` clean.
 
 - **The facts sheet was wrong about four of its own facts.**
@@ -593,11 +593,28 @@ was report-only, so its findings are recorded here):
 | finding | disposition |
 |---|---|
 | **critical** — `src/pgrag/buildlock.py:143-150`: the `winerror 87 / errno EINVAL` arm is what *live* owners produce on this host (measured: `os.kill` raises 87 for the holder **and** for omp's own `node.exe`, while `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` opens both, exit code 259), so `read_owner` returns `None` for a live owner and the second builder steals the live lock — two concurrent corpus writers, silently | Pass B **deletes** the mechanism. Until it lands the stopgap is one line in `_pid_alive` (treat 87/EINVAL as ambiguous → alive, letting `TTL_S` be the only leaked-lock recovery) plus a **two-process** regression test: every existing lock test seeds `os.getpid()`, which is exactly why the suite is blind to it |
+
 | **high** — `.omp/commands/frozen.md:20-23`: the documented BASE derivation returns the target's previous *fix* tag (`review-pass8^` → `review-pass7`, 3 files) instead of the last reviewed state, silently shrinking a verification pass to its last commit | **superseded — nothing to patch**: the recipe is retired with the command, and `/skill:frozen-review` derives its base from the last `review-pass*` marker — the reviewed revision, not its parent — so the fix batch is what a verification pass gets. When no marker exists it falls back to the release tag *and says which fallback it used* (the "never assume silently" half; a hard refusal is unnecessary now that the marker path is the normal one). `review-pass6^ → review-pass5` is no longer selectable |
 | **medium** — `scripts/review_facts.py:89,96-98` (+ `docs/TEST_CONTRACTS.md:491-492`): a red `drift` row still names no drift (the gate prints its verdict *first*, so a fixed head+tail slice misses a mid-list `[DRIFT]`) | fix in Pass A's commit, with the drift shape added to the sheet's test |
 | **medium** — `scripts/review_facts.py:196-203`: an unanswerable git prints `frozen: False`, a positive "not frozen" verdict on the load-bearing key of a frozen-tree pass | fix in Pass A's commit (mirror the sibling sentinel) |
 | **medium** — `docs/TEST_CONTRACTS.md:475` + `docs/REVIEW.md:417`: the coverage clause claims the model-literal *leak* is asserted only under `mise drift`; it is unit-tested in `tests/test_check_docs.py:265-267` | fix both sentences in Pass A's commit |
 | **low / nit** (in-range one-liners) `frozen.md:12` empty-TARGET rule; the hook comment's quoted-*task* miss; `agentic_tune.py` sentinel vs. `[env]`; the two untested ownership-drift branches; the "working-tree-only" framing of the tracked `data/golden` | same commit where the line is one of the above; the rest is backlog — the `frozen.md:12` empty-TARGET item died with the command, retired this turn |
+
+**Stopgap landed (2026-10-17).** The critical's one-liner is in: `_pid_alive`
+treats every win32 `OSError` as ambiguous → alive (`src/pgrag/buildlock.py`),
+so a live holder's lock is never stolen. Measured on this host: a live
+unrelated `explorer.exe` pid answers 87, a live sibling child answers alive,
+a dead child answers alive — the signal cannot mean "dead". Cost, stated in
+the docstring: on win32 a crashed writer's lock is reclaimed only by `TTL_S`
+(POSIX keeps `ProcessLookupError` → dead). Pinned by
+`tests/test_buildlock.py::test_a_live_owner_in_another_process_is_never_stolen`
+(holder + contender + test in three processes — every prior test seeded
+`os.getpid()`, which is why the suite was blind) and the re-contracted
+`test_liveness_residuals_are_the_documented_ones` (win32 impossible-pid reads
+alive); the claim-window race test re-seeds on pid 0, the record that stays
+dead on every platform. Both new assertions fail on the pre-stopgap code.
+Suite **572 collected / 78 deselected / 494 default**, `mise lint` / `mise drift`
+(0 drift) / `mise compliance` clean — the counts moved by the Pass A deletions.
 
 **Pass A — notebook retirement (no behavior change).** Delete what is notebook-only,
 each item verified against its consumers:

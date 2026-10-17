@@ -134,9 +134,7 @@ def _doc_sources() -> list[Path]:
 # deliberate: a tree-only list silently drops a skill that was deleted outright
 # (globbing cannot report what is gone), while a canonical-only list silently
 # drops a new skill (nothing names it until someone remembers this tuple).
-# `molab-notebook` is shipped (AGENTS.md → Key Directories) and must be here, or
-# deleting its directory reports no drift at all.
-CANONICAL_SKILLS = ("pg-data", "pg-rag", "retrieval", "evaluation", "testing", "molab-notebook")
+CANONICAL_SKILLS = ("pg-data", "pg-rag", "retrieval", "evaluation", "testing")
 
 
 def _expected_skills() -> list[str]:
@@ -448,10 +446,10 @@ def main() -> int:
                 _report("OK", "golden_check.py carries the documented flags")
 
     # --- 5. Expected skills exist and are well-formed -----------------------
-    # `CANONICAL_SKILLS` plus the tree, NOT the tree alone: the list silently
-    # stopped covering `molab-notebook` when that skill landed (a broken
-    # frontmatter there produced no drift), but a tree-only list also cannot
-    # report a whole canonical skill being deleted. See `_expected_skills`.
+    # `CANONICAL_SKILLS` plus the tree, NOT the tree alone: the list once
+    # silently stopped covering a newly landed skill (a broken frontmatter
+    # there produced no drift), but a tree-only list also cannot report a
+    # whole canonical skill being deleted. See `_expected_skills`.
     for name in _expected_skills():
         p = ROOT / ".agents" / "skills" / name / "SKILL.md"
         if not p.exists():
@@ -509,9 +507,8 @@ def main() -> int:
         )
 
     # --- 7. The corpus writer locks the tree it writes, CWD-relative --------
-    # The data tree is addressed from the CWD (the molab sandbox roots `data/`
-    # at the sandbox CWD while the package lives in `pg-rag-src/`), so a lock on
-    # the package-anchored `DATA_DIR` would guard a *different* directory than
+    # The data tree is addressed from the CWD, so a lock on the
+    # package-anchored `DATA_DIR` would guard a *different* directory than
     # the file being written — two writers, no serialization, and the pre-hook
     # (which resolves the repo root) would agree with neither.
     cli_path = ROOT / "src" / "pgrag" / "cli.py"
@@ -568,7 +565,9 @@ def main() -> int:
     # `lint.ignore` is absent from ruff.toml today (its last entry went with the
     # dead-suppression cleanup), so this arm guards its return; the live
     # suppressions are the per-file-ignores below.
-    dead = [f"lint.ignore:{c}" for c in lint_cfg.get("ignore", []) if not _code_selected(c, selected)]
+    dead = [
+        f"lint.ignore:{c}" for c in lint_cfg.get("ignore", []) if not _code_selected(c, selected)
+    ]
     for scope, codes in (lint_cfg.get("per-file-ignores", {}) or {}).items():
         dead += [f"{scope}:{c}" for c in codes if not _code_selected(c, selected)]
     if dead:

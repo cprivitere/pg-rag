@@ -132,8 +132,8 @@ test (prove the source is fine) or recording a deliberate contract change
   `scripts/build_tool_corpus.py` refuses to run on a missing or stale
   `DOCUMENTS_VERSION` stamp (the old `build-index` refusal, ported) — the stamp
   (`data/derived/documents_version.json`) is addressed from the CWD like
-  `SRC`/`OUT`/`PKL`, so a CWD-rooted data tree (the molab sandbox) resolves all
-  four, not just the three — and emits the trimmed `data/tool_documents.json` +
+  `SRC`/`OUT`/`PKL`, so a CWD-rooted data tree resolves all four — and emits
+  the trimmed `data/tool_documents.json` +
   `data/tool_bm25.pkl`; `test_build_tool_corpus.py` asserts all four arms of that
   refusal (current/stale/missing docs/missing stamp) against tmp paths.
 - **Change ⇒** `uv run pytest tests/test_bm25.py tests/test_bm25_persist.py
@@ -182,8 +182,7 @@ test (prove the source is fine) or recording a deliberate contract change
   12000 chars (row-aware for tables), and forces a final no-tools answer once
   the budget is exhausted. Tests monkeypatch `loop._post` — never a live LLM.
   `loop._post` reads its transport config at CALL time: `PGRAG_LLM_URL`,
-  `PGRAG_LLM_MODEL`, `PGRAG_LLM_NATIVE_TOOLS` (the molab sandbox points the
-  loop at its vLLM sidecar). `agentic_tune.py` sweeps (model, temperature,
+  `PGRAG_LLM_MODEL`, `PGRAG_LLM_NATIVE_TOOLS`. `agentic_tune.py` sweeps (model, temperature,
   seed, reasoning budget, max-rounds) into `data/agentic_tune/<run-id>.json`
   (skip-if-exists, `--force`, `--compare`).
 - **Change ⇒** `uv run pytest tests/test_agentic_tools.py
@@ -203,9 +202,9 @@ test (prove the source is fine) or recording a deliberate contract change
 ### L4 — SQLite store + source ingestion
 
 - **Tests**: `test_sqlstore_build.py`, `test_session_ingest.py`,
-  `test_glogger_ingest.py`, `test_preflight_sync.py`, `test_publish_store.py`
+  `test_glogger_ingest.py`, `test_preflight_sync.py`
 - **Source**: `src/pgrag/agentic/` (`store.py`, `session.py`, `glogger.py`),
-  `scripts/build_sqlstore.py`, `scripts/agentic_chat.py`, `scripts/publish_store.py`
+  `scripts/build_sqlstore.py`, `scripts/agentic_chat.py`
 - **Contracts**: `build_store` is idempotent (INSERT OR REPLACE + per-file
   manifest mtimes in `data/sqlite_state.json`) and builds from tmp fixture
   sources in tests (never real `data/`); ingredients without `ItemCode` keep
@@ -222,22 +221,12 @@ test (prove the source is fine) or recording a deliberate contract change
   absent. `agentic_chat._preflight_sync` refreshes session + glogger data before
   any chat (`--no-sync` skips), prints only tables with nonzero row counts, and
   degrades to a printed note instead of raising when a source is unreadable.
-  `scripts/publish_store.py` (`mise upload-store`) publishes the store to the
-  PRIVATE bucket `Nubula/paddock-private` as a `VACUUM INTO` snapshot + manifest
-  (sizes, sha256, row counts) + a reproducible `git archive` of `src/`+`scripts/`
-  from the working tree — it refuses to run against the public bucket and asserts
-  `bucket_info(...).private` before the first byte.
-  `--docs` (`mise upload-docs`) publishes `data/documents.json` **and its
-  `DOCUMENTS_VERSION` stamp** (`data/derived/documents_version.json` →
-  `derived/documents_version.json`) to the PUBLIC corpus bucket with the same
-  auth probe + remote-size verification, reading no store data; the stamp is
-  mandatory because the sandbox's tool-corpus build refuses to run without it,
-  and both files are validated locally (JSON list + stamp == `DOCUMENTS_VERSION`)
-  before the first byte. Neither path may run when the two targets collapse onto
-  one bucket (each refuses the other's bucket).
+  (`scripts/publish_store.py` + `tests/test_publish_store.py` and the
+  `mise upload-store` / `upload-docs` tasks were retired with the molab
+  notebook — no publish path ships.)
 - **Change ⇒** `uv run pytest tests/test_sqlstore_build.py
   tests/test_session_ingest.py tests/test_glogger_ingest.py
-  tests/test_preflight_sync.py tests/test_publish_store.py` (+ the file you
+  tests/test_preflight_sync.py` (+ the file you
   edited), then `mise sql-store` and `mise lint`.
 - **Fixture hazard**: the `build_store` defaults are LIVE sources (real game
   dir, real glogger DB) — a fixture that omits `session_dir=`/`glogger_db=`

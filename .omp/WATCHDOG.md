@@ -31,11 +31,9 @@ reference files, symbols, and code only.
   variant only when the fact is observably present in the answer in different
   wording; the assertion set must not shrink, and an `xfail` must not absorb a
   real miss.
-- **leave the store manifest/citation contract intact**: `scripts/publish_store.py`
-  refusing a non-private bucket and asserting `bucket_info(...).private` before
-  the first byte; `run_loop` still returning `documents` (exactly what the model
-  was fed) and `sources`/`trace_rounds` (per tool round) so `--diagnose` can
-  label GEN-side vs RET-side?
+- **leave the loop's citation contract intact**: `run_loop` still returning
+  `documents` (exactly what the model was fed) and `sources`/`trace_rounds`
+  (per tool round) so `--diagnose` can label GEN-side vs RET-side?
 - **alter source metadata** (doc ids, `metadata.source`/`table`, wiki
   `parent_id` semantics) or the metadata scalar/`" | "`-join contract?
 - **change document shape without bumping `DOCUMENTS_VERSION`**, or bypass the

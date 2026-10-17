@@ -46,7 +46,7 @@ reranker service, and no embedding server.
   `tools.py` (the five tools), `loop.py` (`run_loop`), `eval.py` (golden
   fact-presence eval + tier membership).
 - `scripts/` — `build_sqlstore.py`, `build_tool_corpus.py`, `agentic_chat.py`,
-  `agentic_tune.py`, `publish_store.py`, `golden_check.py`, `golden_rerun.py`.
+  `agentic_tune.py`, `golden_check.py`, `golden_rerun.py`.
 - `data/golden/` + `scripts/golden_check.py` — the golden eval (see the
   `evaluation` skill).
 
@@ -65,13 +65,11 @@ reranker service, and no embedding server.
 - Regression-triage / test discipline: the `testing` skill +
   `docs/TEST_CONTRACTS.md`.
 
-## Molab tool-loop notebook
+## Retired: molab tool-loop notebook (2026-10-17)
 
-`notebooks/molab-agentic/` runs only the production `run_loop` against a
-snapshot of `data/sqlite_gorgon.db` published to the private
-`hf://buckets/Nubula/paddock-private` by `mise upload-store` (a `git archive`
-tarball of `src`/`scripts` ships the loop source into the sandbox). The kernel
-never imports torch — inference is the vLLM sidecar. It imports
-`pgrag.agentic.loop` from the tarball, so the loop source must stay Python
-3.13-parseable (no PEP 758 `except A, B:`). Platform mechanics:
-`docs/MOLAB_OPS.md`; pairing: the `molab-notebook` skill.
+The hosted marimo notebook, its ops doc, its pairing skill, the HF publish
+script (upload-store / upload-docs tasks) and the sidecar launcher were
+deleted — the sandbox was old-style delivery and the product is the local
+agentic method. With them went
+the Python 3.13-parseability invariant: PEP 758 `except A, B:` is legal
+repo-wide again (the parenthesized handlers stay).

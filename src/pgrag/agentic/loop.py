@@ -113,7 +113,7 @@ def _gathered_digest(trace_rounds: list, messages: list[dict]) -> str:
         out.append(part)
         used += len(part)
     if used > _DIGEST_BUDGET:
-        out[-1] = _cap_rows(out[-1][: _DIGEST_BUDGET] + "\n…")
+        out[-1] = _cap_rows(out[-1][:_DIGEST_BUDGET] + "\n…")
     return "\n\n---\n\n".join(out)
 
 
@@ -610,9 +610,9 @@ def _tools_api() -> list[dict]:
 def _post(
     messages: list[dict], tools: list[dict] | None, generation: dict, max_tokens: int
 ) -> dict:
-    # Endpoint/model/protocol are read at call time (not import time) so the
-    # molab sandbox can point the loop at its vLLM sidecar and turn the native
-    # tools= parameter off when the server was not started with
+    # Endpoint/model/protocol are read at call time (not import time) so a
+    # caller can point the loop at another OpenAI-compatible server and turn
+    # the native tools= parameter off when the server was not started with
     # --enable-auto-tool-choice (vLLM rejects a tools payload otherwise).
     url = os.environ.get("PGRAG_LLM_URL") or LLM_URL
     model = os.environ.get("PGRAG_LLM_MODEL")
@@ -673,7 +673,7 @@ def _cap_rows(text: str) -> str:
         kept.append(row)
         used += len(row) + 1
     tail_rows, tail_used = [], 0
-    for row in reversed(rows[len(kept):]):
+    for row in reversed(rows[len(kept) :]):
         if tail_used + len(row) + 1 > budget // 2:
             break
         tail_rows.insert(0, row)

@@ -27,10 +27,7 @@
 // exactly those: sync-fast|sy, sync-full|syf, sync-wiki|syw, generate-docs|docs,
 // build-bm25|b25, build-tool-corpus|btc). `mise sql-store` | `sq` is
 // deliberately NOT guarded: the store is a private additive artifact
-// (scripts/build_sqlstore.py states it), not shared corpus state. `mise
-// upload-docs` / `upload-store` only publish, so they take no lock either — a
-// publish racing a rebuild can still upload a torn documents.json, and the
-// post-upload remote-size check is the only defence. Bare `mise sync` is
+// (scripts/build_sqlstore.py states it), not shared corpus state. Bare `mise sync` is
 // mise's own tool-manager subcommand, not ours, and is deliberately not
 // matched. A read that merely names a build task (`grep -rn build-bm25 .`,
 // `git commit -m 'fix build-documents stamp'`) passes untouched, and so does a

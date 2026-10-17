@@ -3,7 +3,7 @@ _post — never a live LLM): no-tool single generation, native tool_calls
 round, fenced ```tool text-protocol round, and the max_rounds cap forcing
 a final no-tools answer. Also contracts the HTTP payload shape of _post
 itself: PGRAG_LLM_URL / PGRAG_LLM_MODEL / PGRAG_LLM_NATIVE_TOOLS are read
-at call time (the molab sandbox points the loop at its vLLM sidecar)."""
+at call time (so a caller can point the loop at another OpenAI-compatible server)."""
 
 import json
 

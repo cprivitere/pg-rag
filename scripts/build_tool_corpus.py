@@ -46,11 +46,7 @@ PKL = Path("data/tool_bm25.pkl")
 # `build.py` writes the *absolute*, PROJECT_ROOT-anchored
 # `DOCUMENTS_VERSION_FILE`, though, so the two agree only when the CWD *is* the
 # repo root: a run from any other CWD refuses a tree that same build just
-# stamped. The CWD-relative stamp is what makes the molab sandbox work — its
-# cell runs in a CWD-rooted data tree while the package lives in `pg-rag-src/`,
-# so addressing the stamp from the imported package root instead would look for
-# `pg-rag-src/data/derived/documents_version.json` there and abort every build
-# on a missing stamp.
+# stamped.
 DOCUMENTS_VERSION_FILE = _ABS_STAMP.relative_to(PROJECT_ROOT)
 
 # Stage-1 drop list (plan): per-row renderings of tables whose facts are
@@ -120,9 +116,7 @@ def main() -> int:
 def _build() -> int:
     start = time.time()
     docs = json.loads(SRC.read_text(encoding="utf-8"))
-    kept = [
-        d for d in docs if (d.get("metadata") or {}).get("table") not in DROP_TABLES
-    ]
+    kept = [d for d in docs if (d.get("metadata") or {}).get("table") not in DROP_TABLES]
     dropped = len(docs) - len(kept)
     dropped_chars = sum(
         len(d.get("text") or "")
@@ -136,9 +130,7 @@ def _build() -> int:
         t = (d.get("metadata") or {}).get("table", "?")
         by_table[t] = by_table.get(t, 0) + 1
 
-    OUT.write_text(
-        json.dumps(kept, ensure_ascii=False), encoding="utf-8"
-    )
+    OUT.write_text(json.dumps(kept, ensure_ascii=False), encoding="utf-8")
     print(f"Wrote {OUT} ({len(kept):,} docs, dropped {dropped:,} / {len(docs):,})")
     print(
         f"Text: {total_chars - dropped_chars:,} chars kept "
