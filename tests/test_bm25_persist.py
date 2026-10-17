@@ -10,6 +10,8 @@ Locks:
 import json
 import os
 
+import pytest
+
 from pgrag.rag.bm25 import (
     BM25,
     load_bm25_index,
@@ -100,3 +102,26 @@ def test_save_returns_nothing_and_writes_pickle(tmp_path):
     save_bm25_index(model, [{"id": "a", "text": "some text"}], str(pkl))
     assert pkl.exists()
     assert pkl.stat().st_size > 0
+
+
+def test_save_writes_atomically_and_leaves_no_temp_file(tmp_path, monkeypatch):
+    """The pickle goes to a sibling temp file and is renamed into place: the
+    cache-hit read happens before the build lock, so an in-place write could
+    hand a concurrent reader a torn pickle. Nothing may be left behind."""
+    model = BM25()
+    model.index(["some text"])
+    pkl = tmp_path / "bm25_index.pkl"
+    save_bm25_index(model, [{"id": "a", "text": "some text"}], str(pkl))
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["bm25_index.pkl"]
+
+    # A failing dump must not damage the good cache either.
+    def boom(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    original = pkl.read_bytes()
+    monkeypatch.setattr("pgrag.rag.bm25.pickle.dump", boom)
+    with pytest.raises(OSError):
+        save_bm25_index(model, [{"id": "b", "text": "other"}], str(pkl))
+    assert pkl.read_bytes() == original
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["bm25_index.pkl"]

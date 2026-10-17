@@ -312,19 +312,20 @@ lock by hand-editing it; to clear a stuck one, delete `data/.omp-build.lock`.
   Embed (:8081) and reranker (:8082) services are **retired** — start tasks
   and env keys were deleted with the dense path.
 - **Single-source models**: refs + tuning flags live once in `mise.toml [env]`
-  (`LLM_MODEL`/`LLM_FLAGS`); consumed by `scripts/services.py` (`os.environ`,
-  the LLM launch path), `scripts/agentic_tune.py` (`os.environ` — its `ornith`
-  sweep row and `--llm-restart` argv) and `scripts/check_docs.py` (tomllib).
-  `mise drift` fails if any consumer hardcodes a model literal. Tuning rationale:
-  `docs/LLM_MODEL_WIRING.md`.
+  (`LLM_MODEL`/`LLM_FLAGS`); consumed by `scripts/services.py` and
+  `scripts/agentic_tune.py` (`os.environ` — the launch path and the `ornith`
+  sweep row / `--llm-restart` argv) and `scripts/check_docs.py` (tomllib) — the
+  same three consumers `mise drift` enforces (plus this file, which the gate
+  reads as the fourth). `mise drift` fails if any consumer hardcodes a model
+  literal. Tuning rationale: `docs/LLM_MODEL_WIRING.md`.
 - Tests import the installed `pgrag` package — after changing `src/pgrag/`, no
   reinstall needed (editable install).
 
 ## Testing & QA
 
-- **Framework**: pytest via `uv run pytest`; the suite collects **486 tests**,
+- **Framework**: pytest via `uv run pytest`; the suite collects **503 tests**,
   of which **78 are deselected by the default `not slow` marker** (16
-  data-heavy tests + the 62 parametrized golden cases), leaving **408** in the
+  data-heavy tests + the 62 parametrized golden cases), leaving **425** in the
   default offline run (one POSIX-only port-owner case skips on Windows) — all
   offline (temp-dir integration, mocked servers). The golden gate is the only
   suite that needs any server.
@@ -352,10 +353,11 @@ lock by hand-editing it; to clear a stuck one, delete `data/.omp-build.lock`.
   `documents`/`trace_rounds` the loop returns.
 - **Store-only cases** still run through the same loop (`--store` points at
   `data/sqlite_gorgon.db`); there is no separate store-only harness.
-- **No retrieval-regression set.** The L3/L4 suites (`test_retrieval_unit.py`,
-  `test_rerank*.py`, `test_retriever_spelling.py`, `test_where_filter.py`,
-  entity/query-plan tests) were deleted with the dense path. What remains for
-  retrieval is the agentic layer: `test_agentic_loop.py`,
+- **No retrieval-regression set.** The L3/L4 suites of the *pre-cutover* map
+  (`test_retrieval_unit.py`, `test_rerank*.py`, `test_retriever_spelling.py`,
+  `test_where_filter.py`, entity/query-plan tests) were deleted with the dense
+  path — `L3`/`L4` in today's map are the tool loop and the SQLite store, both
+  live. What remains for retrieval is the agentic layer: `test_agentic_loop.py`,
   `test_agentic_tools.py`, `test_bm25.py`, `test_bm25_persist.py`.
   `docs/TEST_CONTRACTS.md` is the authoritative map — read the L-agentic and
   BM25 layers before touching retrieval.

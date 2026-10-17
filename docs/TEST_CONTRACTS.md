@@ -147,7 +147,10 @@ test (prove the source is fine) or recording a deliberate contract change
   (`run_case`/`run_eval`), `scripts/agentic_tune.py`
 - **Contracts**: the five tools (`sql_query, find_entities, get_page,
   corpus_search, player_state`) and the `AVAILABLE_TOOLS` string; `execute_tool`
-  returns errors as strings (model self-corrects), allows only single
+  returns errors as strings (model self-corrects) — including a corpus rebuild a
+  peer holds, which `corpus_search` reports as an error string instead of
+  raising `BuildLocked` out of `run_loop`'s seed call (see L11) — and it allows
+  only single
   read-only SELECTs (write/PRAGMA rejected, LIMIT 200 injected, 2M-op
   progress-handler budget), and caps rows/cells/pages. `player_state
   section=stall` reports the player's OWN stall ledger only: each realized
@@ -222,10 +225,14 @@ test (prove the source is fine) or recording a deliberate contract change
   (sizes, sha256, row counts) + a reproducible `git archive` of `src/`+`scripts/`
   from the working tree — it refuses to run against the public bucket and asserts
   `bucket_info(...).private` before the first byte.
-  `--docs` (`mise upload-docs`) publishes `data/documents.json` to the PUBLIC
-  corpus bucket with the same auth probe + remote-size verification, reading no
-  store data, and neither path may run when the two targets collapse onto one
-  bucket (each refuses the other's bucket).
+  `--docs` (`mise upload-docs`) publishes `data/documents.json` **and its
+  `DOCUMENTS_VERSION` stamp** (`data/derived/documents_version.json` →
+  `derived/documents_version.json`) to the PUBLIC corpus bucket with the same
+  auth probe + remote-size verification, reading no store data; the stamp is
+  mandatory because the sandbox's tool-corpus build refuses to run without it,
+  and both files are validated locally (JSON list + stamp == `DOCUMENTS_VERSION`)
+  before the first byte. Neither path may run when the two targets collapse onto
+  one bucket (each refuses the other's bucket).
 - **Change ⇒** `uv run pytest tests/test_sqlstore_build.py
   tests/test_session_ingest.py tests/test_glogger_ingest.py
   tests/test_preflight_sync.py tests/test_publish_store.py` (+ the file you
@@ -272,7 +279,7 @@ test (prove the source is fine) or recording a deliberate contract change
   (:8080) is up (**LLM only**) — `-m short` selects the 8-case
   `SHORT_TIER_IDS`; the default `not slow` marker deselects the long tier.
   retry-once for reasoning-ON noise; both attempts failing = regression.
-  `SHORT_TIER_IDS`/`GOLDEN_DIR`/`EVAL_GENERATION` are single-sourced in
+  `SHORT_TIER_IDS`/`GOLDEN_DIR` are single-sourced in
   `pgrag.agentic.eval` (asserted by `scripts/check_docs.py`).
 - **Change ⇒** `uv run pytest tests/test_golden_check.py -m short` (offline
   collection + skip shape, LLM-less) and `uv run pytest
@@ -349,8 +356,9 @@ test (prove the source is fine) or recording a deliberate contract change
 - **Tests**: `test_services.py`
 - **Source**: `scripts/services.py`; consumers `mise.toml` (`llm-start`/`llm-stop`/`chat-start`/
   `chat-stop`/`start-all`/`stop-all`/`status`/`debug-llm`), `scripts/agentic_tune.py` (stops/starts via
-  `mise run llm-stop`/`llm-start`, and builds its `--llm-restart` candidate server argv with
-  `services.llm_argv` — candidate model/flags from its sweep registry, not `[env]`)
+  `mise run llm-stop`/`llm-start`, and builds its `--llm-restart` server argv with
+  `services.llm_argv` — the two contender rows carry their own model/flags, while the `ornith` row
+  re-reads `[env]`, so no production literal lives in that registry)
 - **Contracts**: the LLM argv carries `LLM_MODEL` + `LLM_FLAGS` from `[env]` (never a literal),
   `--reasoning off` is appended when `LLM_REASONING=off`; chat spawns `uv run --with gradio python
   scripts/rag_chat.py` with `PG_RAG_CHAT_NO_BROWSER=1`; the port-owner fallback parses `netstat -ano`
@@ -388,9 +396,10 @@ test (prove the source is fine) or recording a deliberate contract change
   an empty *fresh* file belongs to its creator (the create→write window, which
   must not be stolen from under it). Exit unlinks only our own record. A held
   lock makes `pgrag build-documents` refuse (the generator is never called), the
-  chat-time BM25 rebuild spend `LAZY_REBUILD_WAIT_S` polling and then raise
-  instead of rebuilding over a peer, and the tool-corpus derive abort before
-  deriving.
+  chat-time BM25 rebuild spend `LAZY_REBUILD_WAIT_S` polling and then fail
+  instead of rebuilding over a peer — surfaced by `corpus_search` as an error
+  string (L3), because `run_loop` calls it for its seed — and the tool-corpus
+  derive abort before deriving.
 - **Why the writers own it**: a hook's lifetime is one tool call, and a build
   outlives it (an auto-backgrounded command returns at the ~60 s foreground
   threshold and keeps running), so the hook can only probe.
@@ -406,14 +415,16 @@ test (prove the source is fine) or recording a deliberate contract change
 - **Tests**: `test_check_docs.py`
 - **Source**: `scripts/check_docs.py` (`mise drift`, alias `dc`).
 - **Contracts**: every `tests/test_*.py` is named in this map, and every test path this map names
-  exists; every backticked `scripts|src|tests|docs`-prefixed path in AGENTS.md and the skills
-  resolves, over `.py`, `.sh` **and** `.ps1` (the classes the 2026-10-16 task/script audit deleted —
-  a `.py`-only scan cannot see a surviving pointer to a removed script); `DOCUMENTS_VERSION` is quoted
-  as a symbol (never a literal) in AGENTS.md / this map / RULES.md / the pg-rag skill; the golden
-  counts and `SHORT_TIER_IDS` the evaluation skill quotes exist; the documented `golden_check.py`
-  flags are real; each `[env]` model single-source consumer (`scripts/services.py`,
-  `scripts/agentic_tune.py`, AGENTS.md) actually references `LLM_MODEL`/`LLM_FLAGS`. Exit 1 on any
-  drift.
+  exists; every backticked `scripts|src|tests|docs|.mise/tasks`-prefixed path in AGENTS.md and the
+  skills resolves over `.py`, `.sh` **and** `.ps1` — with `-` in the name class, since the audit's
+  deleted names are hyphenated, and a path a SKILL.md addresses as `scripts/…` resolving next to that
+  SKILL.md too (a skill bundles its own scripts); `DOCUMENTS_VERSION` is quoted as a symbol (never a
+  literal) in AGENTS.md / this map / RULES.md / the pg-rag skill; the golden counts,
+  `SHORT_TIER_IDS` and `GOLDEN_DIR` the evaluation skill/gate quote exist; the documented
+  `golden_check.py` flags are real; every skill directory with a `SKILL.md` is present and carries
+  frontmatter (the list is derived from the tree, not hardcoded); each `[env]` model single-source
+  consumer (`scripts/services.py`, `scripts/agentic_tune.py`, AGENTS.md) actually references
+  `LLM_MODEL`/`LLM_FLAGS`. Exit 1 on any drift.
 - **Change ⇒** `uv run pytest tests/test_check_docs.py`, then `mise drift` (must print `0 drift`).
 
 ## Hard rules (no exceptions)

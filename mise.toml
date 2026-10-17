@@ -17,10 +17,10 @@ LLM_MODEL = "ornith-ai/Ornith-1.5-9B-GGUF:Q4_K_M"
 LLM_FLAGS = "--no-mmproj -ngl 999 -fa on -c 65536 -ctk q8_0 -ctv q8_0 --reasoning-budget 4096"
 
 [task_config]
-# No global shell: the default per-OS shell (`sh -c` / `cmd /c`) runs every
-# `uv run …` task, so the task set is usable on POSIX without PowerShell. The
-# tasks that are genuinely PowerShell (`logs`, `tail-llm`, `golden-type`) pin
-# pwsh themselves.
+# No global shell: the default per-OS shell (`sh -o errexit -c` / `cmd /c`) runs
+# every `uv run …` task, so the task set is usable on POSIX without PowerShell.
+# The tasks that are genuinely PowerShell (`logs`, `tail-llm`, `golden-type`)
+# pin pwsh themselves.
 # Run tasks from project root by default
 dir = "{{ config_root }}"
 # Cascade to any child mise.toml files

@@ -9,14 +9,17 @@ Runs are keyed (run-id from eval-set + parameters) into
 data/agentic_tune/<run-id>.json and are skip-if-exists, so interrupted
 sweeps resume. --compare tabulates run-ids.
 
-Server control: --llm-restart only fires when --model/--reasoning-budget are
-given (they change what the server must load); without them the harness never
-touches the server. Every restart stops the old server with `mise run
-llm-stop`, then either spawns `llama-server` directly for a candidate model or
-budget (`scripts.services.llm_argv`, the same builder `mise run llm-start`
-uses — spawning directly because the mise task would re-apply `[env]` and
-override the candidate) or restores production with `mise run llm-start` for
-`--model current`.
+Server control: --llm-restart only fires when --model is not `current` OR
+--reasoning-budget is not the 4096 default (those change what the server must
+load); otherwise the harness never touches the server. Every restart stops the
+old server with `mise run llm-stop`, then spawns `llama-server` directly with
+`scripts.services.llm_argv` — the same builder `mise run llm-start` uses,
+spawned directly because that task would re-apply `[env]` and override the
+candidate. `--model current` with a non-default budget therefore ends by
+relaunching production through the same direct path; only the plain
+`mise run llm-start` restore (budget back at the default) is reached by
+`--model current` at the default budget — which the guard above returns from
+before any restart.
 
 Usage:
   uv run python scripts/agentic_tune.py --eval-set cases --temperature 0.2

@@ -213,27 +213,43 @@ def store_snapshot(
 
 @app.cell
 def corpus_docs(HfFileSystem, json, os, shutil):
-    # --- Public corpus: only data/documents.json is needed here ---
+    # --- Public corpus: data/documents.json + its version stamp ---
     # corpus_search reads data/tool_documents.json + tool_bm25.pkl, which the
     # next cell builds FROM this file with the tarball's own
-    # scripts/build_tool_corpus.py. The in-kernel lexical index lives in the
-    # corpus-chat notebook (notebooks/molab-mirror) and is not built here.
-    # Reading the file back as JSON is the integrity check (a truncated download
-    # cannot parse) — the public bucket carries no manifest.
+    # scripts/build_tool_corpus.py — and that build REFUSES to run without
+    # data/derived/documents_version.json, so the stamp ships with the corpus
+    # (`mise upload-docs` publishes both).
+    # Downloading to `.part` and renaming after the parse keeps a truncated or
+    # interrupted download from poisoning the cache: the parse is the integrity
+    # check (the public bucket carries no manifest).
     _DOCS_SRC = "buckets/Nubula/paddock/documents.json"
+    _STAMP_SRC = "buckets/Nubula/paddock/derived/documents_version.json"
     _LOCAL_DOCS = "data/documents.json"
+    _LOCAL_STAMP = "data/derived/documents_version.json"
+
+    def _fetch_json(fs, remote, local):
+        os.makedirs(os.path.dirname(local) or ".", exist_ok=True)
+        _part = local + ".part"
+        with fs.open(f"hf://{remote}", "rb") as _fin, open(_part, "wb") as _fout:
+            shutil.copyfileobj(_fin, _fout)
+        with open(_part, encoding="utf-8") as _f:
+            _payload = json.load(_f)
+        os.replace(_part, local)
+        return _payload
+
     DOC_COUNT = 0
-    if os.path.exists(_LOCAL_DOCS):
+    if os.path.exists(_LOCAL_DOCS) and os.path.exists(_LOCAL_STAMP):
         with open(_LOCAL_DOCS, encoding="utf-8") as _f:
             DOC_COUNT = len(json.load(_f))
         print(f"[corpus] cached {DOC_COUNT:,} docs ({os.path.getsize(_LOCAL_DOCS):,} B)")
     else:
-        os.makedirs("data", exist_ok=True)
-        with HfFileSystem().open(f"hf://{_DOCS_SRC}", "rb") as _fin, open(_LOCAL_DOCS, "wb") as _fout:
-            shutil.copyfileobj(_fin, _fout)
-        with open(_LOCAL_DOCS, encoding="utf-8") as _f:
-            DOC_COUNT = len(json.load(_f))
-        print(f"[corpus] downloaded {DOC_COUNT:,} docs ({os.path.getsize(_LOCAL_DOCS):,} B)")
+        _fs = HfFileSystem()
+        DOC_COUNT = len(_fetch_json(_fs, _DOCS_SRC, _LOCAL_DOCS))
+        _stamp = _fetch_json(_fs, _STAMP_SRC, _LOCAL_STAMP)
+        print(
+            f"[corpus] downloaded {DOC_COUNT:,} docs + stamp "
+            f"v{_stamp.get('version')} ({os.path.getsize(_LOCAL_DOCS):,} B)"
+        )
     DOCS_OK = DOC_COUNT > 0
     return DOC_COUNT, DOCS_OK
 

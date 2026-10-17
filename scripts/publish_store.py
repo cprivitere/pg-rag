@@ -22,11 +22,13 @@ to run at all if ``BUCKET`` equals the public corpus bucket, and it asserts
 Run ``mise sql-store`` first so the snapshot reflects current sources. Re-runs
 are idempotent (snapshot + tarball are rebuilt from the current db and HEAD).
 
-``--docs`` (`mise upload-docs`) instead publishes ``data/documents.json`` to
-the PUBLIC corpus bucket ``Nubula/paddock`` for the molab notebook. Docs mode
-reads only the corpus file — the store is never opened, so it carries no
-privacy guard; the store mode below keeps its ``BUCKET == PUBLIC_BUCKET``
-refusal and ``_ensure_private_bucket``.
+``--docs`` (`mise upload-docs`) instead publishes ``data/documents.json`` **and
+its version stamp** (``data/derived/documents_version.json``) to the PUBLIC
+corpus bucket ``Nubula/paddock`` for the molab notebook — the sandbox's own
+tool-corpus build refuses to run without that stamp. Docs mode reads only those
+two files; the store is never opened, so it carries no privacy guard, while the
+store mode below keeps its ``BUCKET == PUBLIC_BUCKET`` refusal and
+``_ensure_private_bucket``.
 """
 
 from __future__ import annotations
@@ -41,6 +43,8 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+
+from pgrag.config import DOCUMENTS_VERSION
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 os.chdir(REPO_ROOT)
@@ -58,7 +62,9 @@ REMOTE_MANIFEST = "store/manifest.json"
 REMOTE_TARBALL = "store/pgrag-src.tar.gz"
 
 DOCS = Path("data/documents.json")
+DOCS_STAMP = Path("data/derived/documents_version.json")
 REMOTE_DOCS = "documents.json"
+REMOTE_DOCS_STAMP = "derived/documents_version.json"
 DOCS_BUCKET = PUBLIC_BUCKET
 
 
@@ -214,7 +220,18 @@ def _upload(fs, local: Path, remote: str, bucket: str = BUCKET) -> None:
 
 
 def _publish_docs() -> int:
-    """Publish the corpus documents to the PUBLIC bucket (mise upload-docs)."""
+    """Publish the corpus documents + their version stamp to the PUBLIC bucket
+    (mise upload-docs).
+
+    The stamp is not optional: the molab sandbox derives `tool_documents.json`
+    with the tarball's own `scripts/build_tool_corpus.py`, which refuses to run
+    without `data/derived/documents_version.json` — the corpus alone left a fresh
+    sandbox unable to build the index `corpus_search` needs.
+
+    Everything is validated before the first byte: the remote-size check is
+    self-consistent, so a truncated or stale-shape local file would otherwise
+    overwrite the good public copy cleanly.
+    """
     if DOCS_BUCKET == BUCKET:
         # The mirror of the store-path refusal: the two paths must never collapse
         # onto one bucket, or a misrouted corpus publish would silently land in
@@ -222,17 +239,35 @@ def _publish_docs() -> int:
         raise SystemExit(f"refusing: docs target {DOCS_BUCKET} equals the private store bucket")
     if not DOCS.exists():
         raise SystemExit(f"{DOCS} not found — run `mise generate-docs` first.")
+    if not DOCS_STAMP.exists():
+        raise SystemExit(
+            f"{DOCS_STAMP} not found — run `mise generate-docs` first (it stamps the version "
+            "the sandbox's tool-corpus build checks)."
+        )
+    try:
+        docs = json.loads(DOCS.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"{DOCS} is not valid JSON: {exc}") from exc
+    if not isinstance(docs, list) or not docs:
+        raise SystemExit(f"{DOCS} does not hold a non-empty list of documents")
+    stamp = json.loads(DOCS_STAMP.read_text(encoding="utf-8")).get("version")
+    if stamp != DOCUMENTS_VERSION:
+        raise SystemExit(
+            f"{DOCS_STAMP} says version {stamp}, expected {DOCUMENTS_VERSION} — "
+            "run `mise generate-docs` first."
+        )
     _auth_probe(DOCS_BUCKET)
 
     from huggingface_hub import HfFileSystem
 
     mb = DOCS.stat().st_size / (1024 * 1024)
-    print(f"uploading {DOCS} ({mb:.1f} MB) -> hf://buckets/{DOCS_BUCKET}/{REMOTE_DOCS}")
+    print(f"uploading {DOCS} ({mb:.1f} MB) + {DOCS_STAMP} -> hf://buckets/{DOCS_BUCKET}/")
     fs = HfFileSystem(token=_token())
     _upload(fs, DOCS, REMOTE_DOCS, DOCS_BUCKET)
+    _upload(fs, DOCS_STAMP, REMOTE_DOCS_STAMP, DOCS_BUCKET)
     print(
-        f"OK: hf://buckets/{DOCS_BUCKET}/{REMOTE_DOCS} matches local {mb:.1f} MB. "
-        "Next molab sandbox boot picks it up."
+        f"OK: hf://buckets/{DOCS_BUCKET}/{REMOTE_DOCS} matches local {mb:.1f} MB "
+        f"(stamp v{stamp}). Next molab sandbox boot picks it up."
     )
     return 0
 

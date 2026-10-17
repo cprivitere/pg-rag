@@ -7,6 +7,7 @@ here is offline — the HF client is replaced by a fake module."""
 # contract: docs mode publishes data/documents.json to the PUBLIC bucket and
 # reads no store data; store mode refuses the public bucket before any HF call.
 
+import json
 import sys
 import types
 
@@ -61,23 +62,66 @@ def _fake_hub(monkeypatch, objects: dict[str, int]) -> None:
     monkeypatch.setitem(sys.modules, "huggingface_hub", module)
 
 
-def test_docs_mode_publishes_to_the_public_bucket(monkeypatch, tmp_path):
+def _write_corpus(tmp_path, monkeypatch, *, stamp: int | None = None, payload: str | None = None):
+    """A tmp corpus + its version stamp, wired into the module."""
     docs = tmp_path / "documents.json"
-    docs.write_text('[{"id": "fireball-ability"}]')
+    docs.write_text(payload if payload is not None else '[{"id": "fireball-ability"}]')
+    stamp_file = tmp_path / "documents_version.json"
+    stamp_file.write_text(json.dumps({"version": pub.DOCUMENTS_VERSION if stamp is None else stamp}))
     monkeypatch.setattr(pub, "DOCS", docs)
+    monkeypatch.setattr(pub, "DOCS_STAMP", stamp_file)
+    return docs
+
+
+def test_docs_mode_publishes_to_the_public_bucket(monkeypatch, tmp_path):
+    docs = _write_corpus(tmp_path, monkeypatch)
     probed: list[str] = []
     monkeypatch.setattr(pub, "_auth_probe", lambda bucket=pub.BUCKET: probed.append(bucket))
-    monkeypatch.setattr(
-        pub, "_snapshot", lambda: pytest.fail("docs mode opened the store snapshot")
-    )
+    # The store-only steps must not run in docs mode. `_source_tarball` matters
+    # most: it writes real repo artifacts (`data/.publish-src.tar.gz`,
+    # `.git/omp-publish-index`), so an accidental call would dirty the tree.
+    for name in ("_snapshot", "_table_counts", "_source_tarball", "_ensure_private_bucket"):
+        monkeypatch.setattr(pub, name, lambda *a, _n=name, **k: pytest.fail(f"docs mode ran {_n}"))
     objects: dict[str, int] = {}
     _fake_hub(monkeypatch, objects)
 
     assert pub.main(["--docs"]) == 0
     assert probed == [pub.PUBLIC_BUCKET]
-    # The upload landed in the public corpus bucket the molab notebook reads,
-    # and the recorded size is the local file's (the post-upload check).
-    assert objects == {f"hf://buckets/{pub.PUBLIC_BUCKET}/{pub.REMOTE_DOCS}": docs.stat().st_size}
+    # The corpus AND its stamp land in the public bucket the molab notebook
+    # reads: the sandbox's tool-corpus build refuses without the stamp.
+    assert objects == {
+        f"hf://buckets/{pub.PUBLIC_BUCKET}/{pub.REMOTE_DOCS}": docs.stat().st_size,
+        f"hf://buckets/{pub.PUBLIC_BUCKET}/{pub.REMOTE_DOCS_STAMP}": (tmp_path / "documents_version.json").stat().st_size,
+    }
+
+
+def test_docs_mode_validates_the_corpus_before_uploading(monkeypatch, tmp_path):
+    """The remote-size check is self-consistent, so a truncated or wrong-shape
+    local file would publish clean: validation happens before the first byte."""
+    _write_corpus(tmp_path, monkeypatch, payload='{"documents": []}')
+    monkeypatch.setattr(pub, "_auth_probe", lambda *a, **k: pytest.fail("validated too late"))
+    with pytest.raises(SystemExit) as exc:
+        pub.main(["--docs"])
+    assert "non-empty list" in str(exc.value)
+
+
+def test_docs_mode_refuses_a_stale_stamp(monkeypatch, tmp_path):
+    """A stamp older than the generator in this checkout means the corpus would
+    be shipped against the wrong shape — the sandbox's own refusal is the last
+    line of defence, this is the first."""
+    _write_corpus(tmp_path, monkeypatch, stamp=pub.DOCUMENTS_VERSION - 1)
+    monkeypatch.setattr(pub, "_auth_probe", lambda *a, **k: pytest.fail("validated too late"))
+    with pytest.raises(SystemExit) as exc:
+        pub.main(["--docs"])
+    assert "expected" in str(exc.value)
+
+
+def test_docs_mode_needs_the_version_stamp(monkeypatch, tmp_path):
+    _write_corpus(tmp_path, monkeypatch)
+    monkeypatch.setattr(pub, "DOCS_STAMP", tmp_path / "absent_stamp.json")
+    with pytest.raises(SystemExit) as exc:
+        pub.main(["--docs"])
+    assert "generate-docs" in str(exc.value)
 
 
 def test_docs_mode_refuses_the_store_bucket(monkeypatch, tmp_path):

@@ -5,8 +5,10 @@ Source of truth for how to launch the pg-rag LLM. The `LLM_MODEL` /
 `scripts/services.py` (`llama-server -hf $LLM_MODEL $LLM_FLAGS
 --host 0.0.0.0 --port 8080 -np 1 --log-file logs/llm.log`, read via
 `os.environ` and shared by `mise llm-start`, `mise debug-llm` and
-`scripts/agentic_tune.py --llm-restart`), and by `scripts/check_docs.py`
-(tomllib). `mise drift` fails if any consumer hardcodes a model literal.
+`scripts/agentic_tune.py --llm-restart`), by `scripts/agentic_tune.py` directly
+(its `ornith` sweep row re-reads the pair, so the registry holds no production
+literal), and by `scripts/check_docs.py` (tomllib). `mise drift` fails if any
+consumer hardcodes a model literal.
 
 A `mise.toml` entry always sets the **current** model; swap by editing the two
 vars there, then `mise llm-stop` → `mise llm-start` (stop tree-kills, verified
@@ -179,10 +181,12 @@ Same `mise golden*` commands; only the *server flags* differ.
   ```
 
   POSIX form — the var is read at spawn, so an inline assignment reaches the
-  server just as well:
+  server — but it must accompany the **start**: with the production server
+  already up, `mise llm-start` reports "already running" and never spawns, so a
+  bare `LLM_REASONING=off mise llm-start` would silently measure reasoning-ON.
 
   ```bash
-  LLM_REASONING=off mise llm-start
+  mise llm-stop && LLM_REASONING=off mise llm-start
   ```
 
   `scripts/services.py` appends `--reasoning off` when `LLM_REASONING=off`

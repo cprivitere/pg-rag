@@ -20,6 +20,7 @@ param(
     [string]$Url,
     [string]$Code,
     [string]$File,
+    [string]$Session,
     [Parameter(Position = 0)]
     [AllowEmptyString()]
     [string]$ScriptPath,
@@ -34,8 +35,8 @@ $ErrorActionPreference = "Stop"
 function Usage {
     Write-Host "Usage: execute-code.ps1 -Url URL [-File PATH | -Session ID] -Code 'code'" -ForegroundColor Yellow
     Write-Host "       execute-code.ps1 -Url URL [-File PATH | -Session ID] script.py" -ForegroundColor Yellow
-    Write-Host "URL:   run molab-connect.ps1 -Info (cached url + token + kernel probe), or" -ForegroundColor Yellow
-    Write-Host "       delegate through molab-connect.ps1, which fills -Url/-Token from cache." -ForegroundColor Yellow
+    Write-Host "URL:   run molab-connect.ps1 -Info (cached url + token prefix + kernel probe)," -ForegroundColor Yellow
+    Write-Host "       or delegate through molab-connect.ps1, which fills -Url/-Token from cache." -ForegroundColor Yellow
     Write-Host "Auth:  set MARIMO_TOKEN env var (preferred) or pass -Token TOKEN" -ForegroundColor Yellow
     exit 1
 }

@@ -53,8 +53,14 @@ def _exists(*parts: str) -> bool:
 # Backticked repo-relative paths named in AGENTS.md / the skills. The
 # executable-script classes are in scope: the 2026-10-16 task/script audit
 # deleted `scripts/*.ps1` and `scripts/*.sh` files, and a `.py`-only scan
-# cannot see a surviving pointer to one of them.
-_DOC_PATH_RE = re.compile(r"`((?:scripts|src|tests|docs)/[A-Za-z0-9_./]+\.(?:py|sh|ps1))`")
+# cannot see a surviving pointer to one of them. The character class carries
+# `-` because the deleted names are hyphenated (`execute-code.ps1`,
+# `dxgi_vram.ps1`, `molab_llama_launch.sh`); a class without it passes exactly
+# the pointers this scan exists for. `.mise/tasks/` is a prefix because that
+# whole tree was deleted with the same audit.
+_DOC_PATH_RE = re.compile(
+    r"`((?:scripts|src|tests|docs|\.mise/tasks)/[A-Za-z0-9_./-]+\.(?:py|sh|ps1))`"
+)
 
 
 def _doc_refs(text: str) -> set[str]:
@@ -62,15 +68,43 @@ def _doc_refs(text: str) -> set[str]:
     return set(_DOC_PATH_RE.findall(text))
 
 
-def _missing_doc_refs(text: str) -> list[str]:
-    """The subset of `_doc_refs(text)` that does not exist on disk."""
-    return sorted(ref for ref in _doc_refs(text) if not _exists(ref))
+def _missing_doc_refs(text: str, base: Path | None = None) -> list[str]:
+    """Refs in `text` that resolve neither at the repo root nor — for a skill,
+    whose own bundled scripts are addressed as `scripts/…` — next to the source
+    file."""
+    missing = []
+    for ref in sorted(_doc_refs(text)):
+        if _exists(ref):
+            continue
+        if base is not None and (base / ref).exists():
+            continue
+        missing.append(ref)
+    return missing
+
+
+def _doc_sources() -> list[Path]:
+    """AGENTS.md (repo-root-relative) + every skill's SKILL.md (which may point
+    at its own bundled scripts)."""
+    return [ROOT / "AGENTS.md", *(ROOT / ".agents" / "skills").glob("*/SKILL.md")]
+
+
+def _all_missing_doc_refs() -> list[str]:
+    """Every unresolved doc pointer across the sources."""
+    missing: list[str] = []
+    for source in _doc_sources():
+        if not source.exists():
+            continue
+        base = source.parent if source.name == "SKILL.md" else None
+        missing += [
+            f"{source.relative_to(ROOT).as_posix()}: {ref}"
+            for ref in _missing_doc_refs(source.read_text(encoding="utf-8"), base)
+        ]
+    return missing
 
 
 def _doc_blob() -> str:
     """AGENTS.md + every skill's SKILL.md, concatenated."""
-    sources = [ROOT / "AGENTS.md", *(ROOT / ".agents" / "skills").glob("*/SKILL.md")]
-    return "\n".join(f.read_text(encoding="utf-8") for f in sources if f.exists())
+    return "\n".join(f.read_text(encoding="utf-8") for f in _doc_sources() if f.exists())
 
 
 def main() -> int:
@@ -94,7 +128,7 @@ def main() -> int:
             _report("OK", "TEST_CONTRACTS refs resolve")
 
     # --- 2. Backticked file paths in AGENTS.md + skills resolve ------------
-    missing_files = _missing_doc_refs(_doc_blob())
+    missing_files = _all_missing_doc_refs()
     if missing_files:
         _drift("docs reference missing files", ", ".join(missing_files))
     else:
@@ -206,7 +240,12 @@ def main() -> int:
             _report("OK", "golden_check.py carries the documented flags")
 
     # --- 5. Expected skills exist and are well-formed -----------------------
-    expected_skills = ["pg-data", "pg-rag", "retrieval", "evaluation", "testing"]
+    # Derived from the tree, NOT a hardcoded list: the list silently stopped
+    # covering `molab-notebook` when that skill landed, so a broken frontmatter
+    # there produced no drift while the same directory was being scanned.
+    expected_skills = sorted(
+        p.parent.name for p in (ROOT / ".agents" / "skills").glob("*/SKILL.md")
+    )
     for name in expected_skills:
         p = ROOT / ".agents" / "skills" / name / "SKILL.md"
         if not p.exists():

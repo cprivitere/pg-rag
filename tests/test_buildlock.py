@@ -68,7 +68,13 @@ def test_wait_polls_then_raises(tmp_path):
     "record",
     [
         pytest.param("not json at all", id="corrupt"),
-        pytest.param(json.dumps({"pid": 0, "startedAt": int(time.time() * 1000)}), id="dead-pid"),
+        # A pid that cannot exist. This is the win32 regression: `os.kill(dead,
+        # 0)` raises OSError(22/winerror 87), NOT ProcessLookupError, so reading
+        # it as "alive" left a crashed writer's lock unbroken for the whole TTL.
+        pytest.param(
+            json.dumps({"pid": 2147483646, "startedAt": int(time.time() * 1000)}), id="dead-pid"
+        ),
+        pytest.param(json.dumps({"pid": 0, "startedAt": int(time.time() * 1000)}), id="zero-pid"),
         pytest.param(
             json.dumps(
                 {"pid": os.getpid(), "startedAt": int((time.time() - buildlock.TTL_S - 60) * 1000)}
@@ -83,6 +89,50 @@ def test_unusable_records_are_stolen(tmp_path, record):
     buildlock.lock_path(tmp_path).write_text(record)
     with buildlock.corpus_lock(tmp_path) as path:
         assert json.loads(path.read_text())["pid"] == os.getpid()
+
+
+def test_the_steal_deletes_only_the_file_it_judged(tmp_path, monkeypatch):
+    """A peer that re-created the lock while we were judging it keeps its lock.
+
+    The steal is read-then-delete, so the delete is gated on the file's identity
+    being unchanged: without that, a lagging stealer removes a *live* owner's
+    lock and both writers proceed (the interleaved corpus write the lock exists
+    to prevent).
+    """
+    lock = buildlock.lock_path(tmp_path)
+    _hold(lock)  # a live owner's record, as the peer will leave behind
+    peer = json.dumps({"pid": os.getpid() + 1, "startedAt": int(time.time() * 1000)})
+
+    def judge_stale_and_let_the_peer_win(path):
+        """Simulate the race: we judged the file stale, and before our delete a
+        peer finished its own steal (unlink) and re-created the lock."""
+        path.unlink()
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(peer)
+        return None  # "nothing worth deferring to"
+
+    monkeypatch.setattr(buildlock, "read_owner", judge_stale_and_let_the_peer_win)
+    with pytest.raises(buildlock.BuildLocked), buildlock.corpus_lock(tmp_path):
+        pytest.fail("stole a lock a peer had just re-created")
+    assert json.loads(lock.read_text())["pid"] == os.getpid() + 1, "the peer's lock was deleted"
+
+
+def test_a_refused_release_unlink_does_not_crash(tmp_path, monkeypatch):
+    """win32: a peer holding the lock file open makes the delete fail with
+    WinError 32. That must not crash a build that just finished successfully."""
+    lock = buildlock.lock_path(tmp_path)
+    real_unlink = os.unlink
+
+    def refuse_the_lock(path, *args, **kwargs):
+        if str(path) == str(lock):
+            raise PermissionError(32, "The process cannot access the file")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "unlink", refuse_the_lock)
+    with buildlock.corpus_lock(tmp_path):
+        pass
+    assert lock.exists()  # still there; the next acquirer re-judges it
 
 
 def test_created_but_unwritten_lock_is_not_stolen(tmp_path):
@@ -155,3 +205,18 @@ def test_a_held_lock_stops_the_lazy_bm25_rebuild(tmp_path, monkeypatch):
     with pytest.raises(buildlock.BuildLocked):
         bm25.load_bm25_index(str(src), str(tmp_path / "index.pkl"))
     assert not (tmp_path / "index.pkl").exists(), "rebuilt over a held lock"
+
+
+def test_the_explicit_bm25_build_fails_fast(tmp_path):
+    """`python -m pgrag.rag.bm25` passes `lock_wait=0`: an explicit build must
+    fail fast like the other corpus writers, not sit out the in-request wait."""
+    src = tmp_path / "documents.json"
+    src.write_text(json.dumps([{"text": "alpha beta"}]), encoding="utf-8")
+    _hold(buildlock.lock_path(tmp_path))
+
+    from pgrag.rag import bm25
+
+    start = time.monotonic()
+    with pytest.raises(buildlock.BuildLocked):
+        bm25.load_bm25_index(str(src), str(tmp_path / "index.pkl"), lock_wait=0.0)
+    assert time.monotonic() - start < 5.0, "waited instead of failing fast (default wait is 30 s)"

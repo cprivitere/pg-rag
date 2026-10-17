@@ -25,7 +25,7 @@ clear error instead of wedging the build forever.
 
 from __future__ import annotations
 
-import contextlib
+import errno
 import json
 import os
 import time
@@ -72,13 +72,20 @@ def _pid_alive(pid: int) -> bool:
         return False
     try:
         os.kill(pid, 0)
-    except ProcessLookupError:
+    except ProcessLookupError:  # POSIX: no such process
         return False
     except PermissionError:  # exists, owned by someone else
         return True
-    except OSError:
-        # Unknown failure: assume alive (never steal a possibly-live build).
-        return True
+    except OSError as exc:
+        # Windows raises no ProcessLookupError: opening a dead pid fails with
+        # ERROR_INVALID_PARAMETER, surfaced as OSError(22 / winerror 87) —
+        # measured on py3.15/win32 for 2147483646, 999999 and 1. Reading that as
+        # "alive" left a crashed writer's lock unbroken for the whole TTL (the
+        # hook, which asks the OS differently, correctly called it dead), so it
+        # means dead here; every other failure stays conservative, because
+        # stealing a live build's lock is worse than waiting.
+        dead = getattr(exc, "winerror", None) == 87 or exc.errno == errno.EINVAL
+        return not dead
     return True
 
 
@@ -115,6 +122,32 @@ def read_owner(path: str | os.PathLike[str]) -> tuple[int, float] | None:
     return pid, age
 
 
+def _signature(path: Path) -> tuple[int, int, int, int] | None:
+    """Identity of the file at `path` — the compare key a steal re-checks."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
+
+
+def _unlink_quietly(path: Path) -> bool:
+    """Delete `path`, reporting whether it is gone.
+
+    A win32 peer holding the file open (any Python `read_text`) makes the delete
+    fail with WinError 32 — that is neither a reason to crash the build that
+    just finished nor a reason to believe a steal happened, so it is reported
+    rather than raised. A missing file counts as gone.
+    """
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def _release_if_ours(path: Path) -> None:
     """Unlink the lock only when this process owns it (a stolen lock stays)."""
     try:
@@ -123,8 +156,7 @@ def _release_if_ours(path: Path) -> None:
             return
     except (OSError, ValueError, TypeError, KeyError):
         return
-    with contextlib.suppress(FileNotFoundError):
-        path.unlink()
+    _unlink_quietly(path)
 
 
 @contextmanager
@@ -145,13 +177,24 @@ def corpus_lock(
         try:
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
+            judged = _signature(path)
             owner = read_owner(path)
             if owner is None:
-                # Absent-by-now / stale / unreadable: steal and retry. The
-                # unlink is not atomic against another stealer, so both may
-                # retry once; O_EXCL still admits exactly one winner.
-                with contextlib.suppress(FileNotFoundError):
-                    path.unlink()
+                # Stale / dead-pid / unreadable, or gone by now: steal and retry.
+                # Only the exact file that was judged stale may be deleted — a
+                # peer that already stole it and re-created a live lock must not
+                # have that fresh lock removed under it. Two stealers racing the
+                # same file are safe: the loser's unlink finds nothing and both
+                # retry into one O_EXCL winner, which is the atomic step.
+                if _signature(path) == judged and _unlink_quietly(path):
+                    continue
+                # The lock changed under us (a peer re-created it) or the delete
+                # was refused (win32 peer holds it open): re-judge next pass
+                # instead of spinning.
+                if time.monotonic() >= deadline:
+                    holder = read_owner(path) or (-1, 0.0)
+                    raise BuildLocked(path, *holder) from None
+                time.sleep(poll)
                 continue
             pid, age = owner
             if time.monotonic() >= deadline:

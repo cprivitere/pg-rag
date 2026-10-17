@@ -753,3 +753,31 @@ def test_corpus_search_tokenizer_and_empty(monkeypatch):
 
     monkeypatch.setattr(tools, "load_bm25_index", lambda **kw: (_Empty(), []))
     assert tools.execute_tool("unused.db", "corpus_search", {"query": "zzz"}) == "0 results."
+
+
+def test_corpus_search_reports_a_peer_holding_the_corpus_lock(tmp_path, monkeypatch):
+    """A rebuild another process holds is an error STRING, not an exception.
+
+    `run_loop` calls corpus_search for its SEED before any round, so a
+    `BuildLocked` escaping here would abort the whole answer instead of letting
+    the model fall back to sql_query/find_entities — the tool contract is
+    errors-as-data.
+    """
+    import os
+    import time
+
+    import pgrag.agentic.tools as tools
+    from pgrag import buildlock
+    from pgrag.rag import bm25
+
+    monkeypatch.setattr(tools, "DEFAULT_TOOL_DOCS", str(tmp_path / "tool_documents.json"))
+    monkeypatch.setattr(tools, "DEFAULT_TOOL_PKL", str(tmp_path / "tool_bm25.pkl"))
+    monkeypatch.setattr(bm25, "LAZY_REBUILD_WAIT_S", 0.1)
+    buildlock.lock_path(tmp_path).write_text(
+        json.dumps({"pid": os.getpid(), "startedAt": int(time.time() * 1000)}),
+        encoding="utf-8",
+    )
+
+    out = tools.execute_tool("unused.db", "corpus_search", {"query": "alpha"}, corpus="tool")
+    assert out.startswith("corpus_search error:")
+    assert "corpus build already running" in out

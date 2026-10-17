@@ -39,6 +39,7 @@ CHAT_PORT = 7860
 START_GRACE_S = 5.0  # accept-connection wait after a spawn
 PORT_PROBE_TIMEOUT = 0.5
 STOP_GRACE_S = 10.0  # SIGTERM -> SIGKILL grace on POSIX
+_CHILD_TIMEOUT_S = 10.0  # a wedged probe must not hang start/stop/status
 _CREATE_FLAGS = (
     # DETACHED_PROCESS is the load-bearing flag: the child leaves our console,
     # so a Ctrl-C aimed at the mise task cannot reach it. CREATE_NO_WINDOW is
@@ -113,10 +114,11 @@ def _llm_command() -> list[str]:
         raise SystemExit(
             "LLM_FLAGS not set — run via `mise start`/`mise llm-start` so the [env] single source exports it"
         )
-    if os.environ.get("LLM_REASONING") == "off":
+    if os.environ.get("LLM_REASONING", "").strip().lower() == "off":
         # Appended after the configured flags, before --host: the documented
         # deterministic dev gate (docs/LLM_MODEL_WIRING.md). Printed so the
-        # task log records which mode served the run.
+        # task log records which mode served the run. Case-insensitive because
+        # the PowerShell launcher this replaced used `-eq 'off'`.
         flags += " --reasoning off"
         print("LLM_REASONING=off -> appending --reasoning off (deterministic dev gate)")
     return llm_argv(model, flags)
@@ -202,6 +204,29 @@ def _clear_pid(name: str) -> None:
         _pidfile(name).unlink()
 
 
+def _run(argv: list[str]) -> str:
+    """Child stdout as text, or "" when it could not be read.
+
+    One place owns the three things every probe needs: a `timeout` (a wedged
+    `powershell`/`tasklist`/`netstat` must not hang `start`/`stop`/`status`),
+    a tolerant decode (the text is other apps' — image names, pid cells — and
+    one bad byte under the strict default kills the reader thread, leaving
+    `stdout` None), and "never raise" (an unreadable probe is data: unknown, not
+    a crash). Callers treat "" as "this probe named nobody".
+    """
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=_CHILD_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return proc.stdout or ""
+
+
 def _process_start(pid: int) -> str | None:
     """Opaque identity token for the live process at `pid` (its start time), or
     None when it cannot be read.
@@ -210,13 +235,7 @@ def _process_start(pid: int) -> str | None:
     *our* service — the start time can. Windows has no start-time column in
     `tasklist`, so it goes through PowerShell; POSIX (`Linux` + BSD `lstart`) is
     a plain `ps`. Any failure yields None, which the gate reads as "unknown",
-    i.e. no weaker than the image check.
-
-    `errors="replace"` is load-bearing: the child's text is another app's and is
-    not guaranteed UTF-8, and the strict default turns one bad byte into a
-    reader-thread failure whose `subprocess.run` returns `stdout=None` — which
-    the `.strip()` below would raise `AttributeError` on. The `or ""` covers the
-    None stdout that can still happen if the spawn itself fails oddly.
+    i.e. no weaker than the image check (see `_run` for the decode/timeout rules).
     """
     if os.name == "nt":
         argv = [
@@ -228,47 +247,23 @@ def _process_start(pid: int) -> str | None:
         ]
     else:
         argv = ["ps", "-p", str(pid), "-o", "lstart="]
-    try:
-        proc = subprocess.run(argv, capture_output=True, text=True, errors="replace")
-    except OSError:
-        return None
-    return (proc.stdout or "").strip() or None
+    return _run(argv).strip() or None
 
 
 def _process_image(pid: int) -> str | None:
     """Lowercase image name of the live process at `pid`, or None if it is gone.
 
-    Both branches parse text this repo does not control — image names come from
-    other apps — so both ask for `errors="replace"`; under the strict default one
-    non-UTF-8 byte kills the reader thread and `subprocess.run` returns
-    `stdout=None`, which the scans below would raise on. A None stdout is read as
-    "process unknown" (None), never as a crash.
+    Both branches parse text this repo does not control (see `_run`); an
+    unreadable probe means "process unknown" (None), never a crash.
     """
     if os.name == "nt":
-        try:
-            proc = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
-                capture_output=True,
-                text=True,
-                errors="replace",
-            )
-        except OSError:
-            return None
-        for line in (proc.stdout or "").splitlines():
+        out = _run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"])
+        for line in out.splitlines():
             fields = [field.strip().strip('"') for field in line.split(",")]
             if len(fields) >= 2 and fields[1] == str(pid):
                 return fields[0].lower()
         return None
-    try:
-        proc = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "comm="],
-            capture_output=True,
-            text=True,
-            errors="replace",
-        )
-    except OSError:
-        return None
-    out = (proc.stdout or "").strip()
+    out = _run(["ps", "-p", str(pid), "-o", "comm="]).strip()
     # BSD `ps -o comm=` prints the full executable path, Linux a bare name:
     # basename keeps the compare portable across both.
     return os.path.basename(out.splitlines()[0]).lower() if out else None
@@ -303,22 +298,25 @@ def _pid_instance_matches(pid: int, recorded_start: str | None) -> bool:
     return live is None or live == recorded_start
 
 
-_PID_RE = re.compile(r"pid=(\d+)")
-_POSITIVE_PID_RE = re.compile(r"\d+")
+_PID_RE = re.compile(r"pid=(\d+)", re.ASCII)
+_POSITIVE_PID_RE = re.compile(r"\d+", re.ASCII)
+# OSes cap pids well below this; a longer cell is not a pid whatever it is.
+_MAX_PID = 2**31 - 1
 
 
 def _pid_cell(cell: str) -> int | None:
     """`cell` as a pid, or None when it is not one.
 
-    A pid cell is decimal digits only and strictly positive: `netstat`/`ss`/
-    `lsof` never print a sign, so `n/a`, `-1`, `+5` and `0` are malformed rows.
-    Left unchecked, `int("-1")` would hand `stop` a pid to signal that no row
-    ever named — and a negative/recycled number is not a service of ours.
+    A pid cell is ASCII decimal digits only, strictly positive and within the OS
+    range: `netstat`/`ss`/`lsof` never print a sign or exotic digits, so `n/a`,
+    `-1`, `+5`, `0`, `٣٤` and a 24-digit row are all malformed. Left unchecked,
+    `int("-1")` would hand `stop` a pid to signal that no row ever named — and a
+    negative/recycled/overflowing number is not a service of ours.
     """
     if not _POSITIVE_PID_RE.fullmatch(cell):
         return None
     pid = int(cell)
-    return pid if pid > 0 else None
+    return pid if 0 < pid <= _MAX_PID else None
 
 
 # A listening socket is the only TCP row whose peer is the null address, so the
@@ -364,42 +362,22 @@ def _pid_from_ss(text: str, port: int) -> int | None:
 def _port_owner(port: int) -> int | None:
     """Pid holding the listening socket on `port`, or None.
 
-    Every probe's stdout is text this repo does not control, so each read asks
-    for `errors="replace"` (the strict default returns a None stdout, not an
-    error, when a byte does not decode) and a None stdout means "this probe named
-    nobody" — never a crash on `.splitlines()`, and never a bogus pid.
+    Every probe's stdout is text this repo does not control, so each read goes
+    through `_run` (replace-decode + timeout + never raises) and an unreadable
+    probe means "this probe named nobody" — never a crash, never a bogus pid.
     """
     if os.name == "nt":
         # No `-p TCP`: that filter drops every `[::]` row (measured: `-p TCP`
         # listed 0 IPv6 rows where plain `-ano` listed 20), so an IPv6-bound
         # listener would be invisible and `stop` would no-op on a held port.
-        try:
-            proc = subprocess.run(
-                ["netstat", "-ano"], capture_output=True, text=True, errors="replace"
-            )
-        except OSError:
-            return None
-        return _pid_from_netstat(proc.stdout or "", port)
-    try:
-        proc = subprocess.run(["ss", "-ltnpH"], capture_output=True, text=True, errors="replace")
-        pid = _pid_from_ss(proc.stdout or "", port)
-        if pid is not None:
-            return pid
-    except OSError:
-        pass
-    try:
-        # `-sTCP:LISTEN` keeps this listener-scoped: plain `-i TCP:<port>` also
-        # matches a *client* socket on that port, and `stop` would then signal
-        # the client instead of the listener.
-        proc = subprocess.run(
-            ["lsof", "-t", "-i", f"TCP:{port}", "-sTCP:LISTEN"],
-            capture_output=True,
-            text=True,
-            errors="replace",
-        )
-    except OSError:
-        return None
-    for line in (proc.stdout or "").splitlines():
+        return _pid_from_netstat(_run(["netstat", "-ano"]), port)
+    pid = _pid_from_ss(_run(["ss", "-ltnpH"]), port)
+    if pid is not None:
+        return pid
+    # `-sTCP:LISTEN` keeps this listener-scoped: plain `-i TCP:<port>` also
+    # matches a *client* socket on that port, and `stop` would then signal the
+    # client instead of the listener.
+    for line in _run(["lsof", "-t", "-i", f"TCP:{port}", "-sTCP:LISTEN"]).splitlines():
         pid = _pid_cell(line.strip())
         if pid is not None:
             return pid
@@ -433,7 +411,26 @@ def _kill_tree(pid: int, ours: bool) -> None:
     pid and warns, naming the reason.
     """
     if os.name == "nt":
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+        # Windows has no process groups to reason about, but it must not be
+        # handed a bogus pid either: `taskkill` on 0/4 would end a system
+        # process, and a port-derived pid has no provenance at all (parity with
+        # the deleted `*-stop.ps1` is `/T /F`, not a licence to guess).
+        if pid <= 1:
+            print(f"warning: {pid} is not a service we spawned; not signalling it")
+            return
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                timeout=_CHILD_TIMEOUT_S,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            print(f"warning: taskkill could not be run for {pid}")
+        if not ours:
+            print(
+                f"warning: {pid} came from the port owner, not a pidfile we recorded; "
+                "its whole tree was killed"
+            )
         return
     if pid <= 1:
         reason = "a pid <= 1 is never a service we spawned"
@@ -444,6 +441,10 @@ def _kill_tree(pid: int, ours: bool) -> None:
             pgid = os.getpgid(pid)
         except ProcessLookupError:
             return  # already gone
+        except PermissionError:
+            # Another user's process holds the port: it is not ours to signal.
+            print(f"warning: cannot signal {pid} (permission denied); not stopping it")
+            return
         if pgid != pid:
             reason = "it does not lead its own process group"
         else:
@@ -461,10 +462,12 @@ def _kill_tree(pid: int, ours: bool) -> None:
     kill = os.killpg if reason is None else os.kill
     try:
         kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError) as exc:
+        if isinstance(exc, PermissionError):
+            print(f"warning: cannot signal {pid} (permission denied); not stopping it")
         return
     _wait_dead(pid)
-    with contextlib.suppress(ProcessLookupError):
+    with contextlib.suppress(ProcessLookupError, PermissionError):
         kill(pid, signal.SIGKILL)
     if reason is not None:
         print(
@@ -602,13 +605,12 @@ def _probe(url: str) -> tuple[bool, str]:
         with urllib.request.urlopen(url, timeout=2) as resp:
             if resp.status == 200:
                 return True, "Running"
-            if resp.status == 503:
-                # llama-server answers 503 while the model loads: the process is
-                # up and serving, so "loading" is not "stopped" (and must not
-                # make `status` exit non-zero on a healthy boot).
-                return True, "Loading (HTTP 503)"
             return False, f"Stopped (HTTP {resp.status})"
     except urllib.error.HTTPError as err:
+        # llama-server answers 503 while the model loads: the process is up and
+        # serving, so "loading" is not "stopped" (and must not make `status`
+        # exit non-zero on a healthy boot). `urlopen` RAISES for 503, so this is
+        # the only reachable arm for it.
         if err.code == 503:
             return True, "Loading (HTTP 503)"
         return False, f"Stopped (HTTP {err.code})"

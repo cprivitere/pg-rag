@@ -67,11 +67,14 @@ the notebook's PEP 723 header on upload — a notebook cannot override it
 - Public corpus bucket: `hf://buckets/Nubula/paddock/` (HuggingFace *Buckets*
   product, `hf://buckets/<org>/<name>/...` scheme — NOT `hf://datasets/`).
   `documents.json` (~262k docs) is the same artifact local `pgrag
-  build-documents` emits; publish it with `mise upload-docs` after a rebuild
-  (writes `data/documents.json` with your `HF_TOKEN`, then verifies remote
-  size == local). A rebuild never auto-publishes. The notebook's `corpus_docs`
-  cell downloads it and builds the tool corpus from it via the tarball's
-  `scripts/build_tool_corpus.py`.
+  build-documents` emits, and `derived/documents_version.json` is its
+  `DOCUMENTS_VERSION` stamp; publish BOTH with `mise upload-docs` after a
+  rebuild (writes `data/documents.json` with your `HF_TOKEN`, then verifies
+  remote size == local). A rebuild never auto-publishes. The notebook's
+  `corpus_docs` cell downloads both and builds the tool corpus from them via the
+  tarball's `scripts/build_tool_corpus.py` — which REFUSES to run without the
+  stamp, so publishing the corpus alone leaves a fresh sandbox unable to reach
+  the tool loop.
 - Private store bucket: `hf://buckets/Nubula/paddock-private/` (next section).
 - Access from the sandbox is token-based: molab injects the account's
   `HF_TOKEN` into `/marimo/.env`, and `huggingface_hub` picks it up. The corpus

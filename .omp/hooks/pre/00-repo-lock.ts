@@ -39,7 +39,7 @@
 // cannot reason about.
 
 import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const LOCK_REL = join("data", ".omp-build.lock");
@@ -83,13 +83,16 @@ const DESTRUCTIVE = new RegExp(
 // subcommand rewrites `data/*.json`; a chained corpus command still fails the
 // disqualifier below (`git commit … && mise syf`).
 const READ_ONLY_HEAD =
-  /^\s*(?:git|rg|grep|egrep|fgrep|findstr|Select-String|Get-ChildItem|Get-Content|Get-Item|Get-Command|Test-Path|gci|gc|awk|sed\s+-n|cat|bat|head|tail|less|more|wc|sort|uniq|jq|file|stat|du|ls|dir|type|where|echo|printf)\b/;
+  /^\s*(?:git|rg|grep|egrep|fgrep|findstr|Select-String|Get-ChildItem|Get-Content|Get-Item|Get-Command|Test-Path|gci|gc|ruff|read|awk|sed\s+-n|cat|bat|head|tail|less|more|wc|sort|uniq|jq|file|stat|du|ls|dir|type|where|echo|printf|uv\s+run\s+(?:ruff|pytest|pyright))\b/;
 
 // True when every segment of the command is a pure reader. Chaining (`&&`, `;`,
 // `&`, backticks, `$(…)`, subshells) and output redirection always disqualify:
 // `grep x && mise sync-fast` is a writer. Quote-aware, so
-// `grep -E "sync|build"` is not read as a pipeline of two commands.
+// `grep -E "sync|build"` is not read as a pipeline of two commands — but a
+// substitution stays a substitution even inside quotes (`echo "$(mise syf)"`
+// runs it), so those are rejected directly.
 function isReadOnly(command: string): boolean {
+  if (/["'][^"']*(?:\$\(|`)/.test(command)) return false; // quoted command substitution
   let cmd = command.trim();
   for (;;) {
     // leading `cd <dir> &&` hops do not touch corpus state
@@ -166,22 +169,50 @@ function pidAlive(pid: number): boolean {
 
 type Owner = { pid: number; ageMs: number };
 
+// How long a created-but-unwritten lock file is trusted to its creator. Mirrors
+// EMPTY_GRACE_S in `src/pgrag/buildlock.py`: during that window the writer
+// defers, so the probe should say "busy" rather than let the command start.
+const EMPTY_GRACE_MS = 5_000;
+
 // The live, non-stale owner of `path`, or null when there is no owner worth
 // deferring to (absent, unreadable, dead pid, or past the staleness horizon) —
-// in which case the writer that follows steals or takes it.
+// in which case the writer that follows steals or takes it. The rules are the
+// writer's (`src/pgrag/buildlock.py: read_owner`): a record with no positive
+// start time is unusable rather than permanently blocking, and a fresh *empty*
+// file belongs to the creator mid-write.
 function liveOwner(path: string): Owner | null {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return null; // absent -> nothing to defer to
+  }
+  if (!raw.trim()) {
+    // create→write window (see EMPTY_GRACE_MS)
+    let ageMs = 0;
+    try {
+      ageMs = Date.now() - statSync(path).mtimeMs;
+    } catch {
+      return null; // vanished: the writer will just take it
+    }
+    return ageMs < EMPTY_GRACE_MS ? { pid: -1, ageMs: Math.max(0, ageMs) } : null;
+  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
+    parsed = JSON.parse(raw);
   } catch {
-    return null; // absent or malformed -> nothing to defer to
+    return null; // corrupt -> the writer steals it
   }
   if (!parsed || typeof parsed !== "object" || !("pid" in parsed)) return null;
   const pid = typeof parsed.pid === "number" ? parsed.pid : -1;
-  const startedAt = "startedAt" in parsed && typeof parsed.startedAt === "number" ? parsed.startedAt : 0;
+  const startedAt =
+    "startedAt" in parsed && typeof parsed.startedAt === "number" ? parsed.startedAt : 0;
   if (!pidAlive(pid)) return null;
-  const ageMs = startedAt > 0 ? Date.now() - startedAt : 0;
-  if (startedAt > 0 && ageMs > TTL_MS) return null;
+  // No usable start time: nothing proves how old this is, and a record that
+  // blocks forever has no escape hatch (the writer steals it). Treat as unusable.
+  if (!(startedAt > 0)) return null;
+  const ageMs = Date.now() - startedAt;
+  if (ageMs > TTL_MS) return null;
   return { pid, ageMs: Math.max(0, ageMs) };
 }
 
@@ -201,10 +232,11 @@ export default function (pi: HookAPI): void {
       const owner = liveOwner(lockPath);
       if (!owner) return; // free, stale, or unreadable: the writer will take it
       const held = owner.ageMs > 0 ? ` for ${Math.round(owner.ageMs / 1000)}s` : "";
+      const holder = owner.pid > 0 ? `pid ${owner.pid}` : "an unidentified process";
       return {
         block: true,
         reason:
-          `blocked by the repo corpus-build lock: pid ${owner.pid} has held ${lockPath}${held}. ` +
+          `blocked by the repo corpus-build lock: ${holder} has held ${lockPath}${held}. ` +
           "Wait for that build to finish, or if it crashed, remove the lock file and retry.",
       };
     } catch {

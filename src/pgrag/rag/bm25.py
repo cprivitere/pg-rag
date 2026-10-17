@@ -1,3 +1,4 @@
+import contextlib
 import json
 import math
 import os
@@ -138,7 +139,12 @@ def _documents_mtime(source_path):
 
 def save_bm25_index(model, documents, path=DEFAULT_PICKLE_PATH, source_path=DEFAULT_INDEX_PATH):
     """Persist an indexed BM25 + the doc store to `path`, keyed by the
-    documents.json mtime so `load_bm25_index` can detect staleness."""
+    documents.json mtime so `load_bm25_index` can detect staleness.
+
+    Written to a sibling temp file and renamed: the cache-hit read in
+    `load_bm25_index` happens *before* the build lock, so an in-place write
+    could hand a concurrent reader a torn pickle.
+    """
     payload = {
         "__version": CACHE_VERSION,
         "documents_mtime": _documents_mtime(source_path),
@@ -150,15 +156,30 @@ def save_bm25_index(model, documents, path=DEFAULT_PICKLE_PATH, source_path=DEFA
         "postings": model.postings,
         "documents": documents,
     }
-    with open(path, "wb") as f:
-        pickle.dump(payload, f)
+    tmp = f"{path}.tmp-{os.getpid()}"
+    try:
+        with open(tmp, "wb") as f:
+            pickle.dump(payload, f)
+        os.replace(tmp, path)
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
 
 
-def load_bm25_index(path=DEFAULT_INDEX_PATH, pkl_path=DEFAULT_PICKLE_PATH):
+def load_bm25_index(
+    path=DEFAULT_INDEX_PATH,
+    pkl_path=DEFAULT_PICKLE_PATH,
+    lock_wait: float | None = None,
+):
     """Return (BM25, docs).
 
     Serves the cached index from `pkl_path` while `documents.json` is
     unchanged (mtime-keyed); otherwise rebuilds and rewrites the cache.
+
+    `lock_wait` is how long the rebuild may wait for a peer's corpus build to
+    finish before raising `BuildLocked`: the lazy in-request default
+    (`LAZY_REBUILD_WAIT_S`) is wrong for an explicit `python -m pgrag.rag.bm25`
+    build, which should fail fast like every other corpus writer.
     """
     mtime = _documents_mtime(path)
     if os.path.exists(pkl_path):
@@ -191,11 +212,15 @@ def load_bm25_index(path=DEFAULT_INDEX_PATH, pkl_path=DEFAULT_PICKLE_PATH):
 
     # A rebuild rewrites the persisted index, i.e. it is a corpus write: hold
     # the lock that lives beside the cache (data/.omp-build.lock for the
-    # defaults) so two instances never rebuild over each other. Unlike an
-    # explicit build this can run inside a request, so it waits briefly for a
-    # peer's step to finish before failing loudly (BuildLocked reaches the
-    # caller as a tool error, never as a concurrent rebuild).
-    with corpus_lock(Path(pkl_path).resolve().parent, wait=LAZY_REBUILD_WAIT_S):
+    # defaults) so two instances never rebuild over each other. The wait
+    # differs by caller: a lazy rebuild inside a request polls briefly for a
+    # peer's step and then raises (`corpus_search` turns that into an error
+    # string), while the explicit `__main__` build fails fast like the other
+    # corpus writers.
+    with corpus_lock(
+        Path(pkl_path).resolve().parent,
+        wait=LAZY_REBUILD_WAIT_S if lock_wait is None else lock_wait,
+    ):
         with open(path, encoding="utf-8") as f:
             docs = json.load(f)
         model = BM25()
@@ -218,5 +243,7 @@ if __name__ == "__main__":
     import sys
 
     sys.stdout.reconfigure(line_buffering=True)
-    load_bm25_index()
+    # lock_wait=0: an explicit build fails fast on a peer's lock, like the
+    # other corpus writers — waiting is only right for the in-request rebuild.
+    load_bm25_index(lock_wait=0.0)
     print("BM25 index ready (rebuilt if documents.json changed)")

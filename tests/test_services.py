@@ -7,8 +7,10 @@ Gradio) is ever spawned — the only subprocesses are a throwaway
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
+import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -67,9 +69,12 @@ def test_llm_command_argv(monkeypatch):
     ]
 
 
-def test_reasoning_off_appends_flag(monkeypatch, capsys):
+@pytest.mark.parametrize("value", ["off", "OFF", " off "])
+def test_reasoning_off_appends_flag(monkeypatch, capsys, value):
+    """The dev gate is case-insensitive: the PowerShell launcher this replaced
+    used `-eq 'off'`, which was."""
     _set_llm_env(monkeypatch)
-    monkeypatch.setenv("LLM_REASONING", "off")
+    monkeypatch.setenv("LLM_REASONING", value)
     argv = _llm_command()
     # --reasoning off lands immediately after the configured flags, before --host.
     idx_reasoning = argv.index("--reasoning")
@@ -154,12 +159,25 @@ def test_netstat_scan_survives_a_malformed_row():
     assert _pid_from_netstat(text, 8080) == 4242
 
 
-@pytest.mark.parametrize("cell", ["-1", "0", "+5", "n/a", "1_0"])
+@pytest.mark.parametrize(
+    "cell",
+    [
+        "-1",
+        "0",
+        "+5",
+        "n/a",
+        "1_0",
+        "٣٤",  # Arabic-Indic digits: `\d` matches them without re.ASCII
+        "\N{FULLWIDTH DIGIT ONE}\N{FULLWIDTH DIGIT TWO}",
+        "9" * 24,  # beyond any OS pid range
+    ],
+)
 def test_netstat_rejects_a_pid_cell_that_is_not_a_positive_integer(cell):
-    """contract: a pid cell is decimal digits only and strictly positive —
-    `netstat`/`ss`/`lsof` never print a sign, so `-1`/`+5`/`0` are malformed
-    rows. `int()` alone would accept `-1` and `+5` and hand `stop` a pid no row
-    ever named."""
+    """contract: a pid cell is ASCII decimal digits only, strictly positive and
+    inside the OS range — `netstat`/`ss`/`lsof` never print a sign or exotic
+    digits, so `-1`/`+5`/`0`/`٣٤`/a 24-digit cell are malformed rows. `int()`
+    alone would accept `-1`, `+5` and Arabic-Indic digits and hand `stop` a pid
+    no row ever named (an out-of-range one makes `os.kill` raise OverflowError)."""
     text = (
         f"  TCP    0.0.0.0:8080           0.0.0.0:0              LISTENING       {cell}\n"
         "  TCP    0.0.0.0:8080           0.0.0.0:0              LISTENING       4242\n"
@@ -261,10 +279,25 @@ def test_partial_pidfile_reads_as_absent(monkeypatch, tmp_path):
 
 
 def test_write_pid_leaves_no_temp_file_behind(monkeypatch, tmp_path):
-    """The temp file is a means, not an artifact: `os.replace` consumes it, so a
-    `stop` scanning the log dir sees only the real pidfile."""
+    """contract: the pidfile is published by `os.replace` from a sibling temp
+    file — that rename is what closes the concurrent-`stop` window the tolerant
+    reader only papers over (a truncate+write implementation also leaves one
+    file on a quiet filesystem, so the reader test alone pins nothing here)."""
     monkeypatch.setattr(services, "LOG_DIR", tmp_path)
+    replaced: list[tuple[str, str]] = []
+    real_replace = os.replace
+
+    def spy(src, dst, *args, **kwargs):
+        replaced.append((str(src), str(dst)))
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(services.os, "replace", spy)
     _write_pid("llm", 4242, "tok")
+
+    assert len(replaced) == 1
+    src, dst = replaced[0]
+    assert dst == str(tmp_path / "llm.pid")
+    assert src.endswith(".tmp")  # the sibling temp file, consumed by the rename
     assert sorted(p.name for p in tmp_path.iterdir()) == ["llm.pid"]
     assert _read_pidfile("llm") == (4242, "tok")
 
@@ -353,6 +386,11 @@ def _posix_kill_env(
     `os.killpg`/`os.getpgid`, hence `raising=False`). `own_group` is the pgid
     reported for *this* test process, i.e. the caller's own group."""
     signals: list[tuple[str, int, int]] = []
+    if os.getpid() == 4242:
+        # The fake keys on "is this pid the caller?", and every POSIX kill test
+        # targets 4242: a pytest process that happens to BE 4242 would make the
+        # caller and the target indistinguishable and the verdicts meaningless.
+        pytest.skip("this pytest process is pid 4242, which the fake uses as its target")
     caller = os.getpid()
     monkeypatch.setattr(services, "signal", _Signals, raising=False)
     monkeypatch.setattr(services.os, "name", "posix", raising=False)
@@ -387,6 +425,23 @@ def test_kill_tree_windows_uses_taskkill_tree(monkeypatch):
     monkeypatch.setattr(services.subprocess, "run", lambda argv, **kw: calls.append(list(argv)))
     services._kill_tree(4242, ours=True)
     assert calls == [["taskkill", "/PID", "4242", "/T", "/F"]]
+
+
+def test_kill_tree_windows_refuses_a_system_pid_and_names_a_port_owner(monkeypatch, capsys):
+    """`taskkill /T /F` on 0 or 4 would end a system process, and the port-owner
+    path has no provenance at all — Windows gets the POSIX `pid <= 1` rule and
+    the same warning the POSIX branch prints."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(services.os, "name", "nt", raising=False)
+    monkeypatch.setattr(services.subprocess, "run", lambda argv, **kw: calls.append(list(argv)))
+
+    services._kill_tree(0, ours=False)
+    assert calls == []
+    assert "not a service we spawned" in capsys.readouterr().out
+
+    services._kill_tree(4242, ours=False)  # port-derived: killed, but named
+    assert calls == [["taskkill", "/PID", "4242", "/T", "/F"]]
+    assert "came from the port owner" in capsys.readouterr().out
 
 
 def test_kill_tree_posix_group_leader_escalates(monkeypatch):
@@ -522,8 +577,23 @@ def test_identity_probes_read_decoded_text(monkeypatch):
         monkeypatch.setattr(services.os, "name", os_name, raising=False)
         assert services._process_image(4242) is None  # process unknown
         assert services._process_start(4242) is None  # token unknown
-    assert len(calls) == 4
+    assert len(calls) >= 2  # both OS branches probed (count is plumbing, not contract)
     assert all(kw.get("errors") == "replace" for kw in calls)
+    assert all("timeout" in kw for kw in calls)  # a wedged probe must not hang
+
+
+def test_child_probes_time_out_instead_of_hanging(monkeypatch):
+    """Every probe read is bounded: a wedged powershell/tasklist/netstat must not
+    hang `start`/`stop`/`status`, and a timeout means "could not read" (unknown),
+    not an exception out of the command."""
+    def fake_run(argv, **kwargs):
+        raise services.subprocess.TimeoutExpired(argv, kwargs.get("timeout") or 1)
+
+    monkeypatch.setattr(services.subprocess, "run", fake_run)
+    assert services._run(["netstat", "-ano"]) == ""
+    assert services._process_image(4242) is None
+    assert services._process_start(4242) is None
+    assert services._port_owner(8080) is None
 
 
 def test_port_owner_survives_a_probe_that_could_not_decode(monkeypatch):
@@ -745,8 +815,16 @@ def test_status_mapping_and_help_block(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "[OK] LLM Server (:8080): Running" in out
     assert "[DOWN] Chat (Gradio) (:7860): Stopped" in out
-    for cmd in ("mise start", "mise down", "mise sl", "mise sc", "mise xc"):
-        assert cmd in out
+    # The Commands block is user-facing help, so its `mise X` tokens must be real
+    # aliases — this replaced a loop that re-read strings `status()` itself had
+    # just printed (it could never fail).
+    mise = tomllib.loads(
+        (Path(__file__).resolve().parents[1] / "mise.toml").read_text(encoding="utf-8")
+    )
+    aliases = {task.get("alias") for task in mise["tasks"].values()}
+    printed = set(re.findall(r"mise (\w+)", out))
+    assert printed, "the help block printed no commands"
+    assert printed <= aliases, f"help names non-aliases: {sorted(printed - aliases)}"
     # No `OpenWebUI`/`webui` assertion here: `status` prints neither string, so
     # such a check was vacuously true. The no-dead-reference contract for the
     # retired UI is a repo-wide grep, not a property of this output.

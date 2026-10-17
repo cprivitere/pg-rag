@@ -125,6 +125,10 @@ def _build() -> int:
 
     model = BM25()
     model.index([d["text"] for d in kept])
+    # save_bm25_index, NOT load_bm25_index: this script already holds the
+    # corpus lock (main), and the loader would try to take it again in this
+    # process — no re-entrancy, so that "simplification" would deadlock the
+    # build against itself.
     save_bm25_index(model, kept, str(PKL), str(OUT))
     print(f"BM25 cache -> {PKL} (built in {time.time() - start:.0f}s total)")
     return 0

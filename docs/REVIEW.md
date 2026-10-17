@@ -256,8 +256,10 @@ guardrail that keeps it truthful.
 
 ## Follow-up fix pass (2026-10-17) — the `479b6bc` task/script audit
 
-Reviewed `479b6bc` ("audit mise tasks + scripts") and fixed everything the review
-found except two items deliberately deferred (below).
+Reviewed `479b6bc` ("audit mise tasks + scripts") — then the three-commit range
+(`479b6bc` + `a8fcf27` + `2af6bc5`) in a second, PR-style round whose findings
+are folded in below. Everything the reviews found is fixed; the carry-overs named
+in the first pass are addressed in the second.
 
 - **Corpus-build lock redesigned** (the review's only P1 pair). The pre-hook
   (`.omp/hooks/pre/00-repo-lock.ts`) is now **probe-only**; the *writers* own
@@ -281,22 +283,64 @@ found except two items deliberately deferred (below).
   `logs`/`tail-llm`/`golden-type` do, so the service tasks really are runnable
   on POSIX), the `[env]` consumer lists include `scripts/agentic_tune.py`,
   AGENTS/TEST_CONTRACTS/testing-skill names and counts were corrected
-  (483 collected / 78 deselected / 405 default), the L4 Change ⇒ command runs
+  (**503 collected / 78 deselected / 425 default** after the L11/L12 tests
+  landed), the L4 Change ⇒ command runs
   its new `test_publish_store.py`, and the orphan
   `tests/fixtures/retrieval_cases.json` (a dense-path leftover) was deleted.
 
-**Resolved in a follow-up pass (2026-10-17).**
+**Carry-overs resolved (2026-10-17, second pass).**
 
-1. `scripts/check_docs.py` now resolves backticked `scripts|src|tests|docs`
-   pointers over **`.py`, `.sh` and `.ps1`** (the extension class that let 12 of
-   `479b6bc`'s deletions pass silently), split into testable helpers
-   (`_doc_refs` / `_missing_doc_refs` / `_doc_blob`). New layer **L12**
-   (`tests/test_check_docs.py`) pins the widened capture, a vanished pointer
-   being reported, and the real AGENTS.md + skills blob staying clean. Verified
-   `mise drift` → 21 OK / 0 drift with the wider scan.
+1. `scripts/check_docs.py` now resolves backticked
+   `scripts|src|tests|docs|.mise/tasks` pointers over **`.py`, `.sh` and
+   `.ps1`** — with `-` in the name class, because the deleted names are
+   hyphenated (`execute-code.ps1`, `dxgi_vram.ps1`) — and resolves a skill's own
+   `scripts/…` reference next to its `SKILL.md` (which is how the molab skill
+   names `execute-code.ps1`). Split into testable helpers (`_doc_refs` /
+   `_missing_doc_refs` / `_all_missing_doc_refs`); the expected-skills list is
+   now derived from the tree instead of a five-name literal that silently
+   skipped `molab-notebook`. New layer **L12** (`tests/test_check_docs.py`) pins
+   the widened capture, a vanished pointer being reported, skill-local
+   resolution, and the real AGENTS.md + skills blob staying clean. Verified
+   `mise drift` → 22 OK / 0 drift with the wider scan. Note the first round's
+   claim that the widening "let 12 deletions pass" was too broad: only the four
+   `scripts/*` ones were ever in the scanned prefix space.
 2. `.agents/skills/molab-notebook/scripts/execute-code.ps1` pointed at
    `discover-servers.ps1`, which never existed in the skill; the URL/token flow
    is its sibling `molab-connect.ps1` (`-Pasteline "<block>" -Save`, then
    `-Info` for the url + kernel probe). Both the header comment and the Usage
-   text now name it. The `scripts/molab_vllm_launch.sh` the molab skill
-   references **does** exist (checked) — it was never part of this backlog.
+   text now name it, and its long-advertised `-Session` parameter now exists
+   (it was in the Usage text and in every branch of the body, but not in the
+   param block, so `-Session` hard-errored). The `scripts/molab_vllm_launch.sh`
+   the molab skill references **does** exist (checked) — it was never part of
+   this backlog.
+
+**Second-round findings on the lock + writers (all fixed, all pinned).**
+
+- **`BuildLocked` no longer escapes the tool loop.** `corpus_search` catches it
+  and returns an error string: `run_loop` calls that tool for its SEED, so an
+  escaping exception killed the whole answer instead of letting the model fall
+  back to `sql_query`/`find_entities` (`tests/test_agentic_tools.py`).
+- **Dead-pid locks are recoverable on win32.** `os.kill(dead_pid, 0)` raises
+  `OSError(22 / winerror 87)` there, not `ProcessLookupError`, so the old
+  `except OSError: assume alive` left a crashed writer's lock in place for the
+  full 3 h TTL. Measured, mapped to "dead" (EINVAL), and pinned with a real
+  impossible pid (the old test used pid 0, which short-circuited above `os.kill`
+  and masked it).
+- **The steal is identity-checked**, and both unlinks tolerate an OS refusal:
+  a lagging stealer can no longer delete a lock a peer just re-created, and a
+  win32 `WinError 32` (a peer holding the file open) on the *release* path no
+  longer crashes a build that finished successfully.
+- **`--docs` publishes the `DOCUMENTS_VERSION` stamp** and validates the corpus
+  (JSON list + stamp match) before the first byte: the molab sandbox builds its
+  tool corpus with the tarball's own `build_tool_corpus.py`, which refuses to run
+  without the stamp — the corpus alone left a fresh sandbox unable to reach the
+  tool loop. The notebook now fetches both via `.part` + rename, so a truncated
+  download cannot poison its cache.
+- **BM25**: an explicit `python -m pgrag.rag.bm25` build fails fast on a peer's
+  lock (`lock_wait=0`) instead of sitting out the 30 s in-request wait, and the
+  pickle is written to a temp file + renamed (the cache-hit read happens before
+  the lock, so in-place writes could hand a reader a torn pickle).
+- **`services.py`**: POSIX permission errors in the kill path, the Windows
+  `pid <= 1` guard, bounded child reads (a wedged probe can no longer hang
+  `stop`), ASCII-only pid cells, dead 503 branch removed, and the
+  `LLM_REASONING` dev gate is case-insensitive like the PowerShell it replaced.

@@ -26,6 +26,10 @@ Hard requirements for pg-rag sessions. Sticky: re-attached near the current turn
     (never taking the lock itself — a hook's tool call ends long before a build
     does). `mise sql-store`/`sq` is *not* guarded (private additive store, not
     corpus state) and neither are publishes (`upload-docs`/`upload-store`). A
-    pure read that merely *names* a task (`grep -rn build-bm25 .`) is never
-    blocked. Never bypass the lock by hand-editing it; to clear a stuck one,
-    delete `data/.omp-build.lock`.
+    pure read that merely *names* a task (`grep -rn build-bm25 .`,
+    `git commit -m 'fix build-documents stamp'`) is never blocked, but the
+    reader list is a heuristic: an unusual spelling (e.g. `uv run python -c
+    "..."` that names a build script) may still be probed, and a chained or
+    redirected command always is. The writers' own lock is the real guarantee.
+    Never bypass the lock by hand-editing it; to clear a stuck one, delete
+    `data/.omp-build.lock`.

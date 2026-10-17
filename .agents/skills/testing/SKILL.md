@@ -5,8 +5,8 @@ description: Regression-triage and test discipline for pg-rag — how to decide 
 
 # testing — regression triage & test discipline
 
-The suite collects 486 tests; the default `not slow` marker deselects 78 (16
-data-heavy tests + the 62 parametrized golden cases), leaving 408 in the default
+The suite collects 503 tests; the default `not slow` marker deselects 78 (16
+data-heavy tests + the 62 parametrized golden cases), leaving 425 in the default
 offline run (one POSIX-only port-owner case skips on Windows). Everything is
 offline — the golden gate is the only suite that needs a server, and only the
 LLM (:8080). When a test fails, triage BEFORE
