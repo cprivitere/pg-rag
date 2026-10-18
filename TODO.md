@@ -188,3 +188,10 @@
 - Instead of a separate chat window web thing, package this in such a way that I
   can make a custom build of glogger that has this as a tab inside of it
   - first class access to glogger's data
+
+- Review backlog (from retired `docs/REVIEW.md`, 2026-10-18 — only items whose subject still exists; the molab/BM25/buildlock/publish/pre-hook five died with their code):
+  - `scripts/services.py`: `_wait_dead` reads `PermissionError` as "gone" (line 402); a pidfile `os.replace` can raise `WinError 5`; win32 `taskkill /T /F` tree-kills an unprovenanced port owner while POSIX signals one pid (asymmetry, `not ours` branch only warns).
+  - `execute_tool` errors-as-data is partial (`src/pgrag/agentic/tools.py`): `_corpus_search` catches only `sqlite3.OperationalError`, and `_conn` sits outside the `try` — other `sqlite3.Error`s escape the seed instead of returning strings.
+  - Curator scheduler (`scripts/curator_scheduler.py`): the rc≠0 → no-`save_state` path is uncovered, and its derived-corpus order differs from every `mise sync-*` task without saying why.
+  - Docstring debt about the deleted dense path: `src/pgrag/documents/chunking.py` module docstring + `MAX_EMBED_CHARS` comment, `tests/test_chunking.py` (~128, ~164-166) and `tests/test_leveling.py` (~205-208) embed-window prose, and `tests/conftest.py`'s "code moves keep derived artifacts out of the source dir" claim (live `data/wiki/curated/` + `data/wiki/.parsed.json` sit inside the guarded dir) still speak of bge-small/embed windows in the present tense.
+  - Two `mise.toml` nits: `golden-type` is pwsh-pinned while the file claims the task set is POSIX-usable without PowerShell, and `golden-flaky-list`'s description renders a literal `%%`.

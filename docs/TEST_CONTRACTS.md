@@ -416,8 +416,7 @@ test (prove the source is fine) or recording a deliberate contract change
 ### L12 — Review tooling (`scripts/review_facts.py`)
 
 - **Tests**: `test_review_facts.py`
-- **Source**: `scripts/review_facts.py` (`uv run python scripts/review_facts.py`, `--json` for machines;
-  protocol: `docs/REVIEW.md` → "Review protocol").
+- **Source**: `scripts/review_facts.py` (`uv run python scripts/review_facts.py`, `--json` for machines).
 - **Contracts**: the sheet is **read-only** — it inspects, writes nothing git-visible (bytecode and
   the ruff cache only), and starts no service — and it
   carries exactly one section per fact class: `counts` (via the drift gate's own collector, so the sheet

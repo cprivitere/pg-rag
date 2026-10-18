@@ -576,7 +576,6 @@ def main() -> int:
     quote_docs = {
         "AGENTS.md": ROOT / "AGENTS.md",
         "testing skill": ROOT / ".agents" / "skills" / "testing" / "SKILL.md",
-        "REVIEW.md": ROOT / "docs" / "REVIEW.md",
     }
     counts, detail = _collected_counts()
     if counts is None:

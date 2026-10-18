@@ -127,7 +127,6 @@ def _clean_tree(tmp_path: Path, **overrides: str | None) -> Path:
             "DOCUMENTS_VERSION\n" + counts + "The `mise.toml` `[tasks]` set is exactly: `demo`.\n"
         ),
         "docs/TEST_CONTRACTS.md": "DOCUMENTS_VERSION\n{id, question, type, facts\n",
-        "docs/REVIEW.md": counts,
         ".omp/RULES.md": "DOCUMENTS_VERSION\n",
         ".omp/WATCHDOG.md": "{id, question, type, facts\n",
         "mise.toml": (

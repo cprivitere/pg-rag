@@ -148,8 +148,7 @@ corpus_search, player_state`.
   3.13-parseability gate: PEP 758 `except A, B:` is legal repo-wide again; the
   parenthesized handlers stay.)
 - `docs/` — `TEST_CONTRACTS.md` (the authoritative layer→tests→contract map),
-  `REVIEW.md` (audit findings + backlog), `LLM_MODEL_WIRING.md` (per-model
-  launch flags + determinism evidence), `research/` (policy docs).
+  `LLM_MODEL_WIRING.md` (per-model launch flags + determinism evidence), `research/` (policy docs).
 
 ## Development Commands
 
@@ -198,11 +197,10 @@ freezes the range that starts after it, a SHA that single commit, `worktree` the
 working tree) and otherwise derives it from this repo's pass markers, so a fix
 batch is reviewed by invoking it again with no argument: the delta since the last
 `review-pass*` tag, the working tree when the tree is dirty, and nothing at all
-when the marker already sits on HEAD. Skills are discovered at startup
-(`omp://skills.md`) — there is no file watcher — so a freshly written skill
-answers `Unknown skill` until a restart. The project command that used to carry
-this protocol (`.omp/commands/frozen.md`) is retired; `docs/REVIEW.md` →
-"Review protocol" keeps the pass history and the evidence behind each rule.
+when the marker already sits on HEAD. The project command that used to carry
+this protocol (`.omp/commands/frozen.md`) is retired; the pass history lives in git
+(`git show <review-passN>:docs/REVIEW.md` for the retired record; skills are
+discovered at startup, so a freshly written skill answers `Unknown skill` until a restart).
 
 - **Freeze the target, and never mix revisions.** The diff handed to a reviewer
   and the files it reads must be the same revision. A checkout that is merely
@@ -221,9 +219,9 @@ this protocol (`.omp/commands/frozen.md`) is retired; `docs/REVIEW.md` →
 - **Intake is three categories.** (1) behaviour nobody intended, (2) a claim the
   code or its docs make that the code does not honour, (3) a gate whose
   documentation is stronger than its check. Anything else is out of scope: say so
-  in the request. `docs/REVIEW.md` → "Leftovers for the next pass" is the
-  **accepted backlog** — never re-raise those items, and do not widen scope to
-  untouched files except where one makes a claim about a file that changed.
+  in the request. `TODO.md` is the accepted backlog — never re-raise those
+  items, and do not widen scope to untouched files except where one makes a
+  claim about a file that changed.
 - **Report to the fixed contract.** Severity (critical / high / medium / low /
   nit) · `file:line` · the defect · evidence (an exact quote or command output) ·
   the fix · `verified` or `[INFERENCE]`; then one verdict — **ship** /
@@ -314,10 +312,9 @@ this protocol (`.omp/commands/frozen.md`) is retired; `docs/REVIEW.md` →
 - `scripts/review_facts.py` — the read-only facts sheet a review pass pastes into
   every reviewer brief (suite counts, gate verdicts, task set, freeze state,
   platform liveness, clone-invisible inputs); the protocol that consumes it is
-  `docs/REVIEW.md` → "Review protocol".
+  the `frozen-review` skill.
 - `docs/TEST_CONTRACTS.md` — layer→tests→contract map + regression-triage
-  protocol (read before changing behavior/tests); `docs/REVIEW.md` — audit
-  findings + improvement backlog.
+  protocol (read before changing behavior/tests); `TODO.md` — backlog.
 - `scripts/services.py` — start/stop/status for the LLM + Gradio chat
   (cross-platform: stdlib only, `os.name`-gated, `ss`/`lsof`/`killpg` on POSIX.
   The `.mise/tasks/*.ps1` service scripts it replaced are gone — but `logs`,
