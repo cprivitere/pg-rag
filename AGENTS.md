@@ -33,7 +33,7 @@ golden eval.
 cdn/*.json ─┐
             ├─ loaders → GameDatabase(tables + wiki) ─┐
 wiki/*.txt ─┘                                          ├─ documents/ (builder + wiki_builder + skill_profiles + summaries)
-data/wiki/curated/*.json ──────────────────────────────┘
+data/wiki/curated/*.txt ──────────────────────────────┘
                         │  store._ingest_documents() → documents + documents_fts
                         │           (per-row DOCUMENTS_VERSION stamp)
                         ▼
@@ -91,7 +91,8 @@ corpus_search, player_state`.
   LLM in a bounded tool loop (`DEFAULT_MAX_ROUNDS` rounds; each tool-result
   payload capped at 12000 chars; a final no-tools answer is forced once the
   budget is exhausted). `run_loop` returns the same 5-key shape as the deleted
-  `pipeline.ask` — `{answer, documents, sources, rounds, trace_rounds}` — where
+  `pipeline.ask` — `{answer, documents, sources, rounds, trace_rounds}` (plus legacy
+  `query_type: "agentic"` / `rerank_used: False` in every return arm) — where
   `documents` is exactly what the model was fed and `sources` is one entry per
   tool round.
 - **Tuning sweeps** live in `scripts/agentic_tune.py` (`mise agentic-tune`,
@@ -142,11 +143,10 @@ corpus_search, player_state`.
   Skills live here only — commit changes here, never re-create `.omp/skills/` copies.
   The one skill this repo does not own but does use is the user-level
   `frozen-review` (`~/.agents/skills/frozen-review/SKILL.md`, the agents-standard
-  root, shared with the sibling glogger repo) — this repo's review call.
-  (The molab notebook, its ops doc and its pairing skill were retired with the
-  notebook — the product is the local agentic method. With them went the Python
-  3.13-parseability gate: PEP 758 `except A, B:` is legal repo-wide again; the
-  parenthesized handlers stay.)
+  root, shared with the sibling glogger repo) — this repo's review call. (The
+  molab notebook, its ops doc and its pairing skill were retired with the
+  notebook — the product is the local agentic method. PEP 758 `except A, B:` is
+  legal repo-wide; the parenthesized handlers stay.)
 - `docs/` — `TEST_CONTRACTS.md` (the authoritative layer→tests→contract map),
   `LLM_MODEL_WIRING.md` (per-model launch flags + determinism evidence), `research/` (policy docs).
 
@@ -194,10 +194,10 @@ the sibling glogger repo) that owns the whole loop: the freeze invariant, the
 target grammar, facts-once, the three intake categories, the report contract and
 the closing rule. It takes its target from an argument when given one (a tag
 freezes the range that starts after it, a SHA that single commit, `worktree` the
-working tree) and otherwise derives it from this repo's `review-last` marker, so a fix
+working tree) and otherwise derives it from this repo's `review-last` marker (else the
+newest `review-pass*` tag, else the newest `v*` release — see the skill), so a fix
 batch is reviewed by invoking it again with no argument: the delta since the last
 pass, the working tree when the tree is dirty, and nothing at all
-when the marker already sits on HEAD. The project command that used to carry
 this protocol (`.omp/commands/frozen.md`) is retired; the pass history lives in git
 (`git show <review-passN>:docs/REVIEW.md` for the retired record; skills are
 discovered at startup, so a freshly written skill answers `Unknown skill` until a restart).
@@ -207,6 +207,7 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
   ahead of the frozen tag is answered with `git worktree add ../review-<tag>
   <tag>`, which puts every reviewer (and every path they execute) at that SHA
   with the main checkout untouched — never review `origin/HEAD...main` unless it
+  resolves to the same commit.
 - **Measure the facts once, in the parent, and paste them into every brief.** The
   row is `uv run python scripts/review_facts.py` (~4 s warm; `--no-gates` for
   ~1.6 s, `--json` for machines). The sheet carries the suite *counts*, the

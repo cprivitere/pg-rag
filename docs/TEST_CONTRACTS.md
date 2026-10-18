@@ -165,9 +165,10 @@ test (prove the source is fine) or recording a deliberate contract change
   the guaranteed per-unit floor, plus the Industry gate from the
   `Work Order for X` scroll; items with no work order print no block.
   `run_loop` returns the 5-key shape `{answer, documents, sources, rounds,
-  trace_rounds}`, executes at most `max_rounds` tool rounds (native tool_calls
-  OR three text forms: fenced ```` ```tool ```` JSON, and the Qwen template's
-  `<tool_call><function=…><parameter=…>` XML), caps each tool-result payload at
+  trace_rounds}` (plus legacy `query_type`/`rerank_used` in every return arm),
+  executes at most `max_rounds` tool rounds (native tool_calls
+  OR two text forms: fenced ```` ```tool ```` JSON, and the Qwen template's
+  `<tool_call><function=…><parameter=…>` XML — three counting native), caps each tool-result payload at
   12000 chars (row-aware for tables), and forces a final no-tools answer once
   the budget is exhausted. Tests monkeypatch `loop._post` — never a live LLM.
   `loop._post` reads its transport config at CALL time: `PGRAG_LLM_URL`,
@@ -400,7 +401,7 @@ test (prove the source is fine) or recording a deliberate contract change
   (`scripts/check_ts.mjs`, `package.json`, `package-lock.json`) are `git ls-files`-tracked, because a
   clone without them has no TypeScript gate at all and its tests merely *skip* — and a git that cannot
   answer (rc ≠ 0) is its own drift, never "untracked"; AGENTS.md's
-  "`[tasks]` set is exactly:" list equals `mise.toml`'s task set, set for set; and the three docs
+  "`[tasks]` set is exactly:" list equals `mise.toml`'s task set, set for set; and the two docs
   quoting the suite counts must quote the live `N collected / M deselected / K default` from a real
   `pytest --collect-only` — parsed from any summary shape pytest prints (with a deselect count or
   without), with a *failed* collection reported as its own failure rather than as a stale count (this

@@ -6,12 +6,12 @@
   — the last manual entry (`dungcrafting-poop-ability-and-rewards`) was deleted
   on recovery (trail kept in the file). Two root causes closed it:
   1. **The seed had no stopword filter.** `run_loop` seeds with the RAW
-     question (`corpus_search question k=12`) and `BM25.search` scored every
+     question (`corpus_search question k=12`) and the FTS query scored every
      token, so a long natural-language question ranked docs stuffed with
      'the'/'does'/'it' above the doc holding the answer (measured: the
      dungcrafting question's top-12 was a Citan forum post +
-     `effect_effect_7028`). Query-side stopwords (`_QUERY_STOPWORDS`; the index
-     is untouched, so no rebuild and the pickle stays valid) put
+     `effect_effect_7028`). Query-side stopwords (`_QUERY_STOPWORDS`; the FTS index
+     is untouched, so no rebuild needed) put
      `skillprofile_Pooping_chunk_0` at seed #5 + `skill_Pooping` #3 there, and
      raised `creature_Ratkin_Root-Tender` 7 → 1 (ratkin) and
      `wiki_Strom Farblood_Favor` 3 → 1 (strom) — those two were already seeded,
@@ -33,7 +33,7 @@
      final (no-tools) turn instead of erroring the case out
      (`animal-handling-known-abilities` was scored 0 by it).
   Measured: full `mise golden` 59/61 before (fails `moonstone-item` +
-  `pricing-fat-woe-cutting-circuit`) → 58/61 with the BM25 change alone (1
+  `pricing-fat-woe-cutting-circuit`) → 58/61 with the stopword change alone (1
   harness ERROR) → **61/61** (1595 s, reasoning-ON) with everything.
   Review-driven corrections to the stopword filter (2026-10-15, second pair of
   eyes on the diff): `off`/`only`/`under` are corpus vocabulary, not function
@@ -44,7 +44,7 @@
   the 61 questions measures 13 fact-group hits lost vs 15 gained (worst
   `meditation-synergy-skills` 15 → 8), which the model's own tool calls cover
   (the full gate is the arbiter, not the seed). Both recorded in
-  `src/pgrag/rag/bm25.py` and `.agents/skills/retrieval/SKILL.md`.
+  `src/pgrag/agentic/tools.py::_QUERY_STOPWORDS` and `.agents/skills/retrieval/SKILL.md`.
   Variance-prone but NOT queue entries: `pricing-fat-woe-cutting-circuit`
   (9 fact groups, one store-only audit; its notes already record 0/3–1/4 pass
   on the Sven/ownership facts) — the ownership near-miss was a variant gap
@@ -128,7 +128,7 @@
   **Closed 2026-10-15** — the "open tradeoff" below (dungcrafting losing
   "Requires Beast" under production flags) had a single root cause: the loop's
   SEED scored the raw question without dropping function words, so
-  `skillprofile_Pooping_chunk_0` never entered context. `BM25.search` now
+  `skillprofile_Pooping_chunk_0` never entered context. The FTS query builder now
   filters query-side stopwords and the profile is seed hit #5; the case passed
   a solo rerun, a targeted rerun and both full `mise golden` runs on
   2026-10-15, and the entry is deleted from `data/golden/FLAKY.txt`. Original
@@ -153,7 +153,7 @@
 - Golden coverage: comparison is the thinnest bucket (5 of 62). Intake for new
   goldens is live-session questions; the workflow lives in
   `.agents/skills/evaluation/SKILL.md`. Ground every fact with
-  `grep data/documents.json` before adding it, and remember the fact-density
+  `SELECT text FROM documents WHERE id='<id>'` over `data/sqlite_gorgon.db` before adding it, and remember the fact-density
   rule: ~10 facts in one answer is flaky no matter how the question is worded —
   split by source doc instead (see the 2026-10-11 splits).
 
@@ -194,4 +194,4 @@
   - `execute_tool` errors-as-data is partial (`src/pgrag/agentic/tools.py`): `_corpus_search` catches only `sqlite3.OperationalError`, and `_conn` sits outside the `try` — other `sqlite3.Error`s escape the seed instead of returning strings.
   - Curator scheduler (`scripts/curator_scheduler.py`): the rc≠0 → no-`save_state` path is uncovered, and its derived-corpus order differs from every `mise sync-*` task without saying why.
   - Docstring debt about the deleted dense path: `src/pgrag/documents/chunking.py` module docstring + `MAX_EMBED_CHARS` comment, `tests/test_chunking.py` (~128, ~164-166) and `tests/test_leveling.py` (~205-208) embed-window prose, and `tests/conftest.py`'s "code moves keep derived artifacts out of the source dir" claim (live `data/wiki/curated/` + `data/wiki/.parsed.json` sit inside the guarded dir) still speak of bge-small/embed windows in the present tense.
-  - Two `mise.toml` nits: `golden-type` is pwsh-pinned while the file claims the task set is POSIX-usable without PowerShell, and `golden-flaky-list`'s description renders a literal `%%`.
+  - Two `mise.toml` nits: `golden-type` is pwsh-pinned (already a documented exception — `mise.toml:21-23` and `AGENTS.md:340` name `logs`/`tail-llm`/`golden-type` as the genuinely-PowerShell tasks); the live half is `golden-flaky-list`'s description rendering a literal `%%`.

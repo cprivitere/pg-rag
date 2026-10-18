@@ -68,19 +68,15 @@ Each file:
   files.
   The 2026-10-11 batch went 54 → 58 files at roughly the same wall time (the
   focused cases are 1-2 rounds each).
-- **Residual misses are tool choice, not goldens (2026-10-11).** After the split
+- **Former residuals recovered (2026-10-13, `data/golden/FLAKY.txt`).** After the split
   and the `corpus_search` snippet fix (400 → 1000 chars; see the retrieval
   skill), `dungcrafting-*`, `royal-jelly-*` and both audit cases pass in both
-  gate modes. `gardening-basics` and `gardening-trainers-and-fertilizer` still
-  fail ~every run, each time on a different fact subset: the model answers skill
-  questions from the CDB `skills`/`abilities` SQL tables and the wiki level-cap
-  trainer page rather than the corpus profile doc, and can assert the opposite
-  of the truth ("Gardening grants no bonus levels to any other skill"). Their
-  facts are provably reachable (`corpus_search "Gardening trainers Floxie
-  Tavilak Kelim"` returns ten `wiki_Gardening_table_0_row_*` hits naming all
-  three), so do **not** "fix" them by weakening the facts. Both ids are listed
-  in `data/golden/FLAKY.txt`; the fix belongs in the loop's tool-choice
-  guidance, not the eval.
+  gate modes. `gardening-basics` and `gardening-trainers-and-fertilizer` recovered
+  via the loop's tool-choice guidance (`_SCHEMA_SUMMARY` prescribes the trainer-list
+  SQL, the `sources`-table acquisition query, and the skill-profile synergy lookup) —
+  all pass in both gate modes plus inside full `mise golden` runs. If one reflakes,
+  re-list it in `data/golden/FLAKY.txt` with fresh log evidence; do **not** "fix" a
+  passing case by weakening its facts.
 
 ## Running it (LLM only)
 
