@@ -194,7 +194,7 @@ Value:
                     "source": "cdn",
                     "table": "items",
                     "name": item.get("Name", item_id),
-                    # Chroma-filterable scalars (multi-value via " | ")
+                    # FTS-joined scalars (multi-value via " | ")
                     "keywords": " | ".join(keywords),
                     "equip_slot": _str_or(item.get("EquipSlot")),
                     "skill_reqs": " | ".join(skill_req_parts),
@@ -318,7 +318,7 @@ Produces:
                 "metadata": {
                     "source": "cdn",
                     "table": "recipes",
-                    # Chroma-filterable scalars (multi-value via " | ")
+                    # FTS-joined scalars (multi-value via " | ")
                     "skill": _str_or(recipe.get("Skill")),
                     "skill_level_req": _int_or(recipe.get("SkillLevelReq")),
                     "reward_skill": _str_or(recipe.get("RewardSkill") or recipe.get("Skill")),
@@ -523,7 +523,7 @@ Description:
                     "source": "cdn",
                     "table": "quests",
                     "name": name,
-                    # Chroma-filterable scalars (multi-value via " | ")
+                    # FTS-joined scalars (multi-value via " | ")
                     "reward_skills": " | ".join(dict.fromkeys(reward_skills)),
                     "location": _str_or(quest.get("DisplayedLocation")),
                 },
@@ -588,7 +588,7 @@ Reset Time: {reset_time}s"""
                     "source": "cdn",
                     "table": "abilities",
                     "name": name,
-                    # Chroma-filterable scalars (multi-value via " | ")
+                    # FTS-joined scalars (multi-value via " | ")
                     "skill": _str_or(ability.get("Skill")),
                     "keywords": " | ".join(keywords),
                     "level": _int_or(ability.get("Level")),

@@ -2,8 +2,8 @@
 
 Builds ``data/sqlite_gorgon.db`` from primary sources (CDN JSON tables, raw
 wiki pages, live play-session data) — the sources the generated-document
-corpus was originally derived from. The generated corpus (documents.json /
-Chroma) is never touched.
+corpus was originally derived from. The store's `documents` table (the generated
+corpus) is never hand-edited — change the builders, never the rows.
 
 Ingest order: CDN → wiki → session → glogger. Idempotent: every table is
 ``INSERT OR REPLACE`` keyed by its source key, and a per-source-file manifest
@@ -193,7 +193,7 @@ _FACT_RE = re.compile(r"\[(?:Item|Recipe): ((?:[^\[\]\n]|\[[^\]\n]*\])+)\]")
 
 
 def _join(values) -> str:
-    """Multi-value → Chroma-convention ' | '-joined TEXT."""
+    """Multi-value → FTS-joined TEXT (' | '-separated scalars)."""
     return _JOIN.join(str(v) for v in values)
 
 

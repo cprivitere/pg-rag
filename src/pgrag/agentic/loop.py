@@ -772,7 +772,9 @@ def run_loop(
     store_path: str = DEFAULT_STORE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> dict:
-    """Answer `question` via the tool loop. Same 5-key shape as pipeline.ask."""
+    """Answer `question` via the tool loop. Same 5-key shape as pipeline.ask
+    (`answer, documents, sources, rounds, trace_rounds`, plus legacy
+    `query_type`/`rerank_used`)."""
     generation = dict(DEFAULT_GENERATION if generation is None else generation)
     trace_rounds: list = []
     seed = execute_tool(store_path, "corpus_search", {"query": question, "k": 12}, corpus=corpus)

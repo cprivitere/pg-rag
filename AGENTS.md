@@ -212,7 +212,7 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
   row is `uv run python scripts/review_facts.py` (~4 s warm; `--no-gates` for
   ~1.6 s, `--json` for machines). The sheet carries the suite *counts*, the
   `ruff` / `mise drift` / `mise compliance` verdicts, the task set, the freeze
-  state and the platform's liveness answer — deliberately **not** the suite
+  state, the platform's liveness answer and clone-invisible inputs — deliberately **not** the suite
   verdict or `mise lint-ts`, which the one runner measures once on the frozen SHA
   (`uv run pytest` and `node scripts/check_ts.mjs`) and reports alongside the
   sheet. A red row is a fact to report once, not a per-file finding, and no slice
