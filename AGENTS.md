@@ -194,9 +194,9 @@ the sibling glogger repo) that owns the whole loop: the freeze invariant, the
 target grammar, facts-once, the three intake categories, the report contract and
 the closing rule. It takes its target from an argument when given one (a tag
 freezes the range that starts after it, a SHA that single commit, `worktree` the
-working tree) and otherwise derives it from this repo's pass markers, so a fix
+working tree) and otherwise derives it from this repo's `review-last` marker, so a fix
 batch is reviewed by invoking it again with no argument: the delta since the last
-`review-pass*` tag, the working tree when the tree is dirty, and nothing at all
+pass, the working tree when the tree is dirty, and nothing at all
 when the marker already sits on HEAD. The project command that used to carry
 this protocol (`.omp/commands/frozen.md`) is retired; the pass history lives in git
 (`git show <review-passN>:docs/REVIEW.md` for the retired record; skills are
@@ -242,11 +242,8 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
   round's budget, not a host ceiling: beyond it the host parks agents mid-flight,
   and a parked agent must be revived one message at a time. The parent is the only
   runner.
-- **The pass writes its own marker** at the revision it reviewed: annotated
-  `review-pass<N>`, its message the reviewed revision's own (so the tag reads as
-  the work it froze), `N` taken by `sort -n` *after* stripping the prefix — never
-  `sort` on the tag names, which is lexicographic and puts `review-pass10` before
-  `review-pass5`. It is local bookkeeping and is never pushed; the next pass
+- **The pass moves its own marker** to the revision it reviewed: `git tag -f -a review-last -m "<verdict>: <n> findings, <n> fix-now" <reviewed-sha>`.
+  One floating tag — no counter, no sort. It is local bookkeeping and is never pushed; the next pass
   derives its base from it, never from `<target>^`, which resolves the previous
   *fix* tag and silently shrinks a verification pass to its last commit.
 
