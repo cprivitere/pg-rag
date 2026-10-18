@@ -41,10 +41,13 @@ PORT_PROBE_TIMEOUT = 0.5
 STOP_GRACE_S = 10.0  # SIGTERM -> SIGKILL grace on POSIX
 _CHILD_TIMEOUT_S = 10.0  # a wedged probe must not hang start/stop/status
 _CREATE_FLAGS = (
-    # DETACHED_PROCESS is the load-bearing flag: the child leaves our console,
-    # so a Ctrl-C aimed at the mise task cannot reach it. CREATE_NO_WINDOW is
-    # ignored alongside it (MSDN) but stays so an edit that drops
-    # DETACHED_PROCESS cannot resurrect a console window.
+    # No-console contract: background services must pop no console window —
+    # including grandchildren (`uv` spawning `python`), which do NOT inherit
+    # these flags on Windows (a blank `rag_chat.py` console was reported
+    # 2026-10-18). DETACHED_PROCESS is the load-bearing flag: the child
+    # leaves our console, so a Ctrl-C aimed at the mise task cannot reach it.
+    # CREATE_NO_WINDOW is ignored alongside it (MSDN) but stays so an edit
+    # that drops DETACHED_PROCESS cannot resurrect a console window.
     subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS if os.name == "nt" else 0
 )
 

@@ -8,6 +8,15 @@ the dense-RAG cutover, and the molab-hosted tool-loop notebook
 (`notebooks/molab-agentic/`) was retired after it — the product is the local
 agentic method.
 
+## Session startup & close
+
+- **Startup.** Fresh session: `git status --porcelain`, `git log --oneline -5`,
+  top of `TODO.md`, `data/golden/FLAKY.txt`, `mise status`. State what is
+  dirty/pending before asking what is next.
+- **Close.** Default close is gates green → commit → push: a bare "commit"
+  means no push. Review markers (`review-last`, `review-pass*`) are local
+  bookkeeping and are never pushed; only `v*` tags push.
+
 ---
 
 ## Project Overview
@@ -247,6 +256,8 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
   One floating tag — no counter, no sort. It is local bookkeeping and is never pushed; the next pass
   derives its base from it, never from `<target>^`, which resolves the previous
   *fix* tag and silently shrinks a verification pass to its last commit.
+- **Interrupt resume.** On a killed run ("you died", eval loss): check `proc://`
+  plus the agent list, resume missing slices only, never redo finished work.
 
 ## Code Conventions & Common Patterns
 
@@ -286,6 +297,11 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
   play-history facts) are excluded from the corpus-side goldens and run through
   the tool loop like every other case — the loop reads the store, so there is
   no separate store-only harness anymore.
+- **Concurrent edits.** The user editing a file, or word of another agent in
+  the tree, makes that file (or tree) read-only until they say otherwise;
+  re-read it before touching it.
+- **Line endings.** `.gitattributes` owns the policy (LF in the index;
+  `.ps1` CRLF). Do not relitigate per-edit.
 
 ## Important Files
 
@@ -338,7 +354,9 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
   `chat-start`/`chat-stop`, `status`, `debug-llm`. The manager itself is
   cross-platform (the deleted `.mise/tasks/*.ps1` launchers were Windows-only)
   and every service task is a plain `uv run python …`, so the task set runs on
-  POSIX too; only `logs`/`tail-llm`/`golden-type` pin `pwsh`.
+  POSIX too; only `logs`/`tail-llm`/`golden-type` pin `pwsh`. No-console
+  contract: background services must pop no console — including grandchildren
+  (`uv` spawning `python` does not inherit the flags on Windows).
 
   Embed (:8081) and reranker (:8082) services are **retired** — start tasks
   and env keys were deleted with the dense path.
