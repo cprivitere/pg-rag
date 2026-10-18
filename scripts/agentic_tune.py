@@ -290,7 +290,11 @@ def _spawn_server(model: str, flags: str) -> None:
 
     services.LOG_DIR.mkdir(parents=True, exist_ok=True)
     subprocess.Popen(
-        services.llm_argv(model, flags), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        services.llm_argv(model, flags),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=services._CREATE_FLAGS,
+        startupinfo=services._hidden_startupinfo(),
     )
 
 

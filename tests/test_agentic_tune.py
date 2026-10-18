@@ -1,7 +1,7 @@
 """Tuning-harness contracts (L-agentic): case parsing, run-id, compare math,
 plus server control — `current`/`ornith` resolving to the live [env] pair, the
-direct-spawn restart path, and the restart verdict that keeps a mislabeled run
-row from ever being written.
+direct-spawn restart path (hidden-window launch flags on Windows), and the
+restart verdict that keeps a mislabeled run row from ever being written.
 
 Fixture-driven; no live LLM. run_sweep_case is exercised via a stubbed
 run_loop so the sweep math (PASS/FAIL/ERROR classification, fact counting)
@@ -196,6 +196,7 @@ def test_failed_restart_aborts_without_recording_a_run(tmp_path, monkeypatch):
     assert agentic_tune._maybe_restart_server(unknown) is False
     assert len(spawned) == 1  # the unknown key never launched anything
 
+
     argv = [
         "agentic_tune.py",
         "--model",
@@ -208,6 +209,46 @@ def test_failed_restart_aborts_without_recording_a_run(tmp_path, monkeypatch):
     assert agentic_tune.main() == 1
     assert runs == []
     assert list(tmp_path.glob("*.json")) == []
+
+
+def test_spawn_server_hides_the_console_window(monkeypatch, tmp_path):
+    """CONTRACT: `_spawn_server` launches `llama-server` with the same hidden-window
+    flags as `scripts.services.start` — `creationflags=_CREATE_FLAGS` plus a hidden
+    `STARTUPINFO` on Windows background (`None` on POSIX) — so a tune `--llm-restart`
+    never pops a console window."""
+    import os
+    import subprocess
+
+    import scripts.services as services_mod
+
+    spawns = []
+
+    def fake_popen(argv, **kwargs):
+        spawns.append({"argv": list(argv), **kwargs})
+
+        class _Proc:
+            pid = 4242
+
+        return _Proc()
+
+    monkeypatch.setattr(agentic_tune.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(services_mod, "LOG_DIR", tmp_path)
+    agentic_tune._spawn_server("m", "--flag 1")
+
+    assert len(spawns) == 1
+    spawn = spawns[0]
+    assert spawn["argv"] == services_mod.llm_argv("m", "--flag 1")
+    assert spawn["creationflags"] == services_mod._CREATE_FLAGS
+    if os.name == "nt":
+        # DETACHED_PROCESS must stay out (same console-inheritance reason as
+        # `scripts.services.start`: the tune spawn is the same `llama-server`
+        # binary, relaunched directly by `--llm-restart`).
+        assert not spawn["creationflags"] & subprocess.DETACHED_PROCESS
+        si = spawn["startupinfo"]
+        assert si.dwFlags & subprocess.STARTF_USESHOWWINDOW
+        assert si.wShowWindow == subprocess.SW_HIDE
+    else:
+        assert spawn.get("startupinfo") is None
 
 
 def test_reasoning_sweep_restores_the_production_pair(monkeypatch):

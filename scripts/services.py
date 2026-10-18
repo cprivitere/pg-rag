@@ -42,14 +42,25 @@ STOP_GRACE_S = 10.0  # SIGTERM -> SIGKILL grace on POSIX
 _CHILD_TIMEOUT_S = 10.0  # a wedged probe must not hang start/stop/status
 _CREATE_FLAGS = (
     # No-console contract: background services must pop no console window —
-    # including grandchildren (`uv` spawning `python`), which do NOT inherit
-    # these flags on Windows (a blank `rag_chat.py` console was reported
-    # 2026-10-18). DETACHED_PROCESS is the load-bearing flag: the child
-    # leaves our console, so a Ctrl-C aimed at the mise task cannot reach it.
-    # CREATE_NO_WINDOW is ignored alongside it (MSDN) but stays so an edit
-    # that drops DETACHED_PROCESS cannot resurrect a console window.
-    subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS if os.name == "nt" else 0
+    # including grandchildren (`uv` spawning `python`). CREATE_NO_WINDOW is
+    # the load-bearing flag: it is inherited down the chain, so the chat
+    # grandchild stays hidden (a blank `rag_chat.py`/uv-cache-python console
+    # was reported 2026-10-18). DETACHED_PROCESS is deliberately NOT set: it
+    # severs console inheritance, so the grandchild spawns with a fresh
+    # console of its own — measured 2026-10-18: a `uv run` chain under
+    # DETACHED_PROCESS|CREATE_NO_WINDOW (+hidden STARTUPINFO) showed a new
+    # terminal tab titled with the uv-cache python path, while the same chain
+    # under CREATE_NO_WINDOW alone (+hidden STARTUPINFO) showed nothing.
+    subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 )
+
+def _hidden_startupinfo() -> subprocess.STARTUPINFO | None:
+    if os.name != "nt":
+        return None
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = subprocess.SW_HIDE
+    return si
 
 # key -> service spec: `label` is echoed by `status` verbatim; `process` is the
 # image name the recorded pid must still carry before `stop` will signal it, and
@@ -563,10 +574,12 @@ def start(name: str, foreground: bool = False) -> int:
                 stdout=stdout,
                 stderr=stderr,
                 # Foreground: stay in the caller's console/process group so
-                # Ctrl-C reaches the child. Background: detach + own session so
-                # _kill_tree may killpg the tree and the service survives us.
+                # Ctrl-C reaches the child. Background: no console of its own
+                # (inherited down the chain) + own session so _kill_tree may
+                # killpg the tree and the service survives us.
                 start_new_session=not foreground,
                 creationflags=0 if foreground else _CREATE_FLAGS,
+                startupinfo=None if foreground else _hidden_startupinfo(),
             )
         except FileNotFoundError:
             raise SystemExit(
@@ -693,7 +706,7 @@ def status(name: str | None = None) -> int:
     print()
     print("Commands:")
     print("  mise start     - Start all services")
-    print("  mise down      - Stop all services")
+    print("  mise stop      - Stop all services")
     print("  mise sl        - Start LLM server only")
     print("  mise xl        - Stop LLM server only")
     print("  mise sc        - Start Chat (Gradio) only")

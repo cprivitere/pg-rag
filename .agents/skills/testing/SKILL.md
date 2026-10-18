@@ -5,7 +5,7 @@ description: Regression-triage and test discipline for pg-rag — how to decide 
 
 # testing — regression triage & test discipline
 
-The suite's live counts are **522 collected / 78 deselected / 444 default** (the
+The suite's live counts are **523 collected / 78 deselected / 445 default** (the
 default `not slow` marker deselects 78: 16 data-heavy tests + the 62
 parametrized golden cases; one POSIX-only port-owner case skips on Windows) —
 quoted verbatim because `mise drift` asserts the triple against a real
@@ -67,7 +67,7 @@ sweep/compare, `test_golden_check.py` = the offline gate drives it via
   `test_session_ingest.py`, `test_glogger_ingest.py`, `test_preflight_sync.py`),
   then `mise sql-store`.
 - Service-control change → L10 (`test_services.py`), then a live `mise start` /
-  `mise status` / `mise down` smoke (the manager owns real :8080/:7860).
+  `mise status` / `mise stop` smoke (the manager owns real :8080/:7860).
 - Doc-gen change → inspect representative rows after `mise sql-store`.
 - Golden change → `test_golden_check.py` must collect it offline (it runs
   through the loop and skips without the LLM). A full `mise golden` run is a

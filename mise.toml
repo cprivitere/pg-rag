@@ -147,15 +147,15 @@ alias = "xc"
 
 # --- All services (scripts/services.py; background, logged to logs/) ---
 
-[tasks."start-all"]
+[tasks.start]
 description = "Start all services (llm + chat) with logging"
 depends = ["llm-start", "chat-start"]
-alias = "start"
+alias = ["start-all", "up"]
 
-[tasks."stop-all"]
+[tasks.stop]
 description = "Stop all services (llm + chat)"
 depends = ["chat-stop", "llm-stop"]
-alias = "down"
+alias = ["stop-all", "down"]
 
 # --- Status check ---
 

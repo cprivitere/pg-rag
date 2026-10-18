@@ -898,11 +898,13 @@ def test_start_spawn_contract(monkeypatch, tmp_path, service, foreground):
     merged over it (chat's `PG_RAG_CHAT_NO_BROWSER=1` keeps the serving path from
     popping a browser), `cwd=REPO_ROOT` (the argv's script paths are
     repo-relative), and, for a background start, `start_new_session=True` with
-    `_CREATE_FLAGS`: DETACHED_PROCESS keeps the service off the task's console,
-    and the own session is the exact provenance `_kill_tree`'s POSIX `killpg`
-    must have before it will kill a group. Foreground inverts both, so Ctrl-C
-    reaches the child, and the pidfile it records is dropped again when the child
-    exits."""
+    `_CREATE_FLAGS` plus a hidden-window `STARTUPINFO` on Windows background
+    (`None` otherwise/foreground): CREATE_NO_WINDOW (inherited down the `uv`
+    chain, so the chat grandchild stays console-less) keeps the service off the
+    task's console, and the own session is the exact provenance `_kill_tree`'s
+    POSIX `killpg` must have before it will kill a group. Foreground inverts
+    both, so Ctrl-C reaches the child, and the pidfile it records is dropped
+    again when the child exits."""
     _stub_service(monkeypatch, tmp_path, service)
     _set_llm_env(monkeypatch)
     spawns = _record_spawn(monkeypatch)
@@ -918,6 +920,16 @@ def test_start_spawn_contract(monkeypatch, tmp_path, service, foreground):
     assert spawn["env"] == {**os.environ, **extra_env}
     assert spawn["start_new_session"] is not foreground
     assert spawn["creationflags"] == (0 if foreground else services._CREATE_FLAGS)
+    if os.name == "nt" and not foreground:
+        # DETACHED_PROCESS must stay out: it severs console inheritance, so the
+        # `uv`-spawned chat grandchild gets a fresh console of its own (blank
+        # window reported 2026-10-18); CREATE_NO_WINDOW is inherited instead.
+        assert not spawn["creationflags"] & subprocess.DETACHED_PROCESS
+        si = spawn["startupinfo"]
+        assert si.dwFlags & subprocess.STARTF_USESHOWWINDOW
+        assert si.wShowWindow == subprocess.SW_HIDE
+    else:
+        assert spawn.get("startupinfo") is None
     if service == "chat":
         assert spawn["env"]["PG_RAG_CHAT_NO_BROWSER"] == "1"
     else:
@@ -1148,15 +1160,21 @@ def test_status_mapping_and_help_block(monkeypatch, capsys):
     assert "[OK] LLM Server (:8080): Running" in out
     assert "[DOWN] Chat (Gradio) (:7860): Stopped" in out
     # The Commands block is user-facing help, so its `mise X` tokens must be real
-    # aliases — this replaced a loop that re-read strings `status()` itself had
-    # just printed (it could never fail).
+    # task names or aliases — this replaced a loop that re-read strings `status()`
+    # itself had just printed (it could never fail).
     mise = tomllib.loads(
         (Path(__file__).resolve().parents[1] / "mise.toml").read_text(encoding="utf-8")
     )
-    aliases = {task.get("alias") for task in mise["tasks"].values()}
+    names: set[str] = set(mise["tasks"])
+    for task in mise["tasks"].values():
+        alias = task.get("alias")
+        if isinstance(alias, str):
+            names.add(alias)
+        else:
+            names.update(alias or [])
     printed = set(re.findall(r"mise (\w+)", out))
     assert printed, "the help block printed no commands"
-    assert printed <= aliases, f"help names non-aliases: {sorted(printed - aliases)}"
+    assert printed <= names, f"help names unknown tasks: {sorted(printed - names)}"
     # No `OpenWebUI`/`webui` assertion here: `status` prints neither string, so
     # such a check was vacuously true. The no-dead-reference contract for the
     # retired UI is a repo-wide grep, not a property of this output.

@@ -347,7 +347,7 @@ test (prove the source is fine) or recording a deliberate contract change
 
 - **Tests**: `test_services.py`
 - **Source**: `scripts/services.py`; consumers `mise.toml` (`llm-start`/`llm-stop`/`chat-start`/
-  `chat-stop`/`start-all`/`stop-all`/`status`/`debug-llm`), `scripts/agentic_tune.py` (stops/starts via
+  `chat-stop`/`start`/`stop`/`status`/`debug-llm`), `scripts/agentic_tune.py` (stops/starts via
   `mise run llm-stop`/`llm-start`, and builds its `--llm-restart` server argv with
   `services.llm_argv` — the two contender rows carry their own model/flags, while the `ornith` row
   re-reads `[env]`, so no production literal lives in that registry)
@@ -372,7 +372,7 @@ test (prove the source is fine) or recording a deliberate contract change
   HTTP 503 as **loading** (up), so `status` exits 0 on a healthy boot and 1 only when a service is
   genuinely down.
 - **Change ⇒** `uv run pytest tests/test_services.py -q`, then a live `mise start` / `mise status` /
-  `mise down` smoke (the manager owns the real :8080/:7860 processes).
+  `mise stop` smoke (the manager owns the real :8080/:7860 processes).
 
 ### L11 — Docs drift gate (`scripts/check_docs.py`)
 
