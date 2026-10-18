@@ -1,7 +1,7 @@
 {
   "name": "pg-rag-hook-checks",
   "private": true,
-  "description": "Dev-only TypeScript parser for the extension hooks (.omp/hooks/**), gated by tests/test_lint.py. Not a build: the repo ships no JavaScript.",
+  "description": "Dev-only TypeScript parser for scripts/*.mjs, gated by tests/test_lint.py. Not a build: the repo ships no JavaScript.",
   "scripts": {
     "check:ts": "node scripts/check_ts.mjs"
   },

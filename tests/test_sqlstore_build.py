@@ -213,6 +213,9 @@ def test_store_rerun_idempotent(store):
         assert conn.execute("SELECT count(*) FROM records").fetchone()[0] == 1
         assert conn.execute("SELECT count(*) FROM entity_names").fetchone()[0] > 0
         assert conn.execute("SELECT count(*) FROM documents").fetchone()[0] > 0
+        assert conn.execute("SELECT count(*) FROM documents_fts").fetchone()[0] == (
+            conn.execute("SELECT count(*) FROM documents").fetchone()[0]
+        )
     finally:
         conn.close()
 
@@ -268,6 +271,11 @@ def test_store_documents_fts(store):
         assert conn.execute("SELECT count(*) FROM documents_fts").fetchone()[0] == counts["documents"]
     finally:
         conn.close()
+    # ranking + query shaping go through the tool, not raw SQL
+    from pgrag.agentic.tools import execute_tool
+
+    out = execute_tool(str(db_path), "corpus_search", {"query": "Butter recipe", "k": 5})
+    assert "Butter" in out.splitlines()[1]  # the rare-term doc orders first
 
 
 def test_store_missing_cdn_raises(tmp_path):

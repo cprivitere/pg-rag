@@ -411,11 +411,9 @@ this protocol (`.omp/commands/frozen.md`) is retired; `docs/REVIEW.md` →
   unpack/vars; tests: unused unpack) are deliberate. New rule
   ⇒ fix all findings in the same commit.
 - **TypeScript gate** (same `tests/test_lint.py` / L8 layer): every JS/TS file
-  the repo ships must parse — `.omp/hooks/**` and the gate's own
-  `scripts/*.mjs`. `mise lint-ts` (`node scripts/check_ts.mjs`) exits
-  1 on any diagnostic; the one expected *note* is `TS2307` for the
-  `@oh-my-pi/pi-coding-agent` import, whose types ship only inside the compiled
-  `omp` binary. `mise install` provides node (`[tools]`, pinned like
+  the repo ships must parse — `scripts/*.mjs`, covered by the gate itself.
+  `mise lint-ts` (`node scripts/check_ts.mjs`) exits 1 on any diagnostic.
+  `mise install` provides node (`[tools]`, pinned like
   python/ruff) and `mise ts-deps` (`npm install`) the parser devDependency
   (`node_modules/` is gitignored; without it the layer's two TS tests skip
   loudly instead of failing). Nothing else in the suite reads TypeScript.

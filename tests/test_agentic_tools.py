@@ -817,6 +817,8 @@ def test_corpus_search_ranks_and_snippets_from_the_store(store):
     out = execute_tool(str(store), "corpus_search", {"query": "Butter Churn Cheesemaking", "k": 5})
     assert "results:" in out
     assert "Butter" in out  # the recipe/item docs outrank the skill prose
+    first = out.splitlines()[1]
+    assert "Butter" in first  # ORDER BY bm25() puts the rare-term doc first
     assert len(out) < 12_000
 
 
@@ -825,21 +827,46 @@ def test_corpus_search_snippet_cap_bounds_the_payload(store):
     was once cut at 400 chars, and a corpus doc has no other reader (get_page
     serves wiki titles only), so facts past the cut were unreachable.
 
-    Contract: the per-hit budget is `_SEARCH_SNIPPET` (1000), still bounding
-    the payload (the loop caps tool results at 12000 chars).
+    Contract: each hit is cut at `_SEARCH_SNIPPET` (1000) chars while the
+    payload stays under the loop's 12000-char tool-result cap.
     """
     import pgrag.agentic.tools as tools
 
-    assert tools._SEARCH_SNIPPET == 1000
+    conn = sqlite3.connect(store)
+    try:
+        conn.execute(
+            "INSERT INTO documents (id, type, text, source, tbl, name, keywords, documents_version)"
+            " VALUES ('longdoc_tailtest', 'wiki', ?, 'wiki', 'wiki', 'Tail Test', '', 1)",
+            ("x" * 500 + " Requires Beast " + "y" * 2000,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        out = execute_tool(str(store), "corpus_search", {"query": "Tail Test Requires Beast"})
+        assert "Requires Beast" in out  # the tail past the old 400-char cut is visible
+        assert "y" * (tools._SEARCH_SNIPPET + 1) not in out  # each hit is still capped
+        assert len(out) < 12_000
+    finally:
+        conn = sqlite3.connect(store)
+        try:
+            conn.execute("DELETE FROM documents WHERE id = 'longdoc_tailtest'")
+            conn.commit()
+        finally:
+            conn.close()
 
 
 def test_corpus_search_tokenizer_and_empty(store):
     """Missing query is an error string (data for the model), and a miss is a
-    plain '0 results' rather than an exception."""
+    plain '0 results' rather than an exception. Quoted/operator-heavy queries
+    never surface the MATCH error string — the tokenizer strips them."""
     import pgrag.agentic.tools as tools
 
     assert "missing required argument" in tools.execute_tool(str(store), "corpus_search", {})
     assert tools.execute_tool(str(store), "corpus_search", {"query": "zzzqqq"}) == "0 results."
+    assert tools.execute_tool(str(store), "corpus_search", {"query": "BUTTER churn"}) != "0 results."
+    out = tools.execute_tool(str(store), "corpus_search", {"query": '"butter OR churn: test'})
+    assert "corpus_search error:" not in out
 
 
 def test_corpus_search_tool_corpus_filters_sql_tables(store):
@@ -852,6 +879,7 @@ def test_corpus_search_tool_corpus_filters_sql_tables(store):
         str(store), "corpus_search", {"query": "Butter Churn", "k": 10}, corpus="tool"
     )
     assert "Butter" in full
+    assert "results:" in tool and "Butter" in tool  # the lexical arm is alive
     assert "(items)" not in tool  # per-row item renderings are first-class SQL
 
 
@@ -865,4 +893,5 @@ def test_corpus_search_stopwords_are_query_side(store):
         str(store), "corpus_search", {"query": "what does the butter recipe need"}
     )
     assert "Butter" in out
-    assert tools._fts_query("what is it") != ""
+    assert tools._fts_query("what does the butter recipe need") == '"butter"* OR "recipe"* OR "need"*'
+    assert tools.execute_tool(str(store), "corpus_search", {"query": "what is it"}) != "0 results."

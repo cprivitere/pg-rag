@@ -48,12 +48,7 @@ GATE_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 # check cannot see them, and a reviewer must not reason about them as if they
 # were committed.
 LIMIT_PATHS = (
-    "data/documents.json",
-    "data/bm25_index.pkl",
-    "data/tool_documents.json",
-    "data/tool_bm25.pkl",
     "data/sqlite_gorgon.db",
-    "data/derived/documents_version.json",
     "data/wiki/.meta.json",
     "data/golden",
 )

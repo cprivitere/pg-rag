@@ -459,7 +459,7 @@ Tools (call to gather more data; up to {max_rounds} rounds):
 3. get_page(title) - full wiki page text by exact title (LIKE fallback lists
    candidates). Best for skill/mechanic prose and for trainer unlock costs
    (a trainer NPC's Training table).
-4. corpus_search(query, k=10) - FTS5 bm25() over the generated corpus (includes
+4. corpus_search(query, k=10) - FTS5 bm25() over the generated corpus.
 5. player_state(character=None, section="summary", query=None, skill=None) - live
    session data. section: summary, skills, currencies, quests, favor, items,
    stall, abilities. abilities REQUIRES skill=<skill name> (e.g. "Animal Handling")

@@ -674,8 +674,9 @@ query-side stopwords ported, `--corpus tool` a `tbl` filter); the BM25
 pickle module, the tool-corpus derive, the build lock + pre-hook probe, the
 stamp file and all five artifacts are deleted; `mise sync-*` is download +
 store rebuild. Baseline honesty: the pre-swap full run was stopped at 17/17
-PASS when the artifact deletion landed mid-run (the old seed read the
-(2026-10-15) are the comparison for the post-swap full run below.
+PASS when the artifact deletion landed mid-run (the old seed read the deleted
+`data/documents.json`). Those 17 plus the historical 61/61 gate (2026-10-15)
+are the comparison for the post-swap full run below.
 Result (2026-10-17, 62 cases, 2190 s, 0 error records): **61 PASS, 1 FAIL**
 — the single miss is `moonstone-item`'s "new beginnings", labeled GEN-side
 (fact in context, model dropped it), and it PASSes a solo rerun: reasoning

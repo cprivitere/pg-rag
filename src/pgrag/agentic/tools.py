@@ -472,17 +472,18 @@ def _corpus_search(store_path: str, args: dict, corpus: str = "full") -> str:
         if corpus == "tool"
         else ""
     )
+    conn = _conn(store_path)
     try:
-        conn = _conn(store_path)
         rows = conn.execute(
             "SELECT d.id, d.name, d.tbl, substr(d.text, 1, ?) "
             "FROM documents_fts f JOIN documents d ON d.rowid = f.rowid "
             f"WHERE documents_fts MATCH ? {filt} ORDER BY bm25(documents_fts) LIMIT ?",
             (_SEARCH_SNIPPET, match, k),
         ).fetchall()
-        conn.close()
     except sqlite3.OperationalError as exc:
         return f"corpus_search error: {exc}"
+    finally:
+        conn.close()
     if not rows:
         return "0 results."
     lines = [f"- {did} | {name or did} ({tbl}) | {snippet}" for did, name, tbl, snippet in rows]

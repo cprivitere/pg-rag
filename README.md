@@ -34,8 +34,6 @@ Python ≥ 3.15 via [uv](https://docs.astral.sh/uv/); services are launched with
 ```sh
 uv run pgrag download-wiki     # wiki page dumps
 uv run pgrag download-cdn      # CDN json tables
-uv run pgrag build-documents   # typed documents (+ version stamp)
-mise build-bm25                # persisted BM25 index
 mise sql-store                 # SQLite store for the tool loop
 mise start                     # LLM :8080 · chat :7860
 ```

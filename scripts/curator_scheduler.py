@@ -1,4 +1,4 @@
-"""Curator scheduler — run curator periodically, detect changes, rebuild corpora."""
+"""Curator scheduler — run curator periodically, detect changes, rebuild the store."""
 
 import json
 import subprocess

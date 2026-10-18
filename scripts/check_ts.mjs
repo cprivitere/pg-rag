@@ -4,18 +4,13 @@
  * (`scripts/*.mjs`). Usage: `node scripts/check_ts.mjs [paths...]`, default
  * `scripts`; exit 1 on any diagnostic, 0 with a summary line.
  *
- * Why a parser and not `tsc`'s full type check: these files run inside
- * oh-my-pi's compiled-binary runtime — `@oh-my-pi/pi-coding-agent` has no
- * type definitions on a dev box, so that use cannot be type-checked anywhere
- * but inside omp. What is checkable, and what this gate exists for, is that
- * the files are valid JS/TS (ruff covers Python).
- *
- * The one expected diagnostic is `TS2307 cannot find module` for that runtime
- * import (see above); it is reported as a note, never a failure. Everything
- * else fails the gate — a syntax error, a typo'd local, a bad-arity call
- * against the resolvable types (`node:fs`/`node:path`/`process` come from
- * `@types/node`, a devDependency). `.mjs` files are parsed (not type-checked)
- * as JavaScript.
+ * Why a parser and not `tsc`'s full type check: historically these files ran
+ * inside oh-my-pi's compiled-binary runtime, whose `@oh-my-pi/pi-coding-agent`
+ * types exist only inside omp — that use could not be type-checked on a dev
+ * box. What is checkable, and what this gate exists for, is that the files
+ * are valid JS/TS (ruff covers Python). The hook that carried that import is
+ * deleted; the gate now covers the repo's own `scripts/*.mjs`, and the
+ * `TS2307` tolerance below is its leftover for that era.
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";

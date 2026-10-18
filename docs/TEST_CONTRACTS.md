@@ -75,7 +75,9 @@ test (prove the source is fine) or recording a deliberate contract change
   `test_leveling.py`, `test_creature_zones.py`, `test_combat_xp.py`
 - **Source**: `src/pgrag/documents/` (`builder.py`, `wiki_builder.py`,
   `chunking.py`, `tokenizer.py`, `resolver.py`, `skill_profiles.py`,
-  `summaries.py`, `creature_zones.py`, `combat_xp.py`), `src/pgrag/build.py`
+  `summaries.py`, `creature_zones.py`, `combat_xp.py`) — built in-process by
+  `src/pgrag/agentic/store.py::_ingest_documents` into the store's `documents`
+  table (no intermediate artifact).
 - **Contracts**: doc key shape `{id, type, text, metadata}`; metadata
   scalar-safety (add-only, scalar-only, multi-value `" | "`-delimited —
   `test_doc_quality.py`); chunk max/overlap + `_chunk_N` ids + `parent_id`
