@@ -212,7 +212,7 @@ def test_store_rerun_idempotent(store):
         assert conn.execute("SELECT count(*) FROM wiki_pages").fetchone()[0] == 2
         assert conn.execute("SELECT count(*) FROM records").fetchone()[0] == 1
         assert conn.execute("SELECT count(*) FROM entity_names").fetchone()[0] > 0
-        assert conn.execute("SELECT count(*) FROM xptable_levels").fetchone()[0] == 3
+        assert conn.execute("SELECT count(*) FROM documents").fetchone()[0] > 0
     finally:
         conn.close()
 
@@ -236,6 +236,36 @@ def test_store_entity_names_fts(store):
             "SELECT name, type FROM entity_names WHERE entity_names MATCH 'bottle'"
         ).fetchall()
         assert ("Empty Bottle", "item") in rows
+    finally:
+        conn.close()
+
+def test_store_documents_fts(store):
+    """Contract: `build_store` runs the document builders in-process — every
+    doc lands in `documents` stamped with `DOCUMENTS_VERSION` and is
+    FTS-ranked for corpus_search. No intermediate artifact, no staleness
+    contract: the version lives per-row, not in a stamp file."""
+    from pgrag.config import DOCUMENTS_VERSION
+
+    db_path, cdn, wiki, none_dir = store
+    counts = build_store(
+        db_path=str(db_path),
+        cdn_dir=cdn,
+        wiki_dir=wiki,
+        session_dir=none_dir,
+        glogger_db=none_dir / "none.db",
+    )
+    assert counts["documents"] > 0
+    conn = sqlite3.connect(db_path)
+    try:
+        assert conn.execute("SELECT count(*) FROM documents").fetchone()[0] == counts["documents"]
+        versions = conn.execute("SELECT DISTINCT documents_version FROM documents").fetchall()
+        assert versions == [(DOCUMENTS_VERSION,)]
+        rows = conn.execute(
+            "SELECT d.id FROM documents_fts f JOIN documents d ON d.rowid = f.rowid "
+            "WHERE documents_fts MATCH '\"butter\"*' ORDER BY bm25(documents_fts) LIMIT 5"
+        ).fetchall()
+        assert rows, "no FTS hits for a term the fixture documents hold"
+        assert conn.execute("SELECT count(*) FROM documents_fts").fetchone()[0] == counts["documents"]
     finally:
         conn.close()
 

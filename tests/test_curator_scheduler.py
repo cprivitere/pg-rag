@@ -1,13 +1,12 @@
 """Tests scripts.curator_scheduler.run_curator_with_scheduler ordering.
 
-Contract (widened from V25): every step the scheduler invokes is a live command,
-run in dependency order — curator -> `pgrag.cli build-documents` ->
-`scripts.build_tool_corpus` -> `pgrag.rag.bm25`. A dead command would strand the
-state file: the scheduler `return`s on the first non-zero rc, before
-`state["last_run"]`/`state["files_hash"]` are saved, so a step whose module no
-longer exists (argparse exits 2) would make every invocation re-run the curator
-and a full documents rebuild and never record the wiki hash. `build-index` in
-particular is not a `pgrag.cli` subcommand and MUST NOT appear in any argv.
+Contract: every step the scheduler invokes is a live command, run in
+dependency order — curator -> store rebuild (which runs the document builders
+in-process). A dead command would strand the state file: the scheduler
+`return`s on the first non-zero rc, before `state["last_run"]`/
+`state["files_hash"]` are saved, so a step whose module no longer exists
+would make every invocation re-run the curator and a full store rebuild and
+never record the wiki hash.
 """
 
 import sys
@@ -18,9 +17,7 @@ from scripts.curator_scheduler import run_curator_with_scheduler
 # The full ordered chain the scheduler depends on.
 EXPECTED_CHAIN = [
     [sys.executable, "-m", "scripts.curator"],
-    [sys.executable, "-m", "pgrag.cli", "build-documents"],
-    [sys.executable, "-m", "scripts.build_tool_corpus"],
-    [sys.executable, "-m", "pgrag.rag.bm25"],
+    [sys.executable, "scripts/build_sqlstore.py"],
 ]
 
 
@@ -48,7 +45,7 @@ def test_v25_scheduler_runs_live_steps_in_dependency_order():
         assert "build-index" not in args, f"dead command in argv: {args}"
 
 
-def test_v25_scheduler_documents_rebuild_after_curator():
+def test_scheduler_store_rebuild_after_curator():
     calls = []
 
     def fake_subprocess(args, **kwargs):
@@ -65,5 +62,5 @@ def test_v25_scheduler_documents_rebuild_after_curator():
         run_curator_with_scheduler()
 
     curator_idx = calls.index([sys.executable, "-m", "scripts.curator"])
-    docs_idx = calls.index([sys.executable, "-m", "pgrag.cli", "build-documents"])
-    assert curator_idx < docs_idx, "curator must run before the documents rebuild"
+    store_idx = calls.index([sys.executable, "scripts/build_sqlstore.py"])
+    assert curator_idx < store_idx, "curator must run before the store rebuild"

@@ -15,9 +15,6 @@ script is the documentation analogue. It asserts stable, meaningful facts:
 - contract constants (DOCUMENTS_VERSION) and the golden shape agree across the
   docs that quote them;
 - the golden-set counts the evaluation skill quotes are real;
-- the corpus writer locks the directory it writes (`cli.py` locks
-  `DOCUMENTS_PATH.parent`, never the package-anchored `DATA_DIR` — the same path
-  from the repo root, two paths anywhere else);
 - every lint suppression in `ruff.toml` names a rule `select` carries (six of
   nine entries were dead, suppressing nothing while looking like a safeguard);
 - the gates' own runner files (`scripts/check_ts.mjs`, `package.json`,
@@ -34,7 +31,6 @@ check that breaks on innocuous churn gets ignored, which is how guardrails rot.
 
 from __future__ import annotations
 
-import ast
 import json
 import re
 import subprocess
@@ -102,12 +98,6 @@ _COUNTS_QUOTE_RE = re.compile(r"(\d+) collected / (\d+) deselected / (\d+) defau
 
 # The leading letter run of a rule code, i.e. its linter family (`BLE001` -> `BLE`).
 _FAMILY_RE = re.compile(r"[A-Z]+")
-
-# The directory the documents rebuild must lock: the one it writes to. Asserted
-# as a spelling so the writer and the lock cannot drift apart again (they were
-# `DATA_DIR` vs `data/` — the same path from the repo root, two paths anywhere
-# else).
-LOCK_TARGET = "DOCUMENTS_PATH.parent"
 
 
 def _missing_doc_refs(text: str, base: Path | None = None) -> list[str]:
@@ -505,51 +495,6 @@ def main() -> int:
             "missing model env keys in mise.toml [env]",
             ", ".join(k for k in model_keys if k not in mise_env),
         )
-
-    # --- 7. The corpus writer locks the tree it writes, CWD-relative --------
-    # The data tree is addressed from the CWD, so a lock on the
-    # package-anchored `DATA_DIR` would guard a *different* directory than
-    # the file being written — two writers, no serialization, and the pre-hook
-    # (which resolves the repo root) would agree with neither.
-    cli_path = ROOT / "src" / "pgrag" / "cli.py"
-    if not cli_path.exists():
-        _drift("src/pgrag/cli.py missing — cannot check the corpus lock")
-    else:
-        # Parse, don't grep: the file's *comments* explain the trap (and name the
-        # constant), while only the code decides what gets locked.
-        try:
-            cli_tree = ast.parse(cli_path.read_text(encoding="utf-8"))
-        except SyntaxError as exc:  # pragma: no cover - a broken cli.py is its own failure
-            _drift("cannot parse src/pgrag/cli.py", str(exc))
-            cli_tree = ast.Module(body=[], type_ignores=[])
-        lock_targets = [
-            ast.unparse(node.args[0])
-            for node in ast.walk(cli_tree)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "corpus_lock"
-            and node.args
-        ]
-        # Empty today — the `DATA_DIR` mentions in cli.py are comments, and comments
-        # are AST-invisible — i.e. a guard for the *next* writer rather than for the
-        # current one: the value the lock must name is this file's, so a
-        # reintroduced `DATA_DIR` anywhere in it is the shape that must fail.
-        data_dir_refs = [
-            node.lineno
-            for node in ast.walk(cli_tree)
-            if isinstance(node, ast.Name) and node.id == "DATA_DIR"
-        ]
-        problems = []
-        if not lock_targets:
-            problems.append("build-documents takes no corpus lock")
-        if any(t != LOCK_TARGET for t in lock_targets):
-            problems.append(f"locks {', '.join(lock_targets)} instead of {LOCK_TARGET}")
-        if data_dir_refs:
-            problems.append(f"references the package-anchored DATA_DIR (line {data_dir_refs[0]})")
-        if problems:
-            _drift("the documents rebuild does not lock its data tree", "; ".join(problems))
-        else:
-            _report("OK", "the documents rebuild locks its data tree")
 
     # --- 8. No lint suppression names a rule that is not selected -----------
     # An `ignore` for an unselected family suppresses nothing while looking like

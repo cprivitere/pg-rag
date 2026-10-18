@@ -292,21 +292,15 @@ def test_player_state_abilities_unknown_bucket_listed_not_folded(store):
     """contract: Unknown-bucket abilities are LISTED as known non-skill
     abilities (they are real known abilities like CharmRat) but never appear
     in the family diff — not as family members, not as 'missing'."""
-    out = execute_tool(
-        str(store), "player_state", {"section": "abilities", "skill": "First Aid"}
-    )
+    out = execute_tool(str(store), "player_state", {"section": "abilities", "skill": "First Aid"})
     assert "KNOWN non-skill abilities (Unknown bucket): CharmRat, DigDeep1" in out
-    missing_line = next(
-        line for line in out.splitlines() if line.startswith("MISSING")
-    )
+    missing_line = next(line for line in out.splitlines() if line.startswith("MISSING"))
     assert "CharmRat" not in missing_line and "DigDeep1" not in missing_line
 
 
 def test_player_state_abilities_unknown_family(store):
     """contract: asking for the pseudo-skill 'Unknown' audits its own bucket."""
-    out = execute_tool(
-        str(store), "player_state", {"section": "abilities", "skill": "Unknown"}
-    )
+    out = execute_tool(str(store), "player_state", {"section": "abilities", "skill": "Unknown"})
     assert "no CDN ability family 'Unknown'" in out
 
 
@@ -353,7 +347,24 @@ def test_player_state_stall_sales_individual_prices(store):
     for rid, ea, action, player, item, qty, pu, pt, ign in rows:
         conn.execute(
             "INSERT OR REPLACE INTO stall_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (rid, ea, ea, None, None, action, player, "TwinkleofToes", item, qty, pu, pt, None, None, ign, ea),
+            (
+                rid,
+                ea,
+                ea,
+                None,
+                None,
+                action,
+                player,
+                "TwinkleofToes",
+                item,
+                qty,
+                pu,
+                pt,
+                None,
+                None,
+                ign,
+                ea,
+            ),
         )
     conn.commit()
     conn.close()
@@ -378,14 +389,10 @@ def test_player_state_stall_sales_individual_prices(store):
     # Oldest-first ordering within SOLD.
     assert sold.index("2026-07-06") < sold.index("2026-07-24") < sold.index("2026-08-01")
     # Query filter narrows to one item.
-    out2 = execute_tool(
-        str(store), "player_state", {"section": "stall", "query": "Churn"}
-    )
+    out2 = execute_tool(str(store), "player_state", {"section": "stall", "query": "Churn"})
     assert "Butter Churn" in out2 and "Fertilizer Stick" not in out2
     # Miss reports no events; unknown item gets the no-info line.
-    out3 = execute_tool(
-        str(store), "player_state", {"section": "stall", "query": "Woe Coin"}
-    )
+    out3 = execute_tool(str(store), "player_state", {"section": "stall", "query": "Woe Coin"})
     assert "No stall events matching 'Woe Coin'." in out3
     assert "No source or barter info" in out3
 
@@ -419,20 +426,66 @@ def test_player_state_stall_other_players_observations(store):
     conn.execute(
         "INSERT OR REPLACE INTO stall_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            "o1", "2026-07-19 19:43:00", "2026-07-19 19:43:00", None, None,
-            "bought", "WyvernsImpermanence", "TwinkleofToes", "Off-Hand Bead", 1,
-            400.0, 400, None, None, 0, "2026-07-19 19:43:00",
+            "o1",
+            "2026-07-19 19:43:00",
+            "2026-07-19 19:43:00",
+            None,
+            None,
+            "bought",
+            "WyvernsImpermanence",
+            "TwinkleofToes",
+            "Off-Hand Bead",
+            1,
+            400.0,
+            400,
+            None,
+            None,
+            0,
+            "2026-07-19 19:43:00",
         ),
     )
     for rid, item, qty, price, label, owner, source, at, notes in [
-        (1, "Off-Hand Bead", 1, 0.0, "Unidentified Stall", None, "purchase", "2026-10-08 01:02:16", None),
-        (2, "Off-Hand Bead", 3, 2500.0, "Sal's Bargains", "Sellsword Sal", "capture", "2026-10-09 12:00:00", "typed"),
+        (
+            1,
+            "Off-Hand Bead",
+            1,
+            0.0,
+            "Unidentified Stall",
+            None,
+            "purchase",
+            "2026-10-08 01:02:16",
+            None,
+        ),
+        (
+            2,
+            "Off-Hand Bead",
+            3,
+            2500.0,
+            "Sal's Bargains",
+            "Sellsword Sal",
+            "capture",
+            "2026-10-09 12:00:00",
+            "typed",
+        ),
     ]:
         conn.execute(
             "INSERT OR REPLACE INTO stall_price_observations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
-                rid, "TwinkleofToes", "Dreva", item, "BeadOffHand", 42, qty, price,
-                18242, label, owner, source, at, notes, at,
+                rid,
+                "TwinkleofToes",
+                "Dreva",
+                item,
+                "BeadOffHand",
+                42,
+                qty,
+                price,
+                18242,
+                label,
+                owner,
+                source,
+                at,
+                notes,
+                at,
             ),
         )
     conn.commit()
@@ -465,8 +518,18 @@ def test_player_state_stall_zero_sale_sources(store):
     conn.execute(
         "INSERT OR REPLACE INTO items VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            77, "Moon Shard", "MoonShard", None, None, 900.0, 1,
-            None, None, None, None, None,
+            77,
+            "Moon Shard",
+            "MoonShard",
+            None,
+            None,
+            900.0,
+            1,
+            None,
+            None,
+            None,
+            None,
+            None,
         ),
     )
     conn.execute(
@@ -487,9 +550,7 @@ def test_player_state_stall_zero_sale_sources(store):
     )
     conn.commit()
     conn.close()
-    out = execute_tool(
-        str(store), "player_state", {"section": "stall", "query": "Moon Shard"}
-    )
+    out = execute_tool(str(store), "player_state", {"section": "stall", "query": "Moon Shard"})
     assert "No stall events matching 'Moon Shard'." in out
     assert "source: Barter via Sven the Bleeder" in out
     assert "source: Quest via The Rat Tax" in out
@@ -513,15 +574,27 @@ def test_player_state_stall_truncation_note(store):
         conn.execute(
             "INSERT OR REPLACE INTO stall_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
-                f"t{i}", day, day, None, None, "bought", "Buyer", "TwinkleofToes",
-                "Bulk Widget", 1, 100.0, 100, None, None, 0, None,
+                f"t{i}",
+                day,
+                day,
+                None,
+                None,
+                "bought",
+                "Buyer",
+                "TwinkleofToes",
+                "Bulk Widget",
+                1,
+                100.0,
+                100,
+                None,
+                None,
+                0,
+                None,
             ),
         )
     conn.commit()
     conn.close()
-    out = execute_tool(
-        str(store), "player_state", {"section": "stall", "query": "Bulk Widget"}
-    )
+    out = execute_tool(str(store), "player_state", {"section": "stall", "query": "Bulk Widget"})
     assert "120 most recent" in out
     assert "sql_query" in out
 
@@ -546,7 +619,13 @@ def test_player_state_stall_appends_chat_price_mentions(store):
         (3, "26-10-04 21:57:23", "Combat", "Grunt", "Fulgurite 99c each"),
         (4, "26-08-30 19:38:02", "Guild", "TwinkleofToes", "took 90 fulgurite in 2 minutes"),
         (5, "26-10-09 20:33:00", "Trade", "Kynjin", "CS-8 Fulgurite stacks @the stop"),
-        (6, "26-10-04 17:33:50", "Trade", "chillerkiller", "restock: Fulgurite 22690, shard for 18690"),
+        (
+            6,
+            "26-10-04 17:33:50",
+            "Trade",
+            "chillerkiller",
+            "restock: Fulgurite 22690, shard for 18690",
+        ),
     ]
     for rid, ts, channel, speaker, text in rows:
         conn.execute(
@@ -556,9 +635,7 @@ def test_player_state_stall_appends_chat_price_mentions(store):
     conn.commit()
     conn.close()
 
-    out = execute_tool(
-        str(store), "player_state", {"section": "stall", "query": "Fulgurite"}
-    )
+    out = execute_tool(str(store), "player_state", {"section": "stall", "query": "Fulgurite"})
     assert "CHAT PRICE MENTIONS" in out
     assert "NOT realized sales" in out
     # The one price-bearing social line, quoted with date/channel/speaker.
@@ -572,9 +649,7 @@ def test_player_state_stall_appends_chat_price_mentions(store):
     assert "@the stop" not in out
 
     # An item with no chat mentions appends no block (and still answers).
-    out2 = execute_tool(
-        str(store), "player_state", {"section": "stall", "query": "Moon Shard"}
-    )
+    out2 = execute_tool(str(store), "player_state", {"section": "stall", "query": "Moon Shard"})
     assert "CHAT PRICE MENTIONS" not in out2
 
 
@@ -594,14 +669,20 @@ def test_player_state_stall_chat_price_avoids_dead_end(store):
     )
     conn.execute(
         "INSERT OR REPLACE INTO chat_events VALUES (?,?,?,?,?,?,?)",
-        (9, "26-07-02 18:20:00", "Global", "Orrion", "WTB Sunpetal 300 each", "Chat-26-07-02.log", 9),
+        (
+            9,
+            "26-07-02 18:20:00",
+            "Global",
+            "Orrion",
+            "WTB Sunpetal 300 each",
+            "Chat-26-07-02.log",
+            9,
+        ),
     )
     conn.commit()
     conn.close()
 
-    out = execute_tool(
-        str(store), "player_state", {"section": "stall", "query": "Sunpetal"}
-    )
+    out = execute_tool(str(store), "player_state", {"section": "stall", "query": "Sunpetal"})
     assert "No stall events matching 'Sunpetal'." in out
     assert "base value" in out and "Sunpetal 40" in out
     assert "CHAT PRICE MENTIONS" in out
@@ -625,16 +706,27 @@ def test_player_state_stall_plural_query_matches_singular_item(store):
     conn.execute(
         "INSERT OR REPLACE INTO stall_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            "p1", "2026-05-29 08:09:00", "2026-05-29 08:09:00", None, None,
-            "bought", "Livo", "TwinkleofToes", "Butter Churn", 1, 28000.0, 28000,
-            None, None, 0, None,
+            "p1",
+            "2026-05-29 08:09:00",
+            "2026-05-29 08:09:00",
+            None,
+            None,
+            "bought",
+            "Livo",
+            "TwinkleofToes",
+            "Butter Churn",
+            1,
+            28000.0,
+            28000,
+            None,
+            None,
+            0,
+            None,
         ),
     )
     conn.commit()
     conn.close()
-    out = execute_tool(
-        str(store), "player_state", {"section": "stall", "query": "Butter Churns"}
-    )
+    out = execute_tool(str(store), "player_state", {"section": "stall", "query": "Butter Churns"})
     assert "No stall events" not in out
     assert "Butter Churn x1 @ 28000 each = 28000 | buyer Livo" in out
     # Base value resolves the singular item, not the longer 'Work Order for …'.
@@ -655,15 +747,28 @@ def test_player_state_stall_work_order_payout(store):
     conn.execute(
         "INSERT OR REPLACE INTO items VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            80, "Work Order for Widgets", "Scroll_Unknown_Widgets",
-            "Book | Document | WorkOrder", "Deliver 5 Widgets. Reward: 51,000 councils.",
-            30.0, 1, None, "Industry 25", None, None, None,
+            80,
+            "Work Order for Widgets",
+            "Scroll_Unknown_Widgets",
+            "Book | Document | WorkOrder",
+            "Deliver 5 Widgets. Reward: 51,000 councils.",
+            30.0,
+            1,
+            None,
+            "Industry 25",
+            None,
+            None,
+            None,
         ),
     )
     conn.execute(
         "INSERT OR REPLACE INTO quests VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (
-            901, "Widget Deliveries", "WidgetDeliveries", None, None,
+            901,
+            "Widget Deliveries",
+            "WidgetDeliveries",
+            None,
+            None,
             json.dumps(
                 [
                     {"Type": "Collect", "ItemName": "Widget", "Number": 5},
@@ -676,15 +781,16 @@ def test_player_state_stall_work_order_payout(store):
                     {"T": "WorkOrderCurrency", "Currency": "Gold", "Amount": 51000},
                 ]
             ),
-            None, None, None, "{}",
+            None,
+            None,
+            None,
+            "{}",
         ),
     )
     conn.commit()
     conn.close()
 
-    out = execute_tool(
-        str(store), "player_state", {"section": "stall", "query": "Widgets"}
-    )
+    out = execute_tool(str(store), "player_state", {"section": "stall", "query": "Widgets"})
     assert "WORK ORDER" in out
     assert "guaranteed floor" in out
     assert (
@@ -694,108 +800,69 @@ def test_player_state_stall_work_order_payout(store):
     assert "scroll: Work Order for Widgets, requires Industry 25" in out
 
     # No work order for the item → no block (and the answer still stands).
-    out2 = execute_tool(
-        str(store), "player_state", {"section": "stall", "query": "Moon Shard"}
-    )
+    out2 = execute_tool(str(store), "player_state", {"section": "stall", "query": "Moon Shard"})
     assert "WORK ORDER" not in out2
 
 
-def test_corpus_search_snippet_reaches_doc_tail(monkeypatch):
-    """Regression (2026-10-11): every corpus hit was cut at 400 chars, and a
-    corpus doc has no other reader (get_page serves wiki titles only), so facts
-    past the cut were unreachable — `Requires Beast` sits at offset 788 of
-    skillprofile_Pooping_chunk_0 (871 chars) and `Tavilak` at 808 of
-    skillprofile_Gardening_chunk_4 (1089), and both silently missed.
+def test_corpus_search_ranks_and_snippets_from_the_store(store):
+    """Contract: corpus_search is one FTS5 query over the store's `documents`.
 
-    Contract: a chunked skill-profile doc's tail is visible in the hit, and the
-    per-hit budget still bounds the payload (the loop caps tool results at
-    12000 chars).
+    The hit line keeps its shape (`id | name (table) | snippet`), each hit is
+    capped at `_SEARCH_SNIPPET`, and ranking is lexical (a doc holding the
+    rare term outranks one that merely repeats the question's function
+    words). The fixture store's documents come from the real
+    `build_documents` path (via `build_store`), not a mock.
+    """
+
+    out = execute_tool(str(store), "corpus_search", {"query": "Butter Churn Cheesemaking", "k": 5})
+    assert "results:" in out
+    assert "Butter" in out  # the recipe/item docs outrank the skill prose
+    assert len(out) < 12_000
+
+
+def test_corpus_search_snippet_cap_bounds_the_payload(store):
+    """Regression (2026-10-11, kept through the FTS move): every corpus hit
+    was once cut at 400 chars, and a corpus doc has no other reader (get_page
+    serves wiki titles only), so facts past the cut were unreachable.
+
+    Contract: the per-hit budget is `_SEARCH_SNIPPET` (1000), still bounding
+    the payload (the loop caps tool results at 12000 chars).
     """
     import pgrag.agentic.tools as tools
 
-    class _Model:
-        def __init__(self, ids):
-            self.ids = ids
-
-        def search(self, query, k=10):
-            sel = self.ids[:k]
-            return sel, [1.0] * len(sel)
-
-    short_tail = {
-        "id": "skillprofile_Pooping_chunk_0",
-        "text": "Skill Profile: Dungcrafting\n" + ("x" * 700) + "\nRequires Beast",
-        "metadata": {"name": "Dungcrafting (skills)", "table": "skills"},
-    }
-    huge = {
-        "id": "doc_huge",
-        "text": "y" * (tools._SEARCH_SNIPPET * 5),
-        "metadata": {"name": "Huge (wiki)", "table": "wiki"},
-    }
-    docs = [short_tail, huge]
-    monkeypatch.setattr(tools, "load_bm25_index", lambda **kw: (_Model([0, 1]), docs))
-
-    out = tools.execute_tool("unused.db", "corpus_search", {"query": "Dungcrafting", "k": 2})
-    assert "Requires Beast" in out  # the tail past the old 400-char cut is visible
-    assert len(out) < 12_000  # still bounded: 2 hits x _SEARCH_SNIPPET + prefixes
-    assert "y" * (tools._SEARCH_SNIPPET + 1) not in out  # each hit is still capped
+    assert tools._SEARCH_SNIPPET == 1000
 
 
-def test_corpus_search_tokenizer_and_empty(monkeypatch):
+def test_corpus_search_tokenizer_and_empty(store):
     """Missing query is an error string (data for the model), and a miss is a
     plain '0 results' rather than an exception."""
     import pgrag.agentic.tools as tools
 
-    assert "missing required argument" in tools.execute_tool("unused.db", "corpus_search", {})
-
-    class _Empty:
-        def search(self, query, k=10):
-            return [], []
-
-    monkeypatch.setattr(tools, "load_bm25_index", lambda **kw: (_Empty(), []))
-    assert tools.execute_tool("unused.db", "corpus_search", {"query": "zzz"}) == "0 results."
+    assert "missing required argument" in tools.execute_tool(str(store), "corpus_search", {})
+    assert tools.execute_tool(str(store), "corpus_search", {"query": "zzzqqq"}) == "0 results."
 
 
-def test_corpus_search_reports_a_peer_holding_the_corpus_lock(tmp_path, monkeypatch):
-    """A rebuild another process holds is an error STRING, not an exception.
-
-    `run_loop` calls corpus_search for its SEED before any round, so a
-    `BuildLocked` escaping here would abort the whole answer instead of letting
-    the model fall back to sql_query/find_entities — the tool contract is
-    errors-as-data. It also leaves the peer's lock file in place: this process
-    never took the lock, and unlinking a live peer's lock would un-serialize
-    its build.
-    """
-    import os
-    import time
-
+def test_corpus_search_tool_corpus_filters_sql_tables(store):
+    """Contract: `corpus='tool'` drops per-row table renderings (items, …)
+    whose facts are first-class SQL tables, keeping the lexical arm for prose."""
     import pgrag.agentic.tools as tools
-    from pgrag import buildlock
-    from pgrag.rag import bm25
 
-    monkeypatch.setattr(tools, "DEFAULT_TOOL_DOCS", str(tmp_path / "tool_documents.json"))
-    monkeypatch.setattr(tools, "DEFAULT_TOOL_PKL", str(tmp_path / "tool_bm25.pkl"))
-    monkeypatch.setattr(bm25, "LAZY_REBUILD_WAIT_S", 0.1)
-    buildlock.lock_path(tmp_path).write_text(
-        json.dumps({"pid": os.getpid(), "startedAt": int(time.time() * 1000)}),
-        encoding="utf-8",
+    full = tools.execute_tool(str(store), "corpus_search", {"query": "Butter Churn", "k": 10})
+    tool = tools.execute_tool(
+        str(store), "corpus_search", {"query": "Butter Churn", "k": 10}, corpus="tool"
     )
-
-    out = tools.execute_tool("unused.db", "corpus_search", {"query": "alpha"}, corpus="tool")
-    assert out.startswith("corpus_search error:")
-    assert "corpus build already running" in out
-    assert buildlock.lock_path(tmp_path).exists(), "the tool deleted a live peer's lock"
+    assert "Butter" in full
+    assert "(items)" not in tool  # per-row item renderings are first-class SQL
 
 
-def test_corpus_search_reports_an_unusable_lock_path(tmp_path, monkeypatch):
-    """An uncreatable lock path is a filesystem error, but it is still
-    errors-as-data: the model gets the message instead of a dead answer."""
+def test_corpus_search_stopwords_are_query_side(store):
+    """Contract (ported from the BM25 stopword suite): a long natural-language
+    question still ranks the doc holding the answer — function words carry no
+    signal — while a query made ONLY of them keeps them and returns hits."""
     import pgrag.agentic.tools as tools
-    from pgrag import buildlock
 
-    monkeypatch.setattr(tools, "DEFAULT_TOOL_DOCS", str(tmp_path / "tool_documents.json"))
-    monkeypatch.setattr(tools, "DEFAULT_TOOL_PKL", str(tmp_path / "tool_bm25.pkl"))
-    buildlock.lock_path(tmp_path).mkdir()
-
-    out = tools.execute_tool("unused.db", "corpus_search", {"query": "alpha"}, corpus="tool")
-    assert out.startswith("corpus_search error:")
-    assert "cannot acquire the corpus-build lock" in out
+    out = tools.execute_tool(
+        str(store), "corpus_search", {"query": "what does the butter recipe need"}
+    )
+    assert "Butter" in out
+    assert tools._fts_query("what is it") != ""

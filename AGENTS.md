@@ -18,14 +18,14 @@ Two sources feed a searchable, fact-grounded knowledge base:
 - **Wiki**: raw `data/wiki/*.txt` page dumps (hashed filenames, titles via
   `data/wiki/.meta.json`).
 
-`generate_documents()` → `data/documents.json` (+ a `DOCUMENTS_VERSION` stamp)
-→ a persisted BM25 index (`data/bm25_index.pkl`) and a trimmed tool-corpus
-variant (`data/tool_documents.json` + `data/tool_bm25.pkl`). A separate SQLite
-store (`data/sqlite_gorgon.db`) holds the same CDN/wiki data plus live session
-and glogger play history. **All retrieval is the agentic tool loop**
-(`pgrag.agentic.loop.run_loop`, `src/pgrag/agentic/loop.py`) driving five tools
-over that store + the BM25 corpus. Ships a CLI (`pgrag`), the Gradio chat,
-agentic CLI chat, curation tooling, and the golden eval.
+Two sources plus live play history feed one SQLite store
+(`data/sqlite_gorgon.db`): structured CDN tables, raw wiki dumps, the
+generated corpus (`documents` + `documents_fts`, stamped per-row with
+`DOCUMENTS_VERSION`), and session/glogger history. **All retrieval is the
+agentic tool loop** (`pgrag.agentic.loop.run_loop`,
+`src/pgrag/agentic/loop.py`) driving five tools over that store. Ships a CLI
+(`pgrag`), the Gradio chat, agentic CLI chat, curation tooling, and the
+golden eval.
 
 ## Architecture & Data Flow
 
@@ -34,19 +34,16 @@ cdn/*.json ─┐
             ├─ loaders → GameDatabase(tables + wiki) ─┐
 wiki/*.txt ─┘                                          ├─ documents/ (builder + wiki_builder + skill_profiles + summaries)
 data/wiki/curated/*.json ──────────────────────────────┘
-                        │  build.py: generate_documents() → data/documents.json
-                        │           (+ data/derived/documents_version.json, stamps DOCUMENTS_VERSION)
+                        │  store._ingest_documents() → documents + documents_fts
+                        │           (per-row DOCUMENTS_VERSION stamp)
                         ▼
-      rag/bm25.py              → data/bm25_index.pkl        (persisted lexical index)
-      scripts/build_tool_corpus.py → data/tool_documents.json + data/tool_bm25.pkl  (corpus_search --corpus tool)
-
-      scripts/build_sqlstore.py → data/sqlite_gorgon.db  (CDN + wiki + live session + glogger)
+      scripts/build_sqlstore.py → data/sqlite_gorgon.db  (CDN + wiki + generated corpus + live session + glogger)
 
 Question → agentic.loop.run_loop (blocking, bounded rounds; temp 0 / seed 0 by default)
             ├─ sql_query      read-only SELECT over the store (LIMIT 200, 2M-op budget)
             ├─ find_entities  FTS5 over entity_names
             ├─ get_page       full wiki page text
-            ├─ corpus_search  BM25 over data/documents.json (or the tool corpus)
+            ├─ corpus_search  FTS5 bm25() over documents (or tbl-filtered --corpus tool)
             └─ player_state   live-session sections (summary/skills/stall/abilities/…)
                         ▼
               prompt + tool results → LLM :8080 → grounded answer
@@ -56,33 +53,33 @@ The five tool names are the exact `AVAILABLE_TOOLS` string in
 `src/pgrag/agentic/tools.py`: `sql_query, find_entities, get_page,
 corpus_search, player_state`.
 
-- **DELETED in the cutover** — do not name these as live: the whole dense path
-  (`pgrag.rag.{pipeline,retriever,reranker_client,entity_retrieval,resolve,
-  synthesis_detector,synthesis_generator,spelling,query_classifier,query_plan,
-  retrieval_eval,prompts}`, `pgrag.vectorstore.*`, `pgrag.embeddings.*`,
-  `pgrag.validation`, `pgrag.documents.prompts`), the scripts
-  `retrieval.py`/`rag.py`/`retrieval_eval.py`/`bakeoff_corpus.py`/
+- **DELETED in the cutover and the corpus→store move** — do not name these as
+  live: the whole dense path (`pgrag.rag.{pipeline,retriever,reranker_client,
+  entity_retrieval,resolve,synthesis_detector,synthesis_generator,spelling,
+  query_classifier,query_plan,retrieval_eval,prompts}`, `pgrag.vectorstore.*`,
+  `pgrag.embeddings.*`, `pgrag.validation`, `pgrag.documents.prompts`), the
+  scripts `retrieval.py`/`rag.py`/`retrieval_eval.py`/`bakeoff_corpus.py`/
   `embed_eval.py`/`embed_vram_probe.py`/`vram_sweep.py`, the
   `.mise/tasks/{embed,rerank}-{start,stop}.ps1` tasks, `notebooks/molab-mirror/`,
-  and their tests. There is no Chroma collection, no dense retrieval, no
-  reranker, no embedding server, no RRF fusion, no entity dossier / `_gap_fill`,
-  no query classifier, and no IR-metric harness. Chroma is out of
-  `pyproject.toml`; the venv no longer ships `chromadb`/`onnxruntime`.
-  `EMBEDDING_DIM` and `CONTEXT_BUDGET` no longer exist.
+  and their tests — plus the file-corpus machinery (the BM25 pickle module,
+  the tool-corpus derive script, the build-lock module, the repo-lock pre-hook
+  probe, documents.json, bm25_index.pkl, tool_*), and their
+  tests. There is no Chroma collection, no dense retrieval, no reranker, no
+  embedding server, no RRF fusion, no entity dossier / `_gap_fill`, no query
+  classifier, and no IR-metric harness. Chroma is out of `pyproject.toml`; the
+  venv no longer ships `chromadb`/`onnxruntime`. `EMBEDDING_DIM` and
+  `CONTEXT_BUDGET` no longer exist.
 
-- **Freshness contract (avoid the stale-document trap)**: `build-documents`
-  stamps `data/derived/documents_version.json` with `DOCUMENTS_VERSION`
-  (`src/pgrag/config.py`; authority is the constant, not this doc).
-  `scripts/build_tool_corpus.py` (and the `sync-*` tasks that call it)
-  **refuses** to run against a stale stamp — the ported successor of the old
-  `build-index` refusal. `pgrag/rag/bm25.py` serves its persisted index while
-  `data/documents.json` is unchanged (mtime-keyed) and rebuilds otherwise.
+- **Freshness contract (avoid the stale-document trap)**: the store build runs
+  the document builders in-process and stamps every `documents` row with
+  `DOCUMENTS_VERSION` (`src/pgrag/config.py`; authority is the constant, not
+  this doc) — there is no intermediate artifact and no staleness refusal.
   Bump `DOCUMENTS_VERSION` whenever document shape changes; regenerate with
-  `build-documents` (`mise generate-docs`) or a `mise sync-*` task.
+  `mise sql-store` (or a `mise sync-*` task).
 
-- **Agentic SQLite store + tool loop**: `src/pgrag/agentic/` builds a separate
-  SQLite store (`data/sqlite_gorgon.db`, `mise sql-store`) holding the primary
-  sources — hand-mapped CDN tables, raw wiki pages, live play-session data
+- **Agentic SQLite store + tool loop**: `src/pgrag/agentic/` builds the SQLite
+  store (`data/sqlite_gorgon.db`, `mise sql-store`) holding every source —
+  hand-mapped CDN tables, raw wiki pages, the generated corpus, live play-session data
   (`~/AppData/LocalLow/Elder Game/Project Gorgon`: ChatLogs, Player.log,
   Reports, Books), and glogger play-history (`src/pgrag/agentic/glogger.py`
   reads `%APPDATA%/glogger.Personal/glogger.db` (the fork-local daily driver;
@@ -107,10 +104,8 @@ corpus_search, player_state`.
 ## Key Directories
 
 - `src/pgrag/` — importable package (`uv` installs editable).
-  - `cli.py` — CLI: `download-cdn`, `download-wiki`, `build-documents`
-    (exactly those three).
+  - `cli.py` — CLI: `download-cdn`, `download-wiki` (exactly those two).
   - `config.py` — paths, `DOCUMENTS_VERSION`.
-  - `build.py` — `generate_documents()` orchestration.
   - `loaders/` — `download_wiki` (category-driven fetch; owns
     `TARGET_CATEGORIES`/`RECURSIVE_CATEGORIES`/`WIKI_TITLE_EXTRAS`, batching,
     retry, atomic `.meta.json`), `cdn_loader` (tables from CDN json),
@@ -121,30 +116,27 @@ corpus_search, player_state`.
     token counter the chunk budgets measure with), `resolver.py` (internal
     code → display name), `skill_profiles.py`, `summaries.py` (gathering skill
     maps), `creature_zones.py`, `combat_xp.py`.
-  - `rag/bm25.py` — the lexical index (build + persistence +
-    `load_bm25_index`); `rag/llm.py` — the LLM client (SSE parse, server-error
-    types).
+  - `rag/llm.py` — the LLM client (SSE parse, server-error types).
   - `agentic/` — `store.py` + `session.py` + `glogger.py` (SQLite store
     build), `tools.py` (the five tools), `loop.py` (the tool loop),
     `eval.py` (golden fact-presence eval + tier membership).
 - `scripts/` — eval + service tooling (see Important Files).
 - `tests/` — pytest suite, imports the installed `pgrag` package.
 - `data/` (gitignored) — `cdn/`, `wiki/` (+ `curated/`, `.meta.json`),
-  `derived/` (`documents_version.json`, `wiki_parsed.json`), `documents.json`,
-  `bm25_index.pkl`, `tool_documents.json`, `tool_bm25.pkl`,
-  `sqlite_gorgon.db` (+ `sqlite_state.json`), `golden/`, `agentic_tune/`,
-  `eval/`, and `retrieval_traces/` (loop traces: `PGRAG_TRACE=1` on
-  `golden_check.py`, `--trace` on `golden_rerun.py`). Service logs live at project-root
-  `logs/` (`llm.log` + `llm-stdio.log` from the launcher, `chat.log` +
-  `chat-error.log`). The dense path's
+  `derived/` (`wiki_parsed.json`), `sqlite_gorgon.db` (+ `sqlite_state.json`),
+  `golden/`, `agentic_tune/`, `eval/`, and `retrieval_traces/` (loop traces:
+  `PGRAG_TRACE=1` on `golden_check.py`, `--trace` on `golden_rerun.py`).
+  Service logs live at project-root `logs/` (`llm.log` + `llm-stdio.log` from
+  the launcher, `chat.log` + `chat-error.log`). The dense path's
   artifacts (`chroma/`, `bakeoff_*.json`, `embed_vram.json`,
   `rerank_stats.json`, `evaluation/queries.jsonl`) were deleted with the
-  cutover — nothing reads them. `retrieval_traces/` is live (loop traces).
-- `.omp/` — oh-my-pi config: `RULES.md`, `config.yml`, `WATCHDOG.md` and
-  `hooks/pre/00-repo-lock.ts`. The review protocol used to live here as a
-  project slash command (`commands/frozen.md`, `/frozen <tag|sha> [base tag or
-  -] [focus...]`); it is retired — a pass now runs from the shared skill, see
-  **Code review loop**.
+  cutover, and the file-corpus artifacts (`documents.json`, `bm25_index.pkl`,
+  `tool_documents.json`, `tool_bm25.pkl`, `derived/documents_version.json`)
+  with the corpus→store move — nothing reads them. `retrieval_traces/` is live (loop traces).
+- `.omp/` — oh-my-pi config: `RULES.md`, `config.yml`, `WATCHDOG.md`. The review
+  protocol used to live here as a project slash command (`commands/frozen.md`,
+  `/frozen <tag|sha> [base tag or -] [focus...]`); it is retired — a pass now
+  runs from the shared skill, see **Code review loop**.
 - `.agents/skills/` — all agent skills, discoverable by any agent harness:
   `pg-rag`, `pg-data`, `retrieval`, `evaluation`, `testing` (project skills).
   Skills live here only — commit changes here, never re-create `.omp/skills/` copies.
@@ -163,8 +155,7 @@ corpus_search, player_state`.
 
 Python ≥3.15, managed with `uv`. `mise tasks` lists everything. The
 `mise.toml` `[tasks]` set is exactly: `test`, `sync-fast`, `sync-full`,
-`generate-docs`, `build-bm25`, `build-tool-corpus`, `sync-wiki`, `sql-store`,
-`agentic-chat`, `agentic-tune`, `golden`,
+`sync-wiki`, `sql-store`, `agentic-chat`, `agentic-tune`, `golden`,
 `golden-short`, `golden-one`, `golden-type`, `golden-flaky`,
 `golden-flaky-list`, `debug-llm`, `chat`, `llm-start`, `llm-stop`,
 `chat-start`, `chat-stop`, `start-all`, `stop-all`, `status`, `drift`,
@@ -175,12 +166,9 @@ Python ≥3.15, managed with `uv`. `mise tasks` lists everything. The
 ```sh
 uv run pgrag download-wiki          # fetch wiki dumps
 uv run pgrag download-cdn           # fetch CDN json
-uv run pgrag build-documents        # regenerate documents.json (stamps version)
-mise sync-fast / sync-full          # CDN (+wiki) → documents → BM25 → tool corpus (aliases sy/syf)
-mise sync-wiki                      # converge wiki to current source, then documents + BM25 + tool corpus (alias syw)
-mise generate-docs                  # bare idempotent documents rebuild (alias docs)
-mise build-bm25 / build-tool-corpus # rebuild the lexical index / tool-corpus variant (b25/btc)
-mise sql-store (alias sq)           # build data/sqlite_gorgon.db: CDN + wiki + session + glogger sources
+mise sync-fast / sync-full          # CDN (+wiki) → rebuild the store incl. generated corpus (aliases sy/syf)
+mise sync-wiki                      # converge wiki to current source, then rebuild the store (alias syw)
+mise sql-store (alias sq)           # build data/sqlite_gorgon.db: CDN + wiki + generated corpus + session + glogger
 mise agentic-chat (alias ac)        # agentic CLI chat over the store (tool loop; needs only LLM :8080; pre-chat session+glogger refresh runs automatically, --no-sync skips)
 mise golden                         # full golden eval through the loop (LLM only; LONG — batch it in the background)
 mise golden-short                   # the 8-case fast tier (alias gds)
@@ -189,7 +177,7 @@ mise golden-type recipe             # golden subset by type (entity|recipe|compa
 mise golden-flaky / golden-flaky-list # focus on historically-troublesome cases / audit stats
 mise chat                           # Gradio chat (primary UI; started by `mise start`; refreshes the store first; needs only LLM up)
 mise lint                           # ruff check src scripts tests (alias li) — run after editing code
-mise lint-ts                        # TypeScript parse gate for .omp/hooks/** (alias tsl; needs `mise ts-deps` once)
+mise lint-ts                        # TypeScript parse gate for scripts/*.mjs (alias tsl; needs `mise ts-deps` once)
 mise format                         # ruff format + safe autofix (alias fo)
 uv run pytest                       # offline test suite
 mise drift                          # check docs/skills against the repo (alias dc)
@@ -198,23 +186,6 @@ mise compliance                     # TOS/CoC hard-line scan (alias comp) — al
 
 **Build/refresh needs no servers**; only Q&A/eval (`golden*`, `chat`,
 `agentic-chat`) need the LLM at :8080.
-
-**Concurrency gate (two layers).** The corpus *writers* own an atomic
-`O_EXCL` lock at `data/.omp-build.lock` for the duration of a build —
-`pgrag build-documents` (`src/pgrag/cli.py`), the BM25 persist/rebuild
-(`src/pgrag/rag/bm25.py`) and `scripts/build_tool_corpus.py`, all through
-`pgrag.buildlock.corpus_lock` — so two omp instances on this repo never rewrite
-the shared corpus at once, whatever the invocation spelling (mise task, alias,
-`mise run --force …`, `… ::: syf`, direct CLI or direct script; a held lock
-fails the second builder loudly). The pre-command hook
-(`.omp/hooks/pre/00-repo-lock.ts`) is the *early warning* in front of that: it
-probes the same file and blocks a destructive corpus command (`build-*`,
-`generate-docs`, `mise sync-*` and their aliases) while a live owner holds it —
-it never takes the lock itself, because a hook's tool call returns long before a
-build finishes. `mise sql-store` (private additive store, not corpus state) is
-deliberately unguarded, and a pure read that only *names*
-a build task (`grep -rn build-documents .`) is never blocked. Never bypass the
-lock by hand-editing it; to clear a stuck one, delete `data/.omp-build.lock`.
 
 ## Code review loop
 
@@ -238,7 +209,6 @@ this protocol (`.omp/commands/frozen.md`) is retired; `docs/REVIEW.md` →
   ahead of the frozen tag is answered with `git worktree add ../review-<tag>
   <tag>`, which puts every reviewer (and every path they execute) at that SHA
   with the main checkout untouched — never review `origin/HEAD...main` unless it
-  resolves to the same commit.
 - **Measure the facts once, in the parent, and paste them into every brief.** The
   row is `uv run python scripts/review_facts.py` (~4 s warm; `--no-gates` for
   ~1.6 s, `--json` for machines). The sheet carries the suite *counts*, the
@@ -286,10 +256,10 @@ this protocol (`.omp/commands/frozen.md`) is retired; `docs/REVIEW.md` →
 
 - **Python/uv**: py≥3.15, type-annotated, package-relative imports
   (`from pgrag.config import …`). Edit the package in `src/pgrag/`, never
-  hand-edit build artifacts (`documents.json`, `data/derived/wiki_parsed.json`,
-  `bm25_index.pkl`, `tool_documents.json`, `tool_bm25.pkl`).
-- **Doc identity contract**: every doc carries `id` + `metadata.source` +
-  `metadata.table`. Preserve these fields — the store and the BM25 index are
+  hand-edit build artifacts (the store's `documents` rows,
+  `data/derived/wiki_parsed.json`).
+- **Doc identity contract**: every doc carries `id` + `source` + `tbl`.
+  Preserve these fields — the store's `documents` table and its FTS index are
   keyed off them.
 - **One retrieval path.** The agentic tool loop is the only retrieval
   architecture. There is no dense path, no vector store, no reranker, and no
@@ -323,8 +293,7 @@ this protocol (`.omp/commands/frozen.md`) is retired; `docs/REVIEW.md` →
 
 ## Important Files
 
-- `src/pgrag/cli.py` — entry point; `config.py` — constants/paths; `build.py` —
-  document orchestration.
+- `src/pgrag/cli.py` — entry point; `config.py` — constants/paths.
 - `src/pgrag/agentic/glogger.py` — glogger play-history ingestion (WAL-safe
   snapshot copy → watermark-incremental mirror into the store;
   `DEFAULT_GLOGGER_DB` = `%APPDATA%/glogger.Personal/glogger.db` (`RELEASE_GLOGGER_DB`
@@ -340,8 +309,8 @@ this protocol (`.omp/commands/frozen.md`) is retired; `docs/REVIEW.md` →
   `data/agentic_eval_report.json`; `scripts/golden_rerun.py` — quick named-case
   rerun + flaky focus (`mise golden-one`/`golden-flaky`; appends miss history to
   `data/golden/history.jsonl`); `scripts/agentic_tune.py` — tuning sweeps.
-- `scripts/build_sqlstore.py` — SQLite store build; `scripts/build_tool_corpus.py`
-  — tool-corpus variant; `scripts/agentic_chat.py` — agentic CLI chat (+ pre-chat sync).
+- `scripts/build_sqlstore.py` — SQLite store build (CDN + wiki + generated
+  corpus + session + glogger); `scripts/agentic_chat.py` — agentic CLI chat (+ pre-chat sync).
 - `scripts/review_facts.py` — the read-only facts sheet a review pass pastes into
   every reviewer brief (suite counts, gate verdicts, task set, freeze state,
   platform liveness, clone-invisible inputs); the protocol that consumes it is
@@ -361,8 +330,9 @@ this protocol (`.omp/commands/frozen.md`) is retired; `docs/REVIEW.md` →
 
 - **Runtime**: Python ≥3.15 via `uv`; model binaries fetched with `hf` global
   CLI (cache `F:\AI\models\hub\`; GGUF via `-hf org/repo:quant`). Node (mise
-  `[tools]`, with `npm`) exists for one thing: the `.omp/hooks` TypeScript gate
-  (`mise lint-ts`, parser from `mise ts-deps`) — the repo ships no JavaScript.
+  `[tools]`, with `npm`) exists for one thing: the script-class JS gate
+  (`mise lint-ts`, parser from `mise ts-deps`) — the repo ships no JavaScript
+  beyond `scripts/*.mjs`.
 - **Local services** (running on Windows host):
   | svc | port | model / note |
   |-----|------|--------------|
@@ -391,9 +361,9 @@ this protocol (`.omp/commands/frozen.md`) is retired; `docs/REVIEW.md` →
 ## Testing & QA
 
 - **Framework**: pytest via `uv run pytest`; the counts this doc quotes are
-  **572 collected / 78 deselected / 494 default** (asserted by `mise drift`
+  **522 collected / 78 deselected / 444 default** (asserted by `mise drift`
   against a real collection) — the 78 being 16 data-heavy tests + the 62
-  parametrized golden cases, so the default offline run leaves **494** (one POSIX-only port-owner case skips on Windows) — all
+  parametrized golden cases, so the default offline run leaves **444** (one POSIX-only port-owner case skips on Windows) — all
   offline (temp-dir integration, mocked servers). The golden gate is the only
   suite that needs any server.
 - **Golden eval** (`tests/test_golden_check.py`): parametrized over
@@ -425,16 +395,14 @@ this protocol (`.omp/commands/frozen.md`) is retired; `docs/REVIEW.md` →
   `test_where_filter.py`, entity/query-plan tests) were deleted with the dense
   path — `L3`/`L4` in today's map are the tool loop and the SQLite store, both
   live. What remains for retrieval is the agentic layer: `test_agentic_loop.py`,
-  `test_agentic_tools.py`, `test_bm25.py`, `test_bm25_persist.py`.
-  `docs/TEST_CONTRACTS.md` is the authoritative map — read the L-agentic and
-  BM25 layers before touching retrieval.
+  `test_agentic_tools.py` (the BM25 pickle suite went with the corpus→store
+  move; `corpus_search` is FTS5 `bm25()` over the store's `documents`).
+  `docs/TEST_CONTRACTS.md` is the authoritative map — read the L-agentic layer before touching retrieval.
 - **Test edits are contract changes.** Editing what a test *asserts* is not a
   workaround — state the new contract in the test, run the layer's sibling
   suite (`docs/TEST_CONTRACTS.md`), and never hand-edit a build artifact
-  (`documents.json`, `bm25_index.pkl`, `tool_documents.json`,
-  `tool_bm25.pkl`, `wiki_parsed.json`) to satisfy a test. If the behavior
-  didn't legitimately change, the failure is a source regression: fix the
-  source, not the test.
+  (the store's `documents` rows, `wiki_parsed.json`) to satisfy a test. If the behavior
+  didn't legitimately change, the failure is a source regression: fix the source, not the test.
 - **Lint gate** (`tests/test_lint.py`, layer L8 in `docs/TEST_CONTRACTS.md`):
   `uv run ruff check src scripts tests` must be clean — a failing check fails
   `uv run pytest`. Run `mise lint` after editing code (`mise format` applies the
@@ -443,17 +411,14 @@ this protocol (`.omp/commands/frozen.md`) is retired; `docs/REVIEW.md` →
   unpack/vars; tests: unused unpack) are deliberate. New rule
   ⇒ fix all findings in the same commit.
 - **TypeScript gate** (same `tests/test_lint.py` / L8 layer): every JS/TS file
-  the repo ships must parse — the pre-command hook (`.omp/hooks/**`) and the
-  gate's own `scripts/*.mjs`. `mise lint-ts` (`node scripts/check_ts.mjs`) exits
+  the repo ships must parse — `.omp/hooks/**` and the gate's own
+  `scripts/*.mjs`. `mise lint-ts` (`node scripts/check_ts.mjs`) exits
   1 on any diagnostic; the one expected *note* is `TS2307` for the
   `@oh-my-pi/pi-coding-agent` import, whose types ship only inside the compiled
-  `omp` binary, so the hook's own API use cannot be typed here. `mise install`
-  provides node (`[tools]`, pinned like python/ruff) and `mise ts-deps`
-  (`npm install`) the parser devDependency
+  `omp` binary. `mise install` provides node (`[tools]`, pinned like
+  python/ruff) and `mise ts-deps` (`npm install`) the parser devDependency
   (`node_modules/` is gitignored; without it the layer's two TS tests skip
-  loudly instead of failing). The hook is the cross-instance lock's early
-  warning, so a `.ts` edit that stops it loading is a real regression — nothing
-  else in the suite reads TypeScript.
+  loudly instead of failing). Nothing else in the suite reads TypeScript.
 - **Compliance gate** (`tests/test_constraints.py`, layer L9 in
   `docs/TEST_CONTRACTS.md`; policy doc `docs/research/pg-rag-game-interaction-limits.md`):
   `scripts/check_constraints.py` must scan
@@ -464,13 +429,12 @@ this protocol (`.omp/commands/frozen.md`) is retired; `docs/REVIEW.md` →
   checkout (`core.hooksPath=.githooks` is local config — a fresh clone re-sets
   it). There is no CI.
 - **Key suites** (from `tests/`): `test_documents.py` (doc shape),
-  `test_chunking.py`, `test_bm25.py`/`test_bm25_persist.py` (lexical index +
-  persistence), `test_llm.py`/`test_connectivity.py` (LLM client SSE + server
-  errors), `test_agentic_tools.py`/`test_agentic_loop.py` (the five tools + the
-  round protocol), `test_sqlstore_build.py`/`test_session_ingest.py`/
-  `test_glogger_ingest.py` (store ingestion), `test_golden_check.py` (the
-  golden gate), `test_services.py` (service control),
-  `test_download_wiki.py` (batching, redirects, orphan
+  `test_chunking.py`, `test_llm.py`/`test_connectivity.py` (LLM client SSE +
+  server errors), `test_agentic_tools.py`/`test_agentic_loop.py` (the five
+  tools + the round protocol), `test_sqlstore_build.py`/
+  `test_session_ingest.py`/`test_glogger_ingest.py` (store ingestion),
+  `test_golden_check.py` (the golden gate), `test_services.py` (service
+  control), `test_download_wiki.py` (batching, redirects, orphan
   cleanup — patches `META_FILE`+`WIKI_DIR` to tmp).
 - **Coverage expectation**: one test defends each observable contract;
   integration tests use temp dirs and mocked servers rather than live ones.

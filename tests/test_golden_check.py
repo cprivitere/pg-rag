@@ -1,7 +1,7 @@
 """Golden fact-presence gate — every case runs through the agentic tool loop.
 
 Parametrized over the golden JSON files in ``data/golden/``. Each case is
-answered by ``pgrag.agentic.loop.run_loop`` (SQLite store + BM25
+answered by ``pgrag.agentic.loop.run_loop`` (SQLite store + FTS
 ``corpus_search``), so the gate needs the LLM server (:8080) and nothing else
 — there is no embedding or reranker service to be up.
 

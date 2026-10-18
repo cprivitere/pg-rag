@@ -217,17 +217,15 @@ def liveness() -> dict[str, str]:
 
     The divergence this exists to record: on win32 `os.kill(pid, 0)` reports an
     *exited* process as alive while a reference to it still lives, and
-    Node/libuv (`GetExitCodeProcess`) says dead — which is why `pgrag.buildlock` is
-    the **weak** side by policy (`os.kill`; opening a handle to another process is
-    a scanned forbidden API in `scripts/check_constraints.py`) while the pre-hook,
-    which asks libuv, may call an owner dead that buildlock keeps waiting out to
-    `TTL_S`. The two deliberately diverge, and the released pid measured below is
-    the case where they agree. Reviewers kept re-measuring this by hand."""
+    Node/libuv (`GetExitCodeProcess`) says dead. The released pid measured
+    below is the case where they agree. Reviewers kept re-measuring this by hand."""
     try:
         os.kill(RELEASED_PID, 0)
         python = "alive"
     except OSError as exc:
-        python = f"{type(exc).__name__}(errno={exc.errno}, winerror={getattr(exc, 'winerror', None)})"
+        python = (
+            f"{type(exc).__name__}(errno={exc.errno}, winerror={getattr(exc, 'winerror', None)})"
+        )
     node = "node not on PATH"
     if shutil.which("node"):
         rc, out = _run(

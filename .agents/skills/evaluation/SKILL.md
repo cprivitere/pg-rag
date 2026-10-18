@@ -168,7 +168,7 @@ already handles adds no signal; every golden is a permanent acceptance gate.
 4. **Ask the user before writing a golden.** Even when step 3 shows a gap, state
    the measured gap plus the proposed id and facts, and get an explicit yes.
 5. **Derive fact groups** from what you verified (grep the store /
-   `documents.json` first — an un-grounded fact is a permanently-failing test).
+   `SELECT text FROM documents` first — an un-grounded fact is a permanently-failing test).
 6. **Route the golden:** facts from the player's own state (sheet abilities,
    stall ledger, kills, favor) get `"store": true`; CDN/wiki facts stay plain.
 7. **Validate before committing:** `mise golden-one <id>` (or `--diagnose`). A

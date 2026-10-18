@@ -6,11 +6,10 @@ Config lives in `ruff.toml` (repo root) — reads it for the skip tier:
 excluded modules stay unguarded. Formatting is NOT gated here (the formatter
 is a tool, not a test assertion); only `check` findings fail.
 
-The layer also holds the TypeScript gate for `.omp/hooks/**` (the repo's only
-`.ts`): ruff reads Python only, so `scripts/check_ts.mjs` + the dev-only
-`typescript` devDependency (package.json; `npm install`, gitignored
-node_modules) is what keeps a broken hook from loading silently at
-extension-load time. Both TS tests skip loudly when node/node_modules are
+The layer also holds the TypeScript gate for the repo's script-class JS
+(`scripts/*.mjs`, covered by its own `scripts/check_ts.mjs`): ruff reads
+Python only, so nothing else would notice a `.mjs` edit that breaks parsing.
+Both TS tests skip loudly when node/node_modules are
 absent — they are developer tooling, not runtime deps.
 
 Module-level because the lint scan is process-wide: one subprocess per pytest
@@ -29,7 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 RUFF_CMD = ["uv", "run", "--no-sync", "ruff", "check", "src", "scripts", "tests"]
 
-# The .omp/hooks TypeScript gate (`scripts/check_ts.mjs` + the dev-only parser
+# The TypeScript gate (`scripts/check_ts.mjs` + the dev-only parser
 # from `npm install`). Node and node_modules are developer-tooling, not runtime
 # deps of this repo, so a checkout without them skips loudly rather than failing
 # — the gate still runs on any box that has run `npm install`.
@@ -69,7 +68,7 @@ def test_ruff_clean():
 
 def _require_ts_parser():
     if NODE is None:
-        pytest.skip("node not on PATH — the .omp/hooks TypeScript gate needs it (`npm install`)")
+        pytest.skip("node not on PATH — the TypeScript gate needs it (`npm install`)")
     if not (TS_PARSER.exists() and TS_NODE_TYPES.exists()):
         pytest.skip(
             "node_modules is missing the dev-only TypeScript parser — run `npm install` "
@@ -90,29 +89,22 @@ def _run_ts_gate(*paths):
 
 
 def test_shipped_typescript_parses():
-    """The pre-command hook is the repo's only shipped JavaScript-class code
-    (with the gate's own `scripts/check_ts.mjs`); its whole job is guarding
-    corpus commands, and it swallows its own runtime errors by design — ruff
-    reads Python only, so nothing else would notice a `.ts`/`.mjs` edit that
-    stops it loading.
+    """The repo's script-class JS (`scripts/*.mjs`, covered by its own
+    `scripts/check_ts.mjs`): ruff reads Python only, so nothing else would
+    notice a `.mjs` edit that breaks parsing.
 
-    Contract: `mise lint-ts` (`node scripts/check_ts.mjs`) parses the repo's
-    `.omp/hooks/**` + `scripts/*.mjs` clean. The single expected diagnostic is
-    `TS2307` for the oh-my-pi runtime import (that package has no type
-    definitions outside the compiled `omp` binary) — the gate reports it as a
-    note, never a failure."""
+    Contract: `mise lint-ts` (`node scripts/check_ts.mjs`) parses clean."""
     _require_ts_parser()
     proc = _run_ts_gate()
     output = (proc.stdout + proc.stderr).strip()
     assert proc.returncode == 0, output
-    assert "00-repo-lock.ts" in output, f"the gate did not read the hook: {output}"
     assert "check_ts.mjs" in output, f"the gate did not cover its own script: {output}"
     assert "no diagnostics" in output, output
 
 
 def test_the_typescript_gate_reports_a_planted_break(tmp_path):
     """A gate that cannot fail is not a gate: a planted syntax error must come
-    back as exit 1 naming the file. Pins that the hook gate is a real check and
+    back as exit 1 naming the file. Pins that the gate is a real check and
     not an empty file list that exits 0."""
     _require_ts_parser()
     planted = tmp_path / "planted.ts"

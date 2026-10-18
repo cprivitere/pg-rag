@@ -2,8 +2,9 @@
 
 Each tool returns LLM-facing markdown (or an error string — errors are data
 for the model to self-correct, never exceptions that abort the loop). All
-state comes from the SQLite store built by pgrag.agentic.store; corpus_search
-additionally reads the BM25 doc store (full or tool-variant corpus).
+state comes from the SQLite store built by pgrag.agentic.store, including the
+generated corpus (`documents` + `documents_fts`) that corpus_search ranks with
+FTS5 `bm25()`.
 """
 
 from __future__ import annotations
@@ -13,16 +14,173 @@ import re
 import sqlite3
 from pathlib import Path
 
-from pgrag.buildlock import BuildLockError
-from pgrag.rag.bm25 import load_bm25_index
-
 DEFAULT_STORE = "data/sqlite_gorgon.db"
-DEFAULT_TOOL_DOCS = "data/tool_documents.json"
-DEFAULT_TOOL_PKL = "data/tool_bm25.pkl"
 
 AVAILABLE_TOOLS = "sql_query, find_entities, get_page, corpus_search, player_state"
 
+# Tables whose facts are first-class SQL tables in the store: `--corpus tool`
+# filters them out of corpus_search, keeping the lexical arm for prose/docs.
+# (Ported from the deleted tool-corpus derive's drop list.)
+_TOOL_FILTER_TABLES = frozenset(
+    {
+        "items",
+        "effects",
+        "sources_items",
+        "sources_recipes",
+        "sources_abilities",
+        "tsysclientinfo",
+        "itemuses",
+        "advancementtables",
+        "xptables",
+        "attributes",
+        "playertitles",
+        "ai",
+        "landmarks",
+        "storagevaults",
+        "enums",
+        "schema",
+        "mechanic",
+    }
+)
+
+# Query-side stopwords for corpus_search (ported from the deleted BM25 index:
+# the FTS index keeps every token). A long natural-language question otherwise
+# ranks docs that merely repeat function words above the doc holding the
+# answer. A query made ONLY of them keeps them rather than returning nothing.
+# `off`/`only`/`under` are DELIBERATELY absent: hyphenated corpus vocabulary
+# tokenizes to them (Off-Hand, Off-Guard, '(Fae Only)') and dropping them
+# inverts those queries. Contract: tests/test_agentic_tools.py.
+_QUERY_STOPWORDS = frozenset(
+    (
+        "a",
+        "about",
+        "above",
+        "after",
+        "again",
+        "against",
+        "all",
+        "am",
+        "an",
+        "and",
+        "any",
+        "are",
+        "as",
+        "at",
+        "be",
+        "because",
+        "been",
+        "before",
+        "being",
+        "below",
+        "between",
+        "both",
+        "but",
+        "by",
+        "can",
+        "cannot",
+        "could",
+        "did",
+        "do",
+        "does",
+        "doing",
+        "down",
+        "during",
+        "each",
+        "few",
+        "for",
+        "from",
+        "further",
+        "had",
+        "has",
+        "have",
+        "having",
+        "he",
+        "her",
+        "here",
+        "hers",
+        "herself",
+        "him",
+        "himself",
+        "his",
+        "how",
+        "i",
+        "if",
+        "in",
+        "into",
+        "is",
+        "it",
+        "its",
+        "itself",
+        "just",
+        "me",
+        "more",
+        "most",
+        "must",
+        "my",
+        "myself",
+        "no",
+        "nor",
+        "not",
+        "of",
+        "on",
+        "once",
+        "or",
+        "other",
+        "ought",
+        "our",
+        "ours",
+        "ourselves",
+        "out",
+        "over",
+        "own",
+        "same",
+        "she",
+        "should",
+        "so",
+        "some",
+        "such",
+        "than",
+        "that",
+        "the",
+        "their",
+        "theirs",
+        "them",
+        "themselves",
+        "then",
+        "there",
+        "these",
+        "they",
+        "this",
+        "those",
+        "through",
+        "to",
+        "too",
+        "until",
+        "up",
+        "very",
+        "was",
+        "we",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "while",
+        "who",
+        "whom",
+        "why",
+        "with",
+        "would",
+        "you",
+        "your",
+        "yours",
+        "yourself",
+        "yourselves",
+    )
+)
+
 _UNKNOWN = f"Unknown tool: {{name}}. Available: {AVAILABLE_TOOLS}"
+
 
 # sql_query: read-only + bounded.
 _READONLY_URI = "file:{path}?mode=ro"
@@ -281,6 +439,22 @@ def _get_page(store_path: str, args: dict) -> str:
     return f"# {row[0]}\n{text}"
 
 
+def _fts_query(query: str) -> str:
+    """FTS5 MATCH expression for a natural-language query.
+
+    Terms are OR-ranked (like the BM25 scorer this replaces: every doc holding
+    any term scores, most terms wins) with prefix matching (`term*`) so
+    inflections rank. Query-side stopwords are dropped (the index keeps every
+    token); a query made only of them keeps them rather than matching nothing.
+    Double quotes are stripped (an unbalanced quote is an FTS syntax error,
+    i.e. zero results for a well-formed ask).
+    """
+    terms = [t for t in re.findall(r"\w+", query.lower()) if t not in _QUERY_STOPWORDS]
+    if not terms:
+        terms = re.findall(r"\w+", query.lower())
+    return " OR ".join(f'"{t}"*' for t in terms)
+
+
 def _corpus_search(store_path: str, args: dict, corpus: str = "full") -> str:
     query = (args.get("query") or "").strip()
     if not query:
@@ -290,30 +464,28 @@ def _corpus_search(store_path: str, args: dict, corpus: str = "full") -> str:
     except (TypeError, ValueError):
         k = 10
     k = max(1, min(k, 20))
-    try:
-        if corpus == "tool":
-            model, docs = load_bm25_index(path=DEFAULT_TOOL_DOCS, pkl_path=DEFAULT_TOOL_PKL)
-        else:
-            model, docs = load_bm25_index()
-    except BuildLockError as exc:
-        # A peer process is rebuilding the index (cross-instance corpus lock),
-        # or the lock path itself is unusable (BuildLockUnavailable). Both are
-        # errors-as-data here: `run_loop` calls this for its SEED before any
-        # round, so raising would kill the whole answer — report it and let the
-        # model retry or use sql_query / find_entities.
-        return f"corpus_search error: {exc}"
-    ids, _scores = model.search(query, k=k)
-    if not ids:
+    match = _fts_query(query)
+    if not match:
         return "0 results."
-    lines = []
-    for idx in ids:
-        doc = docs[idx]
-        meta = doc.get("metadata") or {}
-        name = meta.get("name") or doc.get("id", "?")
-        table = meta.get("table", "unknown")
-        lines.append(
-            f"- {doc.get('id', idx)} | {name} ({table}) | {(doc.get('text') or '')[:_SEARCH_SNIPPET]}"
-        )
+    filt = (
+        "AND tbl NOT IN ({})".format(",".join(f"'{t}'" for t in sorted(_TOOL_FILTER_TABLES)))
+        if corpus == "tool"
+        else ""
+    )
+    try:
+        conn = _conn(store_path)
+        rows = conn.execute(
+            "SELECT d.id, d.name, d.tbl, substr(d.text, 1, ?) "
+            "FROM documents_fts f JOIN documents d ON d.rowid = f.rowid "
+            f"WHERE documents_fts MATCH ? {filt} ORDER BY bm25(documents_fts) LIMIT ?",
+            (_SEARCH_SNIPPET, match, k),
+        ).fetchall()
+        conn.close()
+    except sqlite3.OperationalError as exc:
+        return f"corpus_search error: {exc}"
+    if not rows:
+        return "0 results."
+    lines = [f"- {did} | {name or did} ({tbl}) | {snippet}" for did, name, tbl, snippet in rows]
     return f"{len(lines)} results:\n" + "\n".join(lines)
 
 

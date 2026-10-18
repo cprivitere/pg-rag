@@ -7,8 +7,8 @@ description: Search-quality troubleshooting manual for pg-rag's agentic tool loo
 
 There is exactly **one** retrieval path: the agentic tool loop
 (`pgrag.agentic.loop.run_loop`, `src/pgrag/agentic/loop.py`). The model answers
-by issuing bounded rounds of tool calls against `data/sqlite_gorgon.db` and the
-BM25 corpus, then writes the answer. The dense path (embeddings + Chroma → RRF
+by issuing bounded rounds of tool calls against `data/sqlite_gorgon.db`
+(including the FTS-indexed generated corpus), then writes the answer. The dense path (embeddings + Chroma → RRF
 fusion → reranker), the query classifier, spelling correction, entity dossiers
 and `_gap_fill` were **deleted** — do not look for them.
 
@@ -22,7 +22,7 @@ player_state"`.
 | `sql_query` | one read-only SELECT over the store | structured facts: recipes/levels/XP, item sources, calls/favor, stall sales. `LIMIT 200` injected; >2M-op scans aborted |
 | `find_entities` | FTS5 over `entity_names` | resolving a name to its typed entity (item/recipe/ability/quest/npc/effect/skill), up to 20 hits |
 | `get_page` | raw wiki page text by exact title (LIKE fallback lists candidates) | prose/mechanics — how a skill works, growing/farming, crafting workflows |
-| `corpus_search` | BM25 over `data/documents.json` + `data/bm25_index.pkl` | generated-corpus recall when SQL/FTS don't fit — the lexical arm; `--corpus tool` swaps to `data/tool_documents.json` + `data/tool_bm25.pkl` |
+| `corpus_search` | FTS5 `bm25()` over the store's `documents` | generated-corpus recall when SQL/FTS don't fit — the lexical arm; `--corpus tool` filters to non-SQL-table docs |
 | `player_state` | live-session sections (summary/skills/currencies/quests/favor/items/stall/abilities) | the player's own state; `section=abilities` needs `skill=`; `section=stall` holds the only *realized* prices (own stall — `stall_events`) and appends the item's `source:` lines, CDN base value, OTHER PLAYERS' STALLS observations (`stall_price_observations`), the work-order payout and best-effort chat price mentions |
 
 The loop is blocking and bounded (`DEFAULT_MAX_ROUNDS` rounds; each tool-result
@@ -39,16 +39,15 @@ the gourmand food-quality note (451), and `skillprofile_Gardening_chunk_4`
 (1089) hid its trainer list (703-830) — all of which failed goldens with no
 corpus gap at all (raised to 1000 on 2026-10-11; 10 hits x 1000 + prefixes ≈
 10.6K stays inside the payload cap). When a fact goes missing, check the offset
-first: `python -c "import json;t=[d for d in json.load(open('data/documents.json')) if d['id']=='<id>'][0]['text'];print(t.find('<fact>'))"`.
+first: `python -c "import sqlite3;t=sqlite3.connect('data/sqlite_gorgon.db').execute(\"SELECT text FROM documents WHERE id='<id>'\").fetchone()[0];print(t.find('<fact>'))"`.
 A related trap: for skill questions the model often answers from the CDB
 `skills`/`abilities` SQL tables (which carry no `BonusToSkill` rewards), so it
 can claim "this skill grants no bonus levels" while the corpus profile doc holds
 the full list — a RET/GEN miss that looks like a data gap but is tool choice.
 
-**Query-side stopwords.** `BM25.search` drops function words
-(`BM25._QUERY_STOPWORDS` in `src/pgrag/rag/bm25.py`) before scoring; the index
-keeps every token, so the persisted pickle is unaffected and no rebuild is
-needed. This matters for the loop's seed, which passes the **raw question**:
+**Query-side stopwords.** `corpus_search` drops function words
+(`tools._QUERY_STOPWORDS`) before matching; the FTS index
+keeps every token. This matters for the loop's seed, which passes the **raw question**:
 before the filter, a long natural-language question scored docs stuffed with
 `the`/`does`/`it` above the doc holding the answer (measured 2026-10-15 — the
 `dungcrafting-poop-ability-and-rewards` question ranked a Citan forum post and
@@ -83,7 +82,7 @@ uses these to label a miss:
 Then:
 
 1. **Is the fact in the data at all?** Query the store directly
-   (`mise sql-store` then the sqlite file) and `grep data/documents.json`. If it
+   (`mise sql-store` then the sqlite file) and `SELECT text FROM documents WHERE id='<id>'`. If it
    is absent, the problem is upstream (loader/builder/store ingest), not the
    loop.
 2. **Did the model call the right tool?** Inspect `trace_rounds` — a
@@ -98,24 +97,19 @@ Then:
 
 ## Corpus freshness
 
-- `pgrag build-documents` stamps `data/derived/documents_version.json` with
-  `DOCUMENTS_VERSION` (`src/pgrag/config.py`). `scripts/build_tool_corpus.py`
-  refuses to run against a stale stamp — regenerate with `build-documents`
-  (`mise generate-docs`) or a `mise sync-*` task, never by hand.
-- `rag/bm25.py` serves `data/bm25_index.pkl` while `data/documents.json` is
-  unchanged (mtime-keyed) and rebuilds otherwise. If BM25 results look like an
-  older corpus, check the documents.json mtime / rebuild with `mise build-bm25`.
-- Build artifacts (`documents.json`, `bm25_index.pkl`, `tool_documents.json`,
-  `tool_bm25.pkl`, the store) are outputs — change the builder, never the file.
+- The store build runs the document builders in-process and stamps every
+  `documents` row with `DOCUMENTS_VERSION` (`src/pgrag/config.py`); there is
+  no intermediate artifact and no staleness refusal. Regenerate with
+  `mise sql-store` (or a `mise sync-*` task), never by hand.
+- Build outputs (the store's `documents` rows) are outputs — change the builder, never the rows.
 
 ## Rule of thumb
 
 - One stage at a time; re-run the layer's tests after each (`docs/TEST_CONTRACTS.md`
-  L2/L3/L4).
-- The surviving retrieval tests are `tests/test_bm25.py`,
-  `tests/test_bm25_persist.py`, `tests/test_agentic_tools.py`,
+  L2/L3).
+- The retrieval tests are `tests/test_agentic_tools.py`,
   `tests/test_agentic_loop.py` — there is **no** dense/RRF/rerank regression set
-  anymore.
+  anymore (the BM25 pickle suite went with the corpus→store move).
 
 ## Evaluation loop (see `evaluation` skill)
 

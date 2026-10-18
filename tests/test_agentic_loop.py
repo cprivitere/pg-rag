@@ -72,7 +72,7 @@ def test_truncated_generation_is_reasked_not_returned(tiny_store, monkeypatch):
     assert len(calls) == 2
     assert calls[1]["tools"] is None  # the re-ask cannot call tools
     assert calls[1]["max_tokens"] == calls[0]["max_tokens"] * 2
-    # `documents` is what the model was fed: the BM25 seed is always there.
+    # `documents` is what the model was fed: the FTS seed is always there.
     assert result["documents"]
     assert result["rounds"] == 0
 
@@ -434,7 +434,7 @@ def test_empty_content_midloop_gets_digest_fallback_answer(tiny_store, monkeypat
 def test_seed_context_embedded_in_system(tiny_store, monkeypatch):
     def fake(messages, tools, generation, max_tokens):
         system = messages[0]["content"]
-        assert "Seed context (BM25" in system
+        assert "Seed context (FTS5" in system
         assert "sql_query(sql)" in system  # tool contract present
         return {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
 

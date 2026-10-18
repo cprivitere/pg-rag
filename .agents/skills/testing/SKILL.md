@@ -5,7 +5,7 @@ description: Regression-triage and test discipline for pg-rag — how to decide 
 
 # testing — regression triage & test discipline
 
-The suite's live counts are **572 collected / 78 deselected / 494 default** (the
+The suite's live counts are **522 collected / 78 deselected / 444 default** (the
 default `not slow` marker deselects 78: 16 data-heavy tests + the 62
 parametrized golden cases; one POSIX-only port-owner case skips on Windows) —
 quoted verbatim because `mise drift` asserts the triple against a real
@@ -19,15 +19,14 @@ of which file defends which contract).
 ## Triage (in order)
 
 1. **Identify the layer.** `docs/TEST_CONTRACTS.md` maps every test file to its
-   layer (document-gen / bm25 / agentic loop / store / loaders-curation / golden
-   / llm-client / lint / compliance / service control / corpus-build lock / docs
+   layer (document-gen / agentic loop + FTS corpus / store / loaders-curation /
+   golden / llm-client / lint / compliance / service control / docs
    drift) and the source it protects.
 2. **Did the source legitimately change?**
    - Yes → update the test to the new contract (a CONTRACT CHANGE — see rules).
    - No → the failure is a real regression: **fix the source, never the test.**
-3. **Wrong-layer check.** If your fix targets `data/documents.json`,
-   `data/derived/wiki_parsed.json`, `data/derived/*`, `data/bm25_index.pkl`,
-   `data/tool_documents.json`, `data/tool_bm25.pkl`, or a real
+3. **Wrong-layer check.** If your fix targets the store's `documents` rows,
+   `data/derived/wiki_parsed.json`, `data/derived/*`, or a real
    `data/wiki/.meta.json` — STOP. Those are build outputs (`RULES.md #2`):
    change the builder that produces them, not the artifact.
 4. **Never edit a test "to make it pass."** A test edit either fixes a broken
@@ -59,9 +58,8 @@ sweep/compare, `test_golden_check.py` = the offline gate drives it via
 
 ## After a change
 
-- BM25 / corpus change → `tests/test_bm25.py` + `tests/test_bm25_persist.py`,
-  then `mise build-bm25` (and `mise build-tool-corpus` if the tool variant
-  changed).
+- Corpus change → `tests/test_agentic_tools.py` (`corpus_search` is FTS5 over
+  the store's `documents`), then `mise sql-store`.
 - Tool-loop change → the L3 suite (`test_agentic_tools.py`,
   `test_agentic_loop.py`, `test_agentic_tune.py`), then a `mise agentic-chat`
   smoke (LLM only).
@@ -70,16 +68,13 @@ sweep/compare, `test_golden_check.py` = the offline gate drives it via
   then `mise sql-store`.
 - Service-control change → L10 (`test_services.py`), then a live `mise start` /
   `mise status` / `mise down` smoke (the manager owns real :8080/:7860).
-- Corpus-lock change → L11 (`test_buildlock.py`), then hold the lock from a
-  second shell and confirm `mise build-tool-corpus` refuses (the pre-hook probes
-  the same file, so an agent-issued run is blocked before it starts).
-- Doc-gen change → inspect representative docs after `pgrag build-documents`.
+- Doc-gen change → inspect representative rows after `mise sql-store`.
 - Golden change → `test_golden_check.py` must collect it offline (it runs
   through the loop and skips without the LLM). A full `mise golden` run is a
   long background job — use `mise golden-one <id>` while iterating.
 - Doc/skill change → run `mise drift` — the docs, skills, AGENTS.md, RULES.md,
   and TEST_CONTRACTS must stay the single-owner-truthful set it checks
-  (L12: `test_check_docs.py` pins the pointer scan itself).
+  (L11: `test_check_docs.py` pins the pointer scan itself).
 - Compliance-gate change (`scripts/check_constraints.py`, the TOS/CoC policy
   doc, or the hook/task wiring) → `tests/test_constraints.py`, then
   `mise compliance`. §2's patterns and §6's wiring are the contract; §7 forbids

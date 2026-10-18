@@ -7,7 +7,7 @@ and `.toml`. The executable-script classes and the hyphen in the character class
 load-bearing: the 2026-10-16 task/script audit deleted `.mise/tasks/*.ps1` and hyphenated
 `scripts/*.ps1` / `*.sh` files, and a `.py`-only, hyphen-free scan passes exactly the pointers this
 gate exists for. The *report*: a provisioned tree is clean, and every unprovisioned input — a
-missing source, a dead lint suppression, a lock on the wrong directory, an untracked gate runner, a
+missing source, a dead lint suppression, an untracked gate runner, a
 task list that disagrees with `mise.toml`, a stale suite count — is a printed drift, never a
 traceback and never a silent skip.
 """
@@ -35,16 +35,16 @@ def test_captures_every_script_class():
     )
     assert refs == {"scripts/check_ts.mjs", "docs/TEST_CONTRACTS.md", "docs/data/x.json"}
     refs = cd._doc_refs(
-        "see `scripts/build_tool_corpus.py`, `scripts/fixture_sample.ps1`, "
-        "`scripts/fixture-sample.sh`, `docs/note.md`, `src/pgrag/buildlock.py` "
+        "see `scripts/build_sqlstore.py`, `scripts/fixture_sample.ps1`, "
+        "`scripts/fixture-sample.sh`, `docs/note.md`, `src/pgrag/agentic/store.py` "
         "and `.mise/tasks/deleted_task.ps1`"
     )
     assert refs == {
-        "scripts/build_tool_corpus.py",
+        "scripts/build_sqlstore.py",
         "scripts/fixture_sample.ps1",
         "scripts/fixture-sample.sh",
         "docs/note.md",
-        "src/pgrag/buildlock.py",
+        "src/pgrag/agentic/store.py",
         ".mise/tasks/deleted_task.ps1",
     }
     # bare filenames, non-scanned prefixes and out-of-class extensions stay out
@@ -135,11 +135,7 @@ def _clean_tree(tmp_path: Path, **overrides: str | None) -> Path:
             '\n[tasks.demo]\nrun = "true"\n'
         ),
         "ruff.toml": '[lint]\nselect = ["F"]\nignore = ["F841"]\n',
-        "src/pgrag/cli.py": (
-            "def _build_documents(args):\n"
-            "    with corpus_lock(DOCUMENTS_PATH.parent):\n"
-            "        generate_documents()\n"
-        ),
+        "src/pgrag/cli.py": "def main():\n    pass\n",
         "scripts/services.py": "# reads LLM_MODEL / LLM_FLAGS from the environment\n",
         "scripts/agentic_tune.py": "# reads LLM_MODEL / LLM_FLAGS from the environment\n",
         "scripts/golden_check.py": (
@@ -267,14 +263,6 @@ def test_the_count_quote_is_checked(tmp_path, monkeypatch, capsys):
             "scripts/services.py hardcodes model literal",
         ),
         (
-            {"src/pgrag/cli.py": "def f():\n    with corpus_lock(DATA_DIR):\n        pass\n"},
-            "does not lock its data tree",
-        ),
-        (
-            {"src/pgrag/cli.py": "def f():\n    generate_documents()\n"},
-            "does not lock its data tree",
-        ),
-        (
             {"AGENTS.md": "DOCUMENTS_VERSION\n0 collected / 0 deselected / 0 default\n"},
             "does not list the task set",
         ),
@@ -288,9 +276,9 @@ def test_the_count_quote_is_checked(tmp_path, monkeypatch, capsys):
     ],
 )
 def test_a_wiring_drift_is_reported(tmp_path, monkeypatch, capsys, overrides, label):
-    """The wiring checks have teeth: a suppression for an unselected rule, a lock
-    on a directory the writer does not write, and a task list that disagrees with
-    `mise.toml` are each drift — the classes that shipped silently in the PR."""
+    """The wiring checks have teeth: a suppression for an unselected rule and
+    a task list that disagrees with `mise.toml` are each drift — the classes
+    that shipped silently in the PR."""
     monkeypatch.setattr(cd, "ROOT", _clean_tree(tmp_path, **overrides))
     assert cd.main() == 1
     assert label in capsys.readouterr().out
@@ -408,7 +396,6 @@ def test_a_provisioned_tree_reports_no_drift(tmp_path, monkeypatch, capsys):
         ("scripts/golden_check.py", "golden_check.py missing"),
         ("mise.toml", "cannot parse mise.toml"),
         ("scripts/services.py", "scripts/services.py missing"),
-        ("src/pgrag/cli.py", "cannot check the corpus lock"),
         (".agents/skills/evaluation/SKILL.md", "evaluation skill missing"),
     ],
 )

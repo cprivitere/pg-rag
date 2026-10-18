@@ -32,8 +32,8 @@ from pgrag.documents.tokenizer import token_count
 # Char cap of the dense-embedding era: the bge-small server clipped input at
 # this many characters. There is no embedding server any more, but the chunk
 # budgets below were validated against it, and changing them would reshape
-# documents.json (and the BM25 corpus built from it) — so the cap stays as
-# chunking policy. tests (test_chunking, test_leveling) import it from here.
+# the generated corpus — so the cap stays as chunking policy.
+# tests (test_chunking, test_leveling) import it from here.
 MAX_EMBED_CHARS = 2000
 
 _logger = logging.getLogger(__name__)

@@ -354,7 +354,7 @@ in the first pass are addressed in the second.
 
 Sixteen reviewers covered the range `479b6bc..d048ce3` slice by slice; every
 finding below is fixed and pinned, and the suite is green on the tree this record
-was written against (**572 collected / 78 deselected / 494 default**, one
+was written against (**522 collected / 78 deselected / 444 default**, one
 POSIX-only port-owner case skipping on Windows; the pass-5 follow-up at the end
 moved these from 568/78/490) with `mise lint`, `mise drift` (0 drift) and
 `mise compliance` clean.
@@ -476,7 +476,7 @@ The fifth pass reviewed the frozen tag `review-pass5` (`918f510`) against
 `review-base-5ddd05b` — 18 files, one facts sheet, seven read-only slices, both
 lenses. Verdict: **ship-with-fixes** (0 critical, 0 high, 8 fix-now mediums).
 Every finding below is fixed and pinned; the tree is green at
-**572 collected / 78 deselected / 494 default** with `mise lint`, `mise drift`
+**522 collected / 78 deselected / 444 default** with `mise lint`, `mise drift`
 (0 drift) and `mise compliance` clean.
 
 - **The facts sheet was wrong about four of its own facts.**
@@ -613,8 +613,8 @@ the docstring: on win32 a crashed writer's lock is reclaimed only by `TTL_S`
 `test_liveness_residuals_are_the_documented_ones` (win32 impossible-pid reads
 alive); the claim-window race test re-seeds on pid 0, the record that stays
 dead on every platform. Both new assertions fail on the pre-stopgap code.
-Suite **572 collected / 78 deselected / 494 default**, `mise lint` / `mise drift`
-(0 drift) / `mise compliance` clean — the counts moved by the Pass A deletions.
+Suite **522 collected / 78 deselected / 444 default**, `mise lint` / `mise drift`
+(0 drift) / `mise compliance` clean — the counts moved by the Pass B deletions.
 
 **Pass A — notebook retirement (no behavior change).** Delete what is notebook-only,
 each item verified against its consumers:
@@ -668,6 +668,19 @@ surviving retrieval suites (`test_agentic_tools.py`, `test_agentic_loop.py`) wit
 `mise drift` / `compliance`; and one live `mise chat` round on a wiki-prose question,
 the case `corpus_search` exists for.
 
+**Pass B landed (2026-10-17).** `documents` + `documents_fts` live in the
+store; `corpus_search` is one FTS5 `bm25()` query (OR-terms, prefix match,
+query-side stopwords ported, `--corpus tool` a `tbl` filter); the BM25
+pickle module, the tool-corpus derive, the build lock + pre-hook probe, the
+stamp file and all five artifacts are deleted; `mise sync-*` is download +
+store rebuild. Baseline honesty: the pre-swap full run was stopped at 17/17
+PASS when the artifact deletion landed mid-run (the old seed read the
+(2026-10-15) are the comparison for the post-swap full run below.
+Result (2026-10-17, 62 cases, 2190 s, 0 error records): **61 PASS, 1 FAIL**
+— the single miss is `moonstone-item`'s "new beginnings", labeled GEN-side
+(fact in context, model dropped it), and it PASSes a solo rerun: reasoning
+noise, not a ranking regression. Both gardening residuals PASS. No flipped
+case is RET-side.
 **Order.** The critical's one-line stopgap is cheapest to land first, so the review
 closes; Pass A then removes the sandbox with no behavior change; Pass B deletes the
 corpus machinery and re-baselines the goldens.

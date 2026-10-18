@@ -2,7 +2,7 @@
 
 Runs golden cases from ``data/golden/*.json`` through
 ``pgrag.agentic.loop.run_loop`` — the tool loop over the SQLite store plus
-BM25 ``corpus_search`` — and checks that each golden fact appears in the
+FTS ``corpus_search`` — and checks that each golden fact appears in the
 answer. Needs the LLM server (:8080) and nothing else.
 
 Usage:

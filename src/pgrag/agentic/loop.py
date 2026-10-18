@@ -1,5 +1,5 @@
 """Agentic tool loop: the LLM answers by issuing tool calls against the
-SQLite store (and BM25 corpus) in a bounded follow-up loop.
+SQLite store (including the FTS-indexed generated corpus) in a bounded follow-up loop.
 
 Round protocol (both mechanisms wired, deterministic order):
 1. Send the conversation with OpenAI ``tools=`` definitions AND the same
@@ -459,8 +459,7 @@ Tools (call to gather more data; up to {max_rounds} rounds):
 3. get_page(title) - full wiki page text by exact title (LIKE fallback lists
    candidates). Best for skill/mechanic prose and for trainer unlock costs
    (a trainer NPC's Training table).
-4. corpus_search(query, k=10) - BM25 over the generated corpus (includes
-   quest docs, which carry access-gate/required-item facts).
+4. corpus_search(query, k=10) - FTS5 bm25() over the generated corpus (includes
 5. player_state(character=None, section="summary", query=None, skill=None) - live
    session data. section: summary, skills, currencies, quests, favor, items,
    stall, abilities. abilities REQUIRES skill=<skill name> (e.g. "Animal Handling")
@@ -554,7 +553,7 @@ def _tools_api() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "corpus_search",
-                "description": "BM25 search over the generated document corpus.",
+                "description": "FTS5 search over the generated document corpus.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -777,14 +776,14 @@ def run_loop(
     generation = dict(DEFAULT_GENERATION if generation is None else generation)
     trace_rounds: list = []
     seed = execute_tool(store_path, "corpus_search", {"query": question, "k": 12}, corpus=corpus)
-    # Everything the model is fed, in order: the BM25 seed then every tool
+    # Everything the model is fed, in order: the FTS seed then every tool
     # result. Returned as `documents` so the harness can tell a retrieval gap
     # (fact never fetched) from a generation gap (fact fetched, not used).
     gathered: list[str] = [seed]
     system = (
         f"{_SYSTEM_TEMPLATE}\n{_SCHEMA_SUMMARY}\n"
         f"{_TOOL_CONTRACT.format(max_rounds=max_rounds)}\n\n"
-        f"Seed context (BM25 over the generated corpus):\n{seed}"
+        f"Seed context (FTS5 over the generated corpus):\n{seed}"
     )
     messages: list[dict] = [{"role": "system", "content": system}]
     if history:

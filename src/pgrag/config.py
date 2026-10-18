@@ -15,13 +15,8 @@ DERIVED_DIR = DATA_DIR / "derived"
 WIKI_PARSED_CACHE = DERIVED_DIR / "wiki_parsed.json"
 CURATED_DIR = WIKI_DIR / "curated"
 
-# Document-shape version. generate_documents() stamps
-# DERIVED/documents_version.json with this; the derived-corpus builders (BM25
-# index, tool corpus) refuse to read a documents.json whose stored version
-# differs — otherwise they would silently build a corpus from an older
-# document shape (the classic stale-artifact trap).
-# Bump whenever document generation changes shape (new metadata keys, table
-# records, chunking) so a stale persist is surfaced, not consumed.
+# Document-shape version. The store's `documents` table stamps every row with
+# this (`documents_version`); bump whenever document generation changes shape
+# (new metadata keys, table records, chunking) so a reader can tell which
+# generator rendered each row.
 DOCUMENTS_VERSION = 23
-
-DOCUMENTS_VERSION_FILE = DERIVED_DIR / "documents_version.json"

@@ -23,10 +23,9 @@ reference files, symbols, and code only.
   12000 chars, row-aware for tables), the read-only SELECT rule (write/PRAGMA
   rejected, LIMIT 200 injected, 2M-op progress budget), and the tools' resource
   caps?
-- **leave the corpus-freshness guard intact**: `scripts/build_tool_corpus.py`
-  refusing a missing/stale `DOCUMENTS_VERSION` stamp, and `rag/bm25.py`
-  rebuilding when `documents.json` changes? A weakened guard must not pass
-  silently.
+- **leave the corpus version stamp intact**: every `documents` row carries
+  `DOCUMENTS_VERSION`, bumped whenever generation changes shape? An unbumped
+  shape change ships rows with no version witness.
 - **avoid weakening a golden**: a golden's `facts` variant lists may gain a
   variant only when the fact is observably present in the answer in different
   wording; the assertion set must not shrink, and an `xfail` must not absorb a

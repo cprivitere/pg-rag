@@ -1,19 +1,14 @@
 #!/usr/bin/env node
 /**
- * JavaScript/TypeScript gate for the repo's script-class JS: the pre-command
- * hook (`.omp/hooks/**`, the omp harness's pre-hook slot) and this file's own
- * tree (`scripts/*.mjs`). Usage: `node scripts/check_ts.mjs [paths...]`, default
- * `.omp/hooks` + `scripts`; exit 1 on any diagnostic, 0 with a summary line.
+ * JavaScript/TypeScript gate for the repo's script-class JS
+ * (`scripts/*.mjs`). Usage: `node scripts/check_ts.mjs [paths...]`, default
+ * `scripts`; exit 1 on any diagnostic, 0 with a summary line.
  *
- * Why a parser and not `tsc`'s full type check: the hook runs inside oh-my-pi's
- * runtime, which ships as a *compiled binary* — `@oh-my-pi/pi-coding-agent` has
- * no type definitions on a dev box, so the hook's use of the extension API
- * (`HookAPI`, `pi.on`) cannot be type-checked anywhere but inside omp. What is
- * checkable, and what this gate exists for, is that the files are valid
- * JS/TS: the hook *swallows its own runtime errors by design* (it must never
- * block a command it cannot reason about), so a syntax error silently costs the
- * cross-instance corpus lock its early warning — and nothing else in this repo
- * reads `.ts`/`.mjs` (ruff covers Python).
+ * Why a parser and not `tsc`'s full type check: these files run inside
+ * oh-my-pi's compiled-binary runtime — `@oh-my-pi/pi-coding-agent` has no
+ * type definitions on a dev box, so that use cannot be type-checked anywhere
+ * but inside omp. What is checkable, and what this gate exists for, is that
+ * the files are valid JS/TS (ruff covers Python).
  *
  * The one expected diagnostic is `TS2307 cannot find module` for that runtime
  * import (see above); it is reported as a note, never a failure. Everything
@@ -28,7 +23,7 @@ import { join, resolve } from "node:path";
 import ts from "typescript";
 
 const ROOT = resolve(import.meta.dirname, "..");
-const DEFAULT_TARGETS = [".omp/hooks", "scripts"];
+const DEFAULT_TARGETS = ["scripts"];
 const EXTENSIONS = [".ts", ".mjs"];
 
 const OPTIONS = {

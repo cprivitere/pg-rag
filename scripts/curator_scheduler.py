@@ -81,40 +81,16 @@ def run_curator_with_scheduler():
 
     print(result.stdout)
 
-    # Rebuild documents so new curated docs reach documents.json (V25)
-    print("Rebuilding documents.json...")
-    docs_result = subprocess.run(
-        [sys.executable, "-m", "pgrag.cli", "build-documents"], capture_output=True, text=True
+    # Rebuild the store so new curated docs reach the generated corpus (the
+    # store build runs the document builders in-process; SQLite/WAL is the
+    # single-writer property, so no lock dance and no state-is-below ordering).
+    print("Rebuilding the store...")
+    store_result = subprocess.run(
+        [sys.executable, "scripts/build_sqlstore.py"], capture_output=True, text=True
     )
 
-    if docs_result.returncode != 0:
-        print(f"Documents rebuild failed: {docs_result.stderr}")
-        return
-
-    # Rebuild the derived corpora the query path reads, both from the
-    # documents.json the previous step just wrote: the tool corpus that
-    # corpus_search searches, then the full BM25 index (pre-warming it here
-    # keeps the first query from paying the multi-minute inline rebuild).
-    # Both are corpus writers and take the cross-instance build lock
-    # themselves at the default `wait=0`: a peer instance holding it makes this
-    # one abort loudly instead of interleaving — fail-fast, and no state is
-    # saved (save_state is below).
-    print("Rebuilding tool corpus...")
-    tool_corpus_result = subprocess.run(
-        [sys.executable, "-m", "scripts.build_tool_corpus"], capture_output=True, text=True
-    )
-
-    if tool_corpus_result.returncode != 0:
-        print(f"Tool corpus rebuild failed: {tool_corpus_result.stderr}")
-        return
-
-    print("Rebuilding BM25 index...")
-    bm25_result = subprocess.run(
-        [sys.executable, "-m", "pgrag.rag.bm25"], capture_output=True, text=True
-    )
-
-    if bm25_result.returncode != 0:
-        print(f"BM25 index rebuild failed: {bm25_result.stderr}")
+    if store_result.returncode != 0:
+        print(f"Store rebuild failed: {store_result.stderr}")
         return
 
     # Update state

@@ -39,10 +39,9 @@ When a test fails, in order:
      (step 4).
    - **No** — the behavior change was incidental or wrong. → The failure is a
      real regression. **Fix the source. Never touch the test.**
-3. **Wrong-layer check.** If your next edit targets
-   `data/documents.json`, `data/derived/wiki_parsed.json`, `data/derived/*`,
-   `data/bm25_index.pkl`, `data/tool_documents.json`, `data/tool_bm25.pkl`, or
-   a real `data/wiki/.meta.json` — **stop**. Those are build outputs
+3. **Wrong-layer check.** If your next edit targets the store's `documents`
+   rows, `data/derived/wiki_parsed.json`, `data/derived/*`, or a real
+   `data/wiki/.meta.json` — **stop**. Those are build outputs
    (RULES.md #2). Fix the builder/loader that produces them. A failing test
    that reads an artifact points at its generator, not the artifact.
 4. **Contract-change hard rules** (any edit that changes what a test
@@ -103,42 +102,33 @@ test (prove the source is fine) or recording a deliberate contract change
 - **Change ⇒** `uv run pytest tests/test_documents.py tests/test_chunking.py
   tests/test_metadata.py tests/test_creature_zones.py tests/test_doc_quality.py
   tests/test_wiki_builder.py` (+ the file you edited). Then inspect
-  representative docs after `pgrag build-documents` (RULES #7).
 - **Version coupling**: changing document **shape** means bumping
-  `DOCUMENTS_VERSION` in `src/pgrag/config.py` and re-stamping via
-  `build-documents`. `scripts/build_tool_corpus.py` refuses a stale stamp
-  (see L2). Bumping the shape without a bump here ships facts rendered by an
-  older generator.
+  `DOCUMENTS_VERSION` in `src/pgrag/config.py` (see L2). Bumping the shape
+  without a bump here ships rows rendered by an older generator with no
+  version witness.
 - **Duplication watch**: `build_summary_documents` is defended by *three*
   files — `test_documents.py`, `test_summaries.py`,
   `test_gathering_summaries.py`. Their module docstrings name which function
   each owns; if you edit summary generation, run all three.
 
-### L2 — BM25 index + persistence
+### L2 — Generated corpus in the store (`documents` + `documents_fts`)
 
-- **Tests**: `test_bm25.py`, `test_bm25_persist.py`, `test_build_tool_corpus.py`
-- **Source**: `src/pgrag/rag/bm25.py` (build + `save_bm25_index` /
-  `load_bm25_index`), invoked by `python -m pgrag.rag.bm25` (`mise build-bm25`)
-  and `scripts/build_tool_corpus.py` (`mise build-tool-corpus`).
-- **Contracts**: pure BM25 lexical ranking (`test_bm25.py` — a known doc ranks
-  highest for its own terms; a query whose tokens are all function words still
-  searches, and a doc made only of function words never outranks the doc holding
-  the answer — `BM25._QUERY_STOPWORDS` filters common words *query-side only*,
-  leaving the indexed token stream and the persisted pickle untouched); the
-  persisted pickle ≡ the in-memory index
-  (same rankings); the cache is **mtime-keyed** on `data/documents.json` — it
-  serves the pickle while the source is unchanged and rebuilds otherwise, and
-  survives a stale/corrupt pickle by rebuilding instead of raising.
-  `scripts/build_tool_corpus.py` refuses to run on a missing or stale
-  `DOCUMENTS_VERSION` stamp (the old `build-index` refusal, ported) — the stamp
-  (`data/derived/documents_version.json`) is addressed from the CWD like
-  `SRC`/`OUT`/`PKL`, so a CWD-rooted data tree resolves all four — and emits
-  the trimmed `data/tool_documents.json` +
-  `data/tool_bm25.pkl`; `test_build_tool_corpus.py` asserts all four arms of that
-  refusal (current/stale/missing docs/missing stamp) against tmp paths.
-- **Change ⇒** `uv run pytest tests/test_bm25.py tests/test_bm25_persist.py
-  tests/test_build_tool_corpus.py`, then `mise build-bm25` and inspect
-  `corpus_search --corpus full|tool`.
+- **Source**: `src/pgrag/agentic/store.py` (`_ingest_documents`, the
+  `documents` table + `documents_fts` external-content FTS5 index),
+  `src/pgrag/agentic/tools.py` (`_corpus_search`, `_fts_query`,
+  `_QUERY_STOPWORDS`, `_TOOL_FILTER_TABLES`)
+- **Contracts**: the store build runs `build_documents(db)` in-process and
+  inserts every doc (`id, type, text, source, tbl, name, keywords`) stamped
+  with `DOCUMENTS_VERSION` — no intermediate artifact, no staleness refusal.
+  `corpus_search` is one FTS5 query (`bm25()`-ranked, OR-terms with prefix
+  matching); the hit line keeps its shape (`id | name (table) | snippet`,
+  capped at `_SEARCH_SNIPPET`); `corpus='tool'` filters the SQL-table
+  renderings (`_TOOL_FILTER_TABLES`); `tools._QUERY_STOPWORDS` filters
+  function words query-side only (the FTS index keeps every token), and an
+  all-stopword query keeps its terms rather than matching nothing. Owned by
+  L3's `test_agentic_tools.py` (the `corpus_search` FTS facet).
+- **Change ⇒** `uv run pytest tests/test_agentic_tools.py`, then
+  `mise sql-store` and inspect `corpus_search --corpus full|tool`.
 
 ### L3 — Agentic tool loop + tuning
 
@@ -149,10 +139,7 @@ test (prove the source is fine) or recording a deliberate contract change
   (`run_case`/`run_eval`), `scripts/agentic_tune.py`
 - **Contracts**: the five tools (`sql_query, find_entities, get_page,
   corpus_search, player_state`) and the `AVAILABLE_TOOLS` string; `execute_tool`
-  returns errors as strings (model self-corrects) — including a corpus rebuild a
-  peer holds, which `corpus_search` reports as an error string instead of
-  raising `BuildLocked` out of `run_loop`'s seed call (see L11) — and it allows
-  only single
+  returns errors as strings (model self-corrects) — and it allows only single
   read-only SELECTs (write/PRAGMA rejected, LIMIT 200 injected, 2M-op
   progress-handler budget), and caps rows/cells/pages. `player_state
   section=stall` reports the player's OWN stall ledger only: each realized
@@ -242,15 +229,14 @@ test (prove the source is fine) or recording a deliberate contract change
   `scripts/curator_scheduler.py`
 - **Contracts**: wiki display names come only from `data/wiki/.meta.json`
   (`RULES.md` #11); filename `{safe_title}_<sha256-8>.txt`; download batch ≤50;
-  explicit-title extras (`WIKI_TITLE_EXTRAS`) merge into the same queue;
   atomic metadata saves + stale/orphan purge; the curator regenerates stale
   docs on source change and the scheduler orders state persistence after the
-  rebuild; immutability-guard scope (only `*.txt` + `.meta.json` are wiki
-  source).
+  store rebuild (curator → `scripts/build_sqlstore.py`); immutability-guard
+  scope (only `*.txt` + `.meta.json` are wiki source).
 - **Isolation rule (absolute)**: any test touching `data/wiki/.meta.json`,
   `data/cdn`, or `data/derived/*` must use tmp dirs and patch the paths — real
   source is read-only (what `conftest.py` enforces). Never let a test or a fix
-  write the real meta/documents.
+  write the real meta or the real store.
 
 ### L6 — Golden gate (`data/golden/*.json` through the loop)
 
@@ -318,15 +304,13 @@ test (prove the source is fine) or recording a deliberate contract change
   suppression must name a code `lint.select` actually carries, resolved inside
   the code's linter family (`B` covers `B008`, never `BLE001`): a suppression for
   a family that is *off* suppresses nothing while looking like a safeguard.
-  L12 §8 enforces that. And `mise lint-ts`
-  (`node scripts/check_ts.mjs`) must parse every JS/TS file the repo ships
-  (`.omp/hooks/**` + `scripts/*.mjs`) clean: `TS2307` for the
-  `@oh-my-pi/pi-coding-agent` import is an expected *note* (that API's types
-  exist only inside the compiled `omp` binary), every other diagnostic fails —
-  including a planted syntax error, which the layer self-tests. No node / no
-  `node_modules` (a checkout that never ran `mise install` + `mise ts-deps`) ⇒
-  the two TS tests skip loudly (developer tooling, not a runtime dep of this
-  repo).
+  L11 §8 enforces that. And `mise lint-ts`
+  (`node scripts/check_ts.mjs`) must parse the repo's script-class JS
+  (`scripts/*.mjs`, covered by the gate itself) clean — every diagnostic
+  fails, including a planted syntax error, which the layer self-tests. No
+  node / no `node_modules` (a checkout that never ran `mise install` +
+  `mise ts-deps`) ⇒ the two TS tests skip loudly (developer tooling, not a
+  runtime dep of this repo).
 - **Change ⇒** `uv run pytest tests/test_lint.py -q`; adding a rule = clean the
   new findings in the same commit (never raise the gate then violate it
   elsewhere). Format-only work is `mise format` — the gate does not check
@@ -387,42 +371,7 @@ test (prove the source is fine) or recording a deliberate contract change
 - **Change ⇒** `uv run pytest tests/test_services.py -q`, then a live `mise start` / `mise status` /
   `mise down` smoke (the manager owns the real :8080/:7860 processes).
 
-### L11 — Corpus-build lock (`src/pgrag/buildlock.py`)
-
-- **Tests**: `test_buildlock.py`
-- **Source**: `src/pgrag/buildlock.py`; consumers `src/pgrag/cli.py`
-  (`build-documents`), `src/pgrag/rag/bm25.py` (the rebuild/persist branch of
-  `load_bm25_index`) and `scripts/build_tool_corpus.py` (`main`). The
-  pre-command probe `.omp/hooks/pre/00-repo-lock.ts` reads the same file and
-  never takes it.
-- **Contracts**: the lock is `<artifact dir>/.omp-build.lock` — the writers all
-  default to `data/`, i.e. the path the hook probes — and holds
-  `{pid, startedAt}`. Acquisition is `O_EXCL`, so exactly one live owner exists
-  per artifact dir; a *live* owner is never stolen and the error names it
-  (`BuildLocked`). A record that is corrupt, dead-pid, past `TTL_S`, or an
-  **empty** file older than `EMPTY_GRACE_S` (a crashed creator) is stolen, while
-  an empty *fresh* file belongs to its creator (the create→write window, which
-  must not be stolen from under it). Exit unlinks only our own record. A held
-  lock makes `pgrag build-documents` refuse (the generator is never called), the
-  chat-time BM25 rebuild spend `LAZY_REBUILD_WAIT_S` polling and then fail
-  instead of rebuilding over a peer — surfaced by `corpus_search` as an error
-  string (L3), because `run_loop` calls it for its seed — and the tool-corpus
-  derive abort before deriving. Every failure derives from `BuildLockError`:
-  contention is `BuildLocked`, while a lock path that cannot be created (an
-  unwritable artifact dir, a directory at the lock name, `EACCES` on the
-  `O_EXCL` open) raises `BuildLockUnavailable` carrying the `OSError` — a
-  filesystem error is never reported as the contention a caller could wait out.
-- **Why the writers own it**: a hook's lifetime is one tool call, and a build
-  outlives it (an auto-backgrounded command returns at the ~60 s foreground
-  threshold and keeps running), so the hook can only probe.
-- **Change ⇒** `uv run pytest tests/test_buildlock.py tests/test_bm25_persist.py
-  tests/test_build_tool_corpus.py`, then hold the lock from a second shell
-  (`uv run python -c "from pgrag.buildlock import corpus_lock; import pathlib,time;
-  c=corpus_lock(pathlib.Path('data')); c.__enter__(); time.sleep(30)"`) and run
-  `mise build-tool-corpus`: an agent-issued run is blocked by the pre-hook
-  probe, a plain-shell run fails with *corpus build already running*.
-
-### L12 — Docs drift gate (`scripts/check_docs.py`)
+### L11 — Docs drift gate (`scripts/check_docs.py`)
 
 - **Tests**: `test_check_docs.py`
 - **Source**: `scripts/check_docs.py` (`mise drift`, alias `dc`).
@@ -440,9 +389,7 @@ test (prove the source is fine) or recording a deliberate contract change
   and a canonical-only list cannot report a newly landed skill; each `[env]` model single-source
   consumer (`scripts/services.py`, `scripts/agentic_tune.py`, AGENTS.md) is scanned for a **leaked
   literal value** of `LLM_MODEL`/`LLM_FLAGS` — the enforced rule is *no literal value*, not
-  "references the variable", so a consumer that names neither variable still passes; `cli.py`'s
-  `corpus_lock` argument is parsed (AST, not grep) and must be `DOCUMENTS_PATH.parent` with no
-  `DATA_DIR` reference — the writer locks the CWD-relative tree it writes, not the package root;
+  "references the variable", so a consumer that names neither variable still passes;
   every `ruff.toml` suppression (`lint.ignore` + `lint.per-file-ignores`) names a code
   `lint.select` carries, resolved the way ruff resolves it — inside the code's linter family, so
   `B` covers `B008` but **not** `BLE001` (a raw string prefix accepted exactly the dead
@@ -459,13 +406,12 @@ test (prove the source is fine) or recording a deliberate contract change
   offline unit test** (`test_check_docs.py`), which
   provisions a tmp tree and asserts the provisioned one is clean and each drift is reported — the
   pointer scan, the ownership map (including a `*`/`+` bullet, a fenced example of the convention and
-  a file named twice in one block), the lock/AST arm, the lint-suppression arm, the untracked-runner
+  a file named twice in one block), the lint-suppression arm, the untracked-runner
   and unanswerable-git arms, the task list and the count quote are all covered there — while the
   model-literal *leak* (as opposed to a missing consumer file) is asserted only under `mise drift`;
-  `mise drift` then runs the same script against the real tree. Exit 1 on any drift.
 - **Change ⇒** `uv run pytest tests/test_check_docs.py`, then `mise drift` (must print `0 drift`).
 
-### L13 — Review tooling (`scripts/review_facts.py`)
+### L12 — Review tooling (`scripts/review_facts.py`)
 
 - **Tests**: `test_review_facts.py`
 - **Source**: `scripts/review_facts.py` (`uv run python scripts/review_facts.py`, `--json` for machines;
@@ -494,12 +440,11 @@ test (prove the source is fine) or recording a deliberate contract change
 ## Hard rules (no exceptions)
 
 1. A test that **changes an assertion** is a **contract change** — state the
-   new contract in the test and run the layer's sibling suite (L1–L13 above).
+   new contract in the test and run the layer's sibling suite (L1–L12 above).
 2. A test that **fails without a contract change** is a **regression in
    source** — fix the source, not the test.
-3. Never hand-edit a build artifact to satisfy a test (`documents.json`,
-   `bm25_index.pkl`, `tool_documents.json`, `tool_bm25.pkl`,
-   `wiki_parsed.json`, `data/derived/*`, real `data/wiki/.meta.json`). Change
+3. Never hand-edit a build artifact to satisfy a test (the store's `documents`
+   rows, `wiki_parsed.json`, `data/derived/*`, real `data/wiki/.meta.json`). Change
    the generator (RULES.md #2).
 4. The retrieval path is the agentic tool loop and only that — a test or change
    that reintroduces a dense/RRF/reranker path is a new architecture, not a fix.

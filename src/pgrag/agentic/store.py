@@ -84,6 +84,9 @@ CREATE TABLE IF NOT EXISTS itemuses (
     item_key TEXT PRIMARY KEY, recipes_that_use TEXT, raw TEXT);
 CREATE TABLE IF NOT EXISTS records (
     id TEXT PRIMARY KEY, tbl TEXT, raw TEXT);
+CREATE TABLE IF NOT EXISTS documents (
+    id TEXT PRIMARY KEY, type TEXT, text TEXT, source TEXT, tbl TEXT,
+    name TEXT, keywords TEXT, documents_version INTEGER);
 CREATE TABLE IF NOT EXISTS wiki_pages (
     title TEXT PRIMARY KEY, filename TEXT, text TEXT);
 CREATE TABLE IF NOT EXISTS session_docs (
@@ -113,6 +116,22 @@ CREATE TABLE IF NOT EXISTS player_items (
 _ENTITY_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS entity_names USING fts5(
     name, type, snippet_source);
+"""
+
+# FTS5 over the generated corpus documents (the corpus_search index, replacing
+# the BM25 pickle). External-content table keyed to `documents`: the triggers
+# keep the index in step with the rows on rebuild.
+_DOCUMENTS_FTS_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+    text, name, keywords, content='documents', content_rowid='rowid');
+CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents BEGIN
+    INSERT INTO documents_fts(rowid, text, name, keywords)
+    VALUES (new.rowid, new.text, new.name, new.keywords);
+END;
+CREATE TRIGGER IF NOT EXISTS documents_ad AFTER DELETE ON documents BEGIN
+    INSERT INTO documents_fts(documents_fts, rowid, text, name, keywords)
+    VALUES ('delete', old.rowid, old.text, old.name, old.keywords);
+END;
 """
 
 # Hand-mapped CDN tables (generic overflow `records` receives the rest).
@@ -168,9 +187,7 @@ _ITEM_LINE_RE = re.compile(r"\[Item: ([^\]]+)\]")
 # [Recipe: X] facts, single or multiple. Inner brackets are allowed inside a
 # fact (color codes like "[206AB6]" appear inside [Item: …] lines). ts unknown
 # → channel=item, ts=''.
-_BARE_FACTS_RE = re.compile(
-    r"^\s*((?:\[(?:Item|Recipe): (?:[^\[\]\n]|\[[^\]\n]*\])+\][^\S\n]*)+)$"
-)
+_BARE_FACTS_RE = re.compile(r"^\s*((?:\[(?:Item|Recipe): (?:[^\[\]\n]|\[[^\]\n]*\])+\][^\S\n]*)+)$")
 # Facts inside a fact line (Item or Recipe), in order; nested-bracket tolerant.
 _FACT_RE = re.compile(r"\[(?:Item|Recipe): ((?:[^\[\]\n]|\[[^\]\n]*\])+)\]")
 
@@ -569,6 +586,59 @@ def _load_wiki_pages(conn: sqlite3.Connection, wiki_dir: Path) -> int:
     return len(db.wiki)
 
 
+def _ingest_documents(conn: sqlite3.Connection, cdn_dir: Path, wiki_dir: Path) -> int:
+    """Build the generated corpus in-process and index it for corpus_search.
+
+    The same `GameDatabase` + `build_documents(db)` the JSON corpus is built
+    from, inserted into `documents` + `documents_fts` instead of a pickle:
+    one source build, no intermediate artifact, no staleness contract. The
+    `documents_version` column stamps `DOCUMENTS_VERSION` — the shape stamp
+    that tells a reader which generator rendered each row.
+    """
+    import pgrag.loaders.cdn_loader as cl
+    import pgrag.loaders.wiki_loader as wl
+    from pgrag.config import DOCUMENTS_VERSION
+    from pgrag.documents.builder import build_documents
+    from pgrag.loaders.cdn_loader import load_database
+    from pgrag.loaders.database import GameDatabase
+    from pgrag.loaders.wiki_loader import load_wiki
+
+    saved_cdn, saved_wiki = cl.CDN_DIR, wl.WIKI_DIR
+    try:
+        cl.CDN_DIR, wl.WIKI_DIR = cdn_dir, wiki_dir
+        db = GameDatabase()
+        load_database(db)
+        load_wiki(db)
+        documents = build_documents(db)
+    finally:
+        cl.CDN_DIR, wl.WIKI_DIR = saved_cdn, saved_wiki
+    cur = conn.cursor()
+    cur.execute("DELETE FROM documents")
+    rows = []
+    for doc in documents:
+        meta = doc.get("metadata") or {}
+        rows.append(
+            (
+                doc.get("id"),
+                doc.get("type"),
+                doc.get("text"),
+                meta.get("source"),
+                meta.get("table"),
+                meta.get("name"),
+                meta.get("keywords"),
+                DOCUMENTS_VERSION,
+            )
+        )
+    cur.executemany(
+        "INSERT OR REPLACE INTO documents "
+        "(id, type, text, source, tbl, name, keywords, documents_version) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        rows,
+    )
+    conn.commit()
+    return len(rows)
+
+
 def build_store(
     db_path: str = DEFAULT_DB_PATH,
     cdn_dir: Path | None = None,
@@ -597,6 +667,7 @@ def build_store(
     try:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(_SCHEMA)
+        conn.executescript(_DOCUMENTS_FTS_SCHEMA)
         counts = _ingest_cdn(conn, cdn_dir)
 
         if wiki_dir.exists():
@@ -620,6 +691,7 @@ def build_store(
 
         _entity_names(conn)
         counts["entity_names"] = conn.execute("SELECT count(*) FROM entity_names").fetchone()[0]
+        counts["documents"] = _ingest_documents(conn, cdn_dir, wiki_dir)
         conn.commit()
     finally:
         conn.close()
