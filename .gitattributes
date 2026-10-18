@@ -1,0 +1,13 @@
+# Cross-OS line endings: LF in the index for all text, always.
+# `core.autocrlf` no longer matters — this file owns the policy per-clone.
+* text=auto eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.mjs text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.cfg text eol=lf
+*.txt text eol=lf
+*.ps1 text eol=crlf
