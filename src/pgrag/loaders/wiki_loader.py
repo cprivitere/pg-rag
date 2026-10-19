@@ -1,5 +1,6 @@
 import json
 import re
+from pathlib import Path
 
 from pgrag.config import WIKI_DIR
 
@@ -7,13 +8,14 @@ from pgrag.config import WIKI_DIR
 _HASHED_FILE_RE = re.compile(r"^(.*)_[0-9a-f]{8}\.txt$")
 
 
-def _load_title_map():
+def _load_title_map(wiki_dir=None):
     """Map filename -> real wiki page title from the downloader's meta.
 
     Falls back to {} when meta is missing or unreadable (partial/stale runs).
     """
+    wiki_dir = Path(wiki_dir) if wiki_dir else WIKI_DIR
     try:
-        meta = json.loads((WIKI_DIR / ".meta.json").read_text(encoding="utf-8"))
+        meta = json.loads((wiki_dir / ".meta.json").read_text(encoding="utf-8"))
         pages = meta.get("pages", {})
         return {
             info.get("filename"): title for title, info in pages.items() if info.get("filename")
@@ -22,13 +24,14 @@ def _load_title_map():
         return {}
 
 
-def load_wiki(db):
+def load_wiki(db, wiki_dir=None):
+    wiki_dir = Path(wiki_dir) if wiki_dir else WIKI_DIR
     db.wiki = {}
     db.wiki_mtimes = {}
-    title_map = _load_title_map()
+    title_map = _load_title_map(wiki_dir)
     seen = set()
 
-    for file in sorted(WIKI_DIR.glob("*.txt")):
+    for file in sorted(wiki_dir.glob("*.txt")):
         match = _HASHED_FILE_RE.match(file.name)
         if not match:
             continue  # legacy un-hashed files from older downloader schemes

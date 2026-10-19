@@ -679,7 +679,7 @@ def _load_cache():
             cache = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             return {}
-        if cache.get("__version") != CACHE_VERSION:
+        if cache.pop("__version", None) != CACHE_VERSION:
             return {}
         return cache
     return {}

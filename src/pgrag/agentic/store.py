@@ -22,6 +22,7 @@ import sqlite3
 from pathlib import Path
 
 from pgrag.config import CDN_DIR, WIKI_DIR
+from pgrag.loaders.cdn_loader import load_database
 from pgrag.loaders.database import GameDatabase
 from pgrag.loaders.wiki_loader import load_wiki
 
@@ -219,14 +220,23 @@ def _load_table(cdn_dir: Path, name: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _ingest_cdn(conn: sqlite3.Connection, cdn_dir: Path) -> dict[str, int]:
+def _ingest_cdn(conn: sqlite3.Connection, cdn_dir: Path, tables=None) -> dict[str, int]:
     """Load every CDN file: mapped tables get hand-mapped columns + raw JSON;
-    anything else lands in the generic ``records`` overflow table."""
+    anything else lands in the generic ``records`` overflow table.
+
+    When ``tables`` (a ``GameDatabase.tables`` dict) is given, rows come from
+    it instead of re-parsing JSON from ``cdn_dir``.
+    """
     counts: dict[str, int] = {}
     cur = conn.cursor()
 
+    def _rows(name: str) -> dict:
+        if tables is not None:
+            return tables.get(name, {})
+        return _load_table(cdn_dir, name)
+
     # ---- items ----
-    rows = _load_table(cdn_dir, "items")
+    rows = _rows("items")
     for key, rec in rows.items():
         code = int(key.rsplit("_", 1)[-1])
         cur.execute(
@@ -249,7 +259,7 @@ def _ingest_cdn(conn: sqlite3.Connection, cdn_dir: Path) -> dict[str, int]:
     counts["items"] = len(rows)
 
     # ---- recipes + ingredients ----
-    rows = _load_table(cdn_dir, "recipes")
+    rows = _rows("recipes")
     n_ing = 0
     for key, rec in rows.items():
         rid = int(key.rsplit("_", 1)[-1])
@@ -296,7 +306,7 @@ def _ingest_cdn(conn: sqlite3.Connection, cdn_dir: Path) -> dict[str, int]:
     counts["ingredients"] = n_ing
 
     # ---- abilities ----
-    rows = _load_table(cdn_dir, "abilities")
+    rows = _rows("abilities")
     for key, rec in rows.items():
         aid = int(key.rsplit("_", 1)[-1])
         pve = rec.get("PvE") or {}
@@ -319,7 +329,7 @@ def _ingest_cdn(conn: sqlite3.Connection, cdn_dir: Path) -> dict[str, int]:
     counts["abilities"] = len(rows)
 
     # ---- quests ----
-    rows = _load_table(cdn_dir, "quests")
+    rows = _rows("quests")
     for key, rec in rows.items():
         qid = int(key.rsplit("_", 1)[-1])
         cur.execute(
@@ -343,7 +353,7 @@ def _ingest_cdn(conn: sqlite3.Connection, cdn_dir: Path) -> dict[str, int]:
     counts["quests"] = len(rows)
 
     # ---- npcs ----
-    rows = _load_table(cdn_dir, "npcs")
+    rows = _rows("npcs")
     for key, rec in rows.items():
         gift = rec.get("ItemGifts")
         cur.execute(
@@ -363,7 +373,7 @@ def _ingest_cdn(conn: sqlite3.Connection, cdn_dir: Path) -> dict[str, int]:
     counts["npcs"] = len(rows)
 
     # ---- effects ----
-    rows = _load_table(cdn_dir, "effects")
+    rows = _rows("effects")
     for key, rec in rows.items():
         eid = int(key.rsplit("_", 1)[-1])
         dur = rec.get("Duration")
@@ -381,7 +391,7 @@ def _ingest_cdn(conn: sqlite3.Connection, cdn_dir: Path) -> dict[str, int]:
     counts["effects"] = len(rows)
 
     # ---- skills ----
-    rows = _load_table(cdn_dir, "skills")
+    rows = _rows("skills")
     for key, rec in rows.items():
         # Display name: Name field, else the record key (40 sub-skills have
         # no Name; the key IS the canonical name there).
@@ -404,7 +414,7 @@ def _ingest_cdn(conn: sqlite3.Connection, cdn_dir: Path) -> dict[str, int]:
     counts["skills"] = len(rows)
 
     # ---- xptables ----
-    rows = _load_table(cdn_dir, "xptables")
+    rows = _rows("xptables")
     for key, rec in rows.items():
         cur.execute(
             "INSERT OR REPLACE INTO xptables VALUES (?,?,?)",
@@ -428,7 +438,7 @@ def _ingest_cdn(conn: sqlite3.Connection, cdn_dir: Path) -> dict[str, int]:
     counts["xptable_levels"] = n_levels
 
     # ---- advancementtables ----
-    rows = _load_table(cdn_dir, "advancementtables")
+    rows = _rows("advancementtables")
     for key, rec in rows.items():
         cur.execute(
             "INSERT OR REPLACE INTO advancementtables VALUES (?,?,?)",
@@ -437,7 +447,7 @@ def _ingest_cdn(conn: sqlite3.Connection, cdn_dir: Path) -> dict[str, int]:
     counts["advancementtables"] = len(rows)
 
     # ---- tsysclientinfo -> tsys_powers ----
-    rows = _load_table(cdn_dir, "tsysclientinfo")
+    rows = _rows("tsysclientinfo")
     for key, rec in rows.items():
         pid = int(key.rsplit("_", 1)[-1]) if key.rsplit("_", 1)[-1].isdigit() else None
         cur.execute(
@@ -458,7 +468,7 @@ def _ingest_cdn(conn: sqlite3.Connection, cdn_dir: Path) -> dict[str, int]:
     # ---- sources_* ----
     counts["sources"] = 0
     for table in ("sources_items", "sources_recipes", "sources_abilities"):
-        rows = _load_table(cdn_dir, table)
+        rows = _rows(table)
         for key, rec in rows.items():
             for seq, entry in enumerate(rec.get("entries") or []):
                 cur.execute(
@@ -473,7 +483,7 @@ def _ingest_cdn(conn: sqlite3.Connection, cdn_dir: Path) -> dict[str, int]:
                 counts["sources"] += 1
 
     # ---- attributes ----
-    rows = _load_table(cdn_dir, "attributes")
+    rows = _rows("attributes")
     for key, rec in rows.items():
         cur.execute(
             "INSERT OR REPLACE INTO attributes VALUES (?,?,?,?)",
@@ -487,7 +497,7 @@ def _ingest_cdn(conn: sqlite3.Connection, cdn_dir: Path) -> dict[str, int]:
     counts["attributes"] = len(rows)
 
     # ---- itemuses ----
-    rows = _load_table(cdn_dir, "itemuses")
+    rows = _rows("itemuses")
     for key, rec in rows.items():
         cur.execute(
             "INSERT OR REPLACE INTO itemuses VALUES (?,?,?)",
@@ -501,11 +511,17 @@ def _ingest_cdn(conn: sqlite3.Connection, cdn_dir: Path) -> dict[str, int]:
 
     # ---- generic overflow: every table not hand-mapped above ----
     overflow = 0
-    for file in sorted(cdn_dir.glob("*.json")):
-        tbl = file.stem.lower()
+    if tables is not None:
+        names = sorted(tables)
+    else:
+        names = sorted(f.stem.lower() for f in cdn_dir.glob("*.json"))
+    for tbl in names:
         if tbl in MAPPED_TABLES:
             continue
-        data = json.loads(file.read_text(encoding="utf-8"))
+        if tables is not None:
+            data = tables[tbl]
+        else:
+            data = json.loads((cdn_dir / f"{tbl}.json").read_text(encoding="utf-8"))
         items = enumerate(data) if isinstance(data, list) else data.items()
         for i, (key, rec) in enumerate(items):
             rec_key = key if isinstance(key, str) else str(i)
@@ -562,20 +578,11 @@ def _entity_names(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _load_wiki_pages(conn: sqlite3.Connection, wiki_dir: Path) -> int:
-    """Wiki pages via the existing loader (titles come ONLY from .meta.json —
-    never from hashed filenames; RULES #11)."""
-    db = GameDatabase()
-    db.wiki = {}
-    saved = WIKI_DIR
+def _load_wiki_pages(conn: sqlite3.Connection, db: GameDatabase) -> int:
+    """Insert the shared ``db.wiki`` pages into ``wiki_pages``.
 
-    import pgrag.loaders.wiki_loader as wl
-
-    try:
-        wl.WIKI_DIR = wiki_dir
-        load_wiki(db)
-    finally:
-        wl.WIKI_DIR = saved
+    Titles come ONLY from .meta.json — never from hashed filenames (RULES #11).
+    """
     cur = conn.cursor()
     for title, text in db.wiki.items():
         cur.execute(
@@ -586,32 +593,20 @@ def _load_wiki_pages(conn: sqlite3.Connection, wiki_dir: Path) -> int:
     return len(db.wiki)
 
 
-def _ingest_documents(conn: sqlite3.Connection, cdn_dir: Path, wiki_dir: Path) -> int:
-    """Build the generated corpus in-process and index it for corpus_search.
+def _ingest_documents(conn: sqlite3.Connection, db: GameDatabase) -> int:
+    """Build the generated corpus from the shared ``db`` and index it.
 
-    The same `GameDatabase` + `build_documents(db)` the JSON corpus is built
-    from, inserted into `documents` + `documents_fts` instead of a pickle:
-    one source build, no intermediate artifact, no staleness contract. The
-    `documents_version` column stamps `DOCUMENTS_VERSION` — the shape stamp
-    that tells a reader which generator rendered each row.
+    Runs ``build_documents(db)`` over the single ``GameDatabase`` that
+    ``build_store`` already loaded, inserting rows into ``documents`` +
+    ``documents_fts``: one source build, no intermediate artifact, no
+    staleness contract. The ``documents_version`` column stamps
+    ``DOCUMENTS_VERSION`` — the shape stamp that tells a reader which
+    generator rendered each row.
     """
-    import pgrag.loaders.cdn_loader as cl
-    import pgrag.loaders.wiki_loader as wl
     from pgrag.config import DOCUMENTS_VERSION
     from pgrag.documents.builder import build_documents
-    from pgrag.loaders.cdn_loader import load_database
-    from pgrag.loaders.database import GameDatabase
-    from pgrag.loaders.wiki_loader import load_wiki
 
-    saved_cdn, saved_wiki = cl.CDN_DIR, wl.WIKI_DIR
-    try:
-        cl.CDN_DIR, wl.WIKI_DIR = cdn_dir, wiki_dir
-        db = GameDatabase()
-        load_database(db)
-        load_wiki(db)
-        documents = build_documents(db)
-    finally:
-        cl.CDN_DIR, wl.WIKI_DIR = saved_cdn, saved_wiki
+    documents = build_documents(db)
     cur = conn.cursor()
     cur.execute("DELETE FROM documents")
     rows = []
@@ -668,12 +663,19 @@ def build_store(
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(_SCHEMA)
         conn.executescript(_DOCUMENTS_FTS_SCHEMA)
-        counts = _ingest_cdn(conn, cdn_dir)
-
+        db = GameDatabase()
         if wiki_dir.exists():
-            counts["wiki_pages"] = _load_wiki_pages(conn, wiki_dir)
+            load_wiki(db, wiki_dir)
         else:
             print(f"Wiki dir not found at {wiki_dir}; skipping wiki_pages.")
+            db.wiki = {}
+            db.wiki_mtimes = {}
+        load_database(db, cdn_dir)
+        counts = _ingest_cdn(conn, cdn_dir, db.tables)
+
+        if wiki_dir.exists():
+            counts["wiki_pages"] = _load_wiki_pages(conn, db)
+        else:
             counts["wiki_pages"] = 0
 
         if session_dir.exists():
@@ -691,7 +693,7 @@ def build_store(
 
         _entity_names(conn)
         counts["entity_names"] = conn.execute("SELECT count(*) FROM entity_names").fetchone()[0]
-        counts["documents"] = _ingest_documents(conn, cdn_dir, wiki_dir)
+        counts["documents"] = _ingest_documents(conn, db)
         conn.commit()
     finally:
         conn.close()

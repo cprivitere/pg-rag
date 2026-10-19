@@ -13,8 +13,22 @@ from pgrag.agentic import loop
 
 
 @pytest.fixture(scope="module")
-def tiny_store(tmp_path_factory):
-    """Minimal store so executed tool calls return real tool output."""
+def _isolated_wiki_cache(tmp_path_factory):
+    """Route the wiki parse cache to tmp: build_store runs builders
+    in-process, and the orphan-eviction save would otherwise clobber the
+    real derived cache."""
+    from pgrag.documents import wiki_builder
+
+    orig, tmp_cache = wiki_builder.CACHE_FILE, tmp_path_factory.mktemp("derived")
+    wiki_builder.CACHE_FILE = tmp_cache / "wiki_parsed.json"
+    try:
+        yield
+    finally:
+        wiki_builder.CACHE_FILE = orig
+
+
+@pytest.fixture(scope="module")
+def tiny_store(tmp_path_factory, _isolated_wiki_cache):
     import sqlite3
 
     from pgrag.agentic.store import _SCHEMA

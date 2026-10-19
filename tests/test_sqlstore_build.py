@@ -8,6 +8,15 @@ import sqlite3
 import pytest
 
 from pgrag.agentic.store import build_store
+from pgrag.documents import wiki_builder
+
+
+@pytest.fixture(autouse=True)
+def _isolated_wiki_cache(tmp_path, monkeypatch):
+    """Route the wiki parse cache to tmp: build_store runs builders in-process,
+    and the orphan-eviction save would otherwise clobber the real derived cache."""
+    monkeypatch.setattr(wiki_builder, "CACHE_FILE", tmp_path / "wiki_parsed.json")
+
 
 
 @pytest.fixture()
