@@ -414,6 +414,9 @@ def _get_page(store_path: str, args: dict) -> str:
         conn = _conn(store_path)
     except sqlite3.Error as exc:
         return f"get_page error: {exc}"
+    # Out of scope for the corpus_search guard: the executes below are
+    # unguarded (a corrupt wiki_pages table would raise, not return a string).
+
     row = conn.execute(
         "SELECT title, text FROM wiki_pages WHERE title = ? COLLATE NOCASE", (title,)
     ).fetchone()
@@ -472,7 +475,11 @@ def _corpus_search(store_path: str, args: dict, corpus: str = "full") -> str:
         if corpus == "tool"
         else ""
     )
-    conn = _conn(store_path)
+    conn = None
+    try:
+        conn = _conn(store_path)
+    except (sqlite3.Error, OSError) as exc:
+        return f"corpus_search error: {exc}"
     try:
         rows = conn.execute(
             "SELECT d.id, d.name, d.tbl, substr(d.text, 1, ?) "
@@ -480,10 +487,10 @@ def _corpus_search(store_path: str, args: dict, corpus: str = "full") -> str:
             f"WHERE documents_fts MATCH ? {filt} ORDER BY bm25(documents_fts) LIMIT ?",
             (_SEARCH_SNIPPET, match, k),
         ).fetchall()
-    except sqlite3.OperationalError as exc:
-        return f"corpus_search error: {exc}"
-    finally:
+    except sqlite3.Error as exc:
         conn.close()
+        return f"corpus_search error: {exc}"
+    conn.close()
     if not rows:
         return "0 results."
     lines = [f"- {did} | {name or did} ({tbl}) | {snippet}" for did, name, tbl, snippet in rows]

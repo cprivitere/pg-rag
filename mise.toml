@@ -108,7 +108,7 @@ run = "uv run python scripts/golden_rerun.py --selection flaky"
 alias = "gf"
 
 [tasks."golden-flaky-list"]
-description = "Audit golden miss statistics per id (recent-miss%% over the last 10 records; no classification runs)"
+description = "Audit golden miss statistics per id (recent-miss % over the last 10 records; no classification runs)"
 run = "uv run python scripts/golden_rerun.py --selection list"
 alias = "gfl"
 

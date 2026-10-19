@@ -124,11 +124,11 @@ def test_constants():
     assert TYPE_MAX_CHARS["item"] == 1024
     assert TYPE_MAX_CHARS["recipe"] == 1024
     assert TYPE_MAX_CHARS["wiki"] == 1024
-    # Embed-capped families are budgeted in TOKENS (EMBED_WINDOW_TOKENS), not
-    # characters: bge-small's hard cap is 512 tokens, and character budgets
-    # fail because token density varies (~2.4 c/t for level tables vs ~4.9 for
-    # prose). At EMBED_WINDOW_TOKENS every chunk stays under both the token
-    # window and the 2000-char clip.
+    # Token-budgeted families are budgeted in TOKENS (EMBED_WINDOW_TOKENS), not
+    # characters: the retired bge-small window was 512 tokens, and character
+    # budgets fail because token density varies (~2.4 c/t for level tables vs
+    # ~4.9 for prose). At EMBED_WINDOW_TOKENS every chunk stays under both the
+    # 512-token and the 2000-char policy windows.
     for t in ("lorebook", "skillprofile", "leveling", "summary", "curated"):
         assert t in TOKEN_BUDGETED_TYPES
     assert EMBED_WINDOW_TOKENS < 512
@@ -160,9 +160,9 @@ def test_constants():
 
 
 def test_type_aware_limits():
-    # Embed-capped families budget by TOKENS, so a token-dense document (level
-    # table: ~2.4 chars/token) splits into chunks that each fit bge-small's
-    # 512-token window — the char-only budget did not, which was the bug.
+    # Token-budgeted families budget by TOKENS, so a token-dense document (level
+    # table: ~2.4 chars/token) splits into chunks that each fit the 512-token
+    # policy window — the char-only budget did not, which was the bug.
     dense = {"id": "l1", "type": "leveling", "text": "Level 1: 1 XP\n" * 400, "metadata": {}}
     chunks = chunk_document(dense)
     assert len(chunks) > 1

@@ -883,6 +883,27 @@ def test_corpus_search_tokenizer_and_empty(store):
     out = tools.execute_tool(str(store), "corpus_search", {"query": '"butter OR churn: test'})
     assert "corpus_search error:" not in out
 
+def test_corpus_search_failures_are_error_strings(tmp_path):
+    """Contract: connect-time and query-time sqlite failures are error strings
+    (data for the model), never exceptions that abort the loop — the seed call
+    in `run_loop` has no guard of its own. The connect is wrapped
+    (`sqlite3.Error`/`OSError`) and the query guard is widened
+    `OperationalError` → `Error`, mirroring `_sql_query`."""
+    import sqlite3
+
+    import pgrag.agentic.tools as tools
+
+    missing = tools.execute_tool(
+        str(tmp_path / "no-store.db"), "corpus_search", {"query": "moonstone"}
+    )
+    assert missing.startswith("corpus_search error:")
+
+    empty = tmp_path / "empty.db"
+    sqlite3.connect(empty).close()
+    out = tools.execute_tool(str(empty), "corpus_search", {"query": "moonstone"})
+    assert out.startswith("corpus_search error:")
+
+
 
 def test_corpus_search_tool_corpus_filters_sql_tables(store):
     """Contract: `corpus='tool'` drops per-row table renderings (items, …)

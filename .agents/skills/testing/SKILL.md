@@ -5,7 +5,7 @@ description: Regression-triage and test discipline for pg-rag — how to decide 
 
 # testing — regression triage & test discipline
 
-The suite's live counts are **523 collected / 78 deselected / 445 default** (the
+The suite's live counts are **526 collected / 78 deselected / 448 default** (the
 default `not slow` marker deselects 78: 16 data-heavy tests + the 62
 parametrized golden cases; one POSIX-only port-owner case skips on Windows) —
 quoted verbatim because `mise drift` asserts the triple against a real

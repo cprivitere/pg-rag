@@ -482,7 +482,10 @@ def test_kill_tree_windows_refuses_a_system_pid_and_names_a_port_owner(monkeypat
     """`taskkill /T /F` on 0 or 4 would end a system process, and the port-owner
     path has no provenance at all — Windows gets the POSIX `pid <= 1` rule and
     the same warning the POSIX branch prints. Nothing is signalled for an
-    unattributable pid, so that verdict is False; a completed taskkill is True."""
+    unattributable pid, so that verdict is False; a completed taskkill is True.
+    A port-owner kill is a single kill (no /T): only a pidfile-verified pid
+    gets the tree kill, matching the POSIX arm that never killpgs a pid it did
+    not spawn."""
     calls: list[list[str]] = []
     monkeypatch.setattr(services.os, "name", "nt", raising=False)
 
@@ -496,10 +499,12 @@ def test_kill_tree_windows_refuses_a_system_pid_and_names_a_port_owner(monkeypat
     assert calls == []
     assert "not a service we spawned" in capsys.readouterr().out
 
-    # port-derived: killed, but named
+    # port-derived: killed alone (no /T), but named
     assert services._kill_tree(4242, ours=False) is True
-    assert calls == [["taskkill", "/PID", "4242", "/T", "/F"]]
-    assert "came from the port owner" in capsys.readouterr().out
+    assert calls == [["taskkill", "/PID", "4242", "/F"]]
+    out = capsys.readouterr().out
+    assert "came from the port owner" in out
+    assert "only the top process was signalled" in out
 
 
 def test_kill_tree_posix_group_leader_escalates(monkeypatch):

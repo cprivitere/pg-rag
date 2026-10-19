@@ -219,8 +219,20 @@ def _write_pid(name: str, pid: int, start: str | None = None) -> None:
     """
     path = _pidfile(name)
     tmp = path.with_name(f"{path.name}.tmp")
-    tmp.write_text(json.dumps({"pid": pid, "start": start}) + "\n")
-    os.replace(tmp, path)
+    payload = json.dumps({"pid": pid, "start": start}) + "\n"
+    try:
+        tmp.write_text(payload)
+        os.replace(tmp, path)
+    except OSError as exc:
+        # Transient locker (AV/search indexing the pidfile: WinError 5).
+        # Retry once; a hard lock aborts start rather than running pidless,
+        # which would replay the torn-record window this rename closes.
+        time.sleep(0.1)
+        try:
+            tmp.write_text(payload)
+            os.replace(tmp, path)
+        except OSError:
+            raise RuntimeError(f"cannot publish pidfile {path}: {exc}") from exc
 
 
 def _clear_pid(name: str) -> None:
@@ -413,16 +425,22 @@ def _wait_dead(pid: int, timeout: float = STOP_GRACE_S) -> None:
     while time.monotonic() < deadline:
         try:
             os.kill(pid, 0)
-        except (ProcessLookupError, PermissionError):
+        except ProcessLookupError:
             return
+        except PermissionError:
+            # Another user's process: it exists, so keep polling to the grace
+            # deadline rather than reading the denial as dead.
+            pass
         time.sleep(0.2)
 
 
 def _kill_tree(pid: int, ours: bool) -> bool:
     """Kill a service process tree; return whether anything was signalled.
 
-    Windows: `taskkill /PID <pid> /T /F` — unchanged; `/T` reaches the children
-    holding the port whatever their process group.
+    Windows: `taskkill /PID <pid> /F`, plus `/T` only for a pidfile-verified
+    pid (`ours`) — `/T` reaches the children holding the port whatever their
+    process group, but a port-owner pid has no provenance, so it gets the
+    single kill (parity with the POSIX arm below).
 
     POSIX: a group kill needs *both* provenance and a group that is ours to kill.
     `ours` is that provenance — True only for a pid from a pidfile record whose
@@ -457,8 +475,12 @@ def _kill_tree(pid: int, ours: bool) -> bool:
             # code and stderr are reported rather than discarded: a silent
             # failure is indistinguishable from a successful kill, and `stop`
             # would then blame surviving children of a taskkill that never ran.
+            # A port-owner pid has no provenance, so it gets a single kill
+            # (no /T): parity with the POSIX arm, which never killpgs a pid
+            # it did not spawn. Only a pidfile-verified pid gets the tree kill.
+            argv = ["taskkill", "/PID", str(pid)] + (["/T", "/F"] if ours else ["/F"])
             done = subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                argv,
                 capture_output=True,
                 text=True,
                 errors="replace",
@@ -477,7 +499,7 @@ def _kill_tree(pid: int, ours: bool) -> bool:
         if not ours:
             print(
                 f"warning: {pid} came from the port owner, not a pidfile we recorded; "
-                "its whole tree was killed"
+                "only the top process was signalled"
             )
         return True
     if pid <= 1:

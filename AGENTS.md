@@ -374,9 +374,9 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
 ## Testing & QA
 
 - **Framework**: pytest via `uv run pytest`; the counts this doc quotes are
-  **523 collected / 78 deselected / 445 default** (asserted by `mise drift`
+  **526 collected / 78 deselected / 448 default** (asserted by `mise drift`
   against a real collection) — the 78 being 16 data-heavy tests + the 62
-  parametrized golden cases, so the default offline run leaves **445** (one POSIX-only port-owner case skips on Windows) — all
+  parametrized golden cases, so the default offline run leaves **448** (one POSIX-only port-owner case skips on Windows) — all
   offline (temp-dir integration, mocked servers). The golden gate is the only
   suite that needs any server.
 - **Golden eval** (`tests/test_golden_check.py`): parametrized over

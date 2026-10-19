@@ -1,25 +1,25 @@
-"""Chunking of generated documents for embedding.
+"""Chunking of generated documents for FTS5 retrieval.
 
 Two budgeting schemes:
 
-- **Non-embed-capped families** (item, recipe, skill, …) chunk by *characters*
-  at ``DEFAULT_MAX_CHARS`` — normally far from the embedder's 512-token window
-  (prose ≈2.4 chars/token → ~426 tokens at 1024 chars), but dense numeric text
-  measures ≈1.85 chars/token (≈4.9 for prose is the *upper* density bound),
-  so ``_enforce_embed_window`` re-splits any chunk
-  the char budget let past the window.
-- **Embed-capped families** (lorebook, skillprofile, leveling, summary,
-  curated) chunk by *tokens* at ``EMBED_WINDOW_TOKENS``. bge-small (the
-  production embedder) hard-rejects inputs past 512 tokens, and the previous
-  character-only budget proved insufficient: dense numeric level tables
-  (~2.4 chars/token vs ~4.9 for prose) blow far past 512 tokens at ~1900 chars.
-  ``EMBED_WINDOW_TOKENS = 400`` keeps every chunk under **both** windows —
-  ≤~447 tokens incl. overlap + specials (< 512) and ≈1960 chars at max prose
-  density (< ``MAX_EMBED_CHARS`` = 2000) — so no chunk is ever clipped or
-  partial-indexed at embed time.
+- **Char-budgeted families** (item, recipe, skill, …) chunk by *characters*
+  at ``DEFAULT_MAX_CHARS`` — dense numeric text measures ≈1.85 chars/token
+  (≈4.9 for prose is the *upper* density bound), so ``_enforce_embed_window``
+  re-splits any chunk the char budget let past the token window.
+- **Token-budgeted families** (lorebook, skillprofile, leveling, summary,
+  curated) chunk by *tokens* at ``EMBED_WINDOW_TOKENS``: dense numeric level
+  tables (~2.4 chars/token vs ~4.9 for prose) blow far past 512 tokens at
+  ~1900 chars under a character-only budget. ``EMBED_WINDOW_TOKENS = 400``
+  keeps every chunk under both policy windows — ≤~447 tokens incl. overlap +
+  specials (< 512) and ≈1960 chars at max prose density
+  (< ``MAX_EMBED_CHARS`` = 2000).
+
+The budgets were validated against the retired bge-small 512-token / 2000-char
+embed window (there is no embedding server any more) and stay as chunking
+policy — changing them would reshape the generated corpus.
 
 These artifacts are split here and reassembled at retrieval (``parent_id`` →
-``expand_parents`` / ``_family_chunks``) so the LLM still sees the complete doc.
+``expand_parents`` / ``_family_chunks``) so the loop still sees the complete doc.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ import re
 
 from pgrag.documents.tokenizer import token_count
 
-# Char cap of the dense-embedding era: the bge-small server clipped input at
+# Char cap of the retired embedding era: the bge-small server clipped input at
 # this many characters. There is no embedding server any more, but the chunk
 # budgets below were validated against it, and changing them would reshape
 # the generated corpus — so the cap stays as chunking policy.

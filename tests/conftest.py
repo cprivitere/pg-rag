@@ -7,9 +7,10 @@ asserts it is unchanged at teardown, so any test that mutates real source data
 fails loudly instead of silently corrupting the cache.
 
 Snapshot scope is deliberately narrow: for ``data/wiki`` only the page ``*.txt``
-and ``.meta.json`` are source. Derived artifacts (``data/derived/wiki_parsed.json``, ``curated/``)
-are governed by the code moves that keep them out of the source dir, not by this
-guard.
+and ``.meta.json`` are source. ``data/derived/wiki_parsed.json`` lives alongside
+the guarded dirs, while ``data/wiki/curated/`` and ``data/wiki/.parsed.json``
+live inside ``data/wiki`` but are excluded from this snapshot by design — only
+``*.txt`` + ``.meta.json`` are snapshotted.
 """
 
 import pytest

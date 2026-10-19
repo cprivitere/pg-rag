@@ -64,3 +64,45 @@ def test_scheduler_store_rebuild_after_curator():
     curator_idx = calls.index([sys.executable, "-m", "scripts.curator"])
     store_idx = calls.index([sys.executable, "scripts/build_sqlstore.py"])
     assert curator_idx < store_idx, "curator must run before the store rebuild"
+
+def test_scheduler_curator_failure_skips_store_and_state():
+    calls = []
+
+    def fake_subprocess(args, **kwargs):
+        calls.append(args)
+        return MagicMock(returncode=1, stdout="", stderr="boom")
+
+    with (
+        patch("scripts.curator_scheduler.load_state", return_value={"files_hash": {}}),
+        patch("scripts.curator_scheduler.get_wiki_hash", return_value={"page.txt": "h"}),
+        patch("scripts.curator_scheduler.detect_changes", return_value=True),
+        patch("scripts.curator_scheduler.save_state") as saved,
+        patch("scripts.curator_scheduler.subprocess.run", side_effect=fake_subprocess),
+    ):
+        run_curator_with_scheduler()
+
+    assert calls == [[sys.executable, "-m", "scripts.curator"]]
+    saved.assert_not_called()
+
+
+def test_scheduler_store_failure_skips_state():
+    calls = []
+
+    def fake_subprocess(args, **kwargs):
+        calls.append(args)
+        if args == [sys.executable, "-m", "scripts.curator"]:
+            return MagicMock(returncode=0, stdout="ok", stderr="")
+        return MagicMock(returncode=1, stdout="", stderr="boom")
+
+    with (
+        patch("scripts.curator_scheduler.load_state", return_value={"files_hash": {}}),
+        patch("scripts.curator_scheduler.get_wiki_hash", return_value={"page.txt": "h"}),
+        patch("scripts.curator_scheduler.detect_changes", return_value=True),
+        patch("scripts.curator_scheduler.save_state") as saved,
+        patch("scripts.curator_scheduler.subprocess.run", side_effect=fake_subprocess),
+    ):
+        run_curator_with_scheduler()
+
+    assert calls == EXPECTED_CHAIN
+    saved.assert_not_called()
+

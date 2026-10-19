@@ -194,18 +194,18 @@ def test_leveling_splits_to_embed_chunks_with_parent_links():
     for c in chunks:
         assert c["metadata"]["parent_id"] == docs[0]["id"]
     # Reassembly restores the full contents: the head AND the previously-
-    # head-truncated tail both survive splitting. Overlap re-emits a tail
+    # truncated tail both survive splitting. Overlap re-emits a tail
     # between neighbours, so the reassembly is not byte-identical to the source
-    # (the tail fragment is the whole point — it used to be dropped at embed).
+    # (the tail fragment is the whole point — it used to be truncated at index time).
     joined = "\n\n".join(c["text"] for c in chunks)
     assert docs[0]["text"][:100] in joined
     assert docs[0]["text"][-100:] in joined
 
 
 def test_leveling_build_budget_exceeds_embed_chunk_budget():
-    # Build budget and embed chunk cap are intentionally decoupled: LEVELING_BUDGET
-    # bounds how much of the ladder one artifact carries, while the embedding
-    # chunk cap sets the embed-safe split size. The whole artifact is reassembled
+    # Build budget and chunk cap are intentionally decoupled: LEVELING_BUDGET
+    # bounds how much of the ladder one artifact carries, while the chunking
+    # cap sets the retrieval-safe split size. The whole artifact is reassembled
     # at retrieval via parent_id, so it may (and should) span several chunks.
     from pgrag.documents.skill_profiles import LEVELING_BUDGET
 

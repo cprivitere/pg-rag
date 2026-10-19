@@ -1,4 +1,11 @@
-"""Curator scheduler — run curator periodically, detect changes, rebuild the store."""
+"""Curator scheduler — run curator periodically, detect changes, rebuild the store.
+
+Ordering note: this scheduler is curator -> store build -> state save, and is
+the only path that produces `data/wiki/curated/*_curated.txt` before
+`build_sqlstore.py` ingests them via `build_curated_documents`. The
+`mise sync-*` tasks are source-download(s) -> store build and `sql-store` is
+store build only; neither runs the curator.
+"""
 
 import json
 import subprocess
@@ -84,6 +91,8 @@ def run_curator_with_scheduler():
     # Rebuild the store so new curated docs reach the generated corpus (the
     # store build runs the document builders in-process; SQLite/WAL is the
     # single-writer property, so no lock dance and no state-is-below ordering).
+    # `mise sync-*` never runs this curator step — this scheduler is the only
+    # curator -> store build path.
     print("Rebuilding the store...")
     store_result = subprocess.run(
         [sys.executable, "scripts/build_sqlstore.py"], capture_output=True, text=True
