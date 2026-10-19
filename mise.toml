@@ -226,4 +226,4 @@ ruff = "latest"
 # executables and warns "add a library to your project's package.json instead",
 # and its copy is not on node's resolution path; two pins of one compiler would
 # also drift.
-node = "24"
+node = "lts"
