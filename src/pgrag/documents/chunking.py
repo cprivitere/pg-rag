@@ -18,8 +18,8 @@ The budgets were validated against the retired bge-small 512-token / 2000-char
 embed window (there is no embedding server any more) and stay as chunking
 policy — changing them would reshape the generated corpus.
 
-These artifacts are split here and reassembled at retrieval (``parent_id`` →
-``expand_parents`` / ``_family_chunks``) so the loop still sees the complete doc.
+These artifacts are split here; every chunk carries its whole doc's id in
+metadata ``parent_id`` so a consumer can reassemble the complete doc.
 """
 
 from __future__ import annotations

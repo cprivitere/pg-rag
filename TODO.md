@@ -189,7 +189,7 @@
   can make a custom build of glogger that has this as a tab inside of it
   - first class access to glogger's data
 
-- **DONE 2026-10-19 — review backlog closed** (retired molotov/BM25/buildlock entries died with their code):
+- **DONE 2026-10-19 — review backlog closed** (retired molab/BM25/buildlock entries died with their code):
   - `scripts/services.py`: `_wait_dead` treats `PermissionError` as alive (keeps polling to the grace deadline, matching the `_kill_tree` POSIX arms); `_write_pid` retries once on `OSError` (transient `WinError 5`) then raises `RuntimeError` instead of running pidless; Windows `_kill_tree` drops `/T` for port-owner pids (single kill + warn, parity with POSIX never-killpg-foreign) — `test_kill_tree_windows_refuses_a_system_pid_and_names_a_port_owner` updated (`ours=False` asserts `taskkill /PID 4242 /F`).
   - `execute_tool` error-as-data gap closed (`src/pgrag/agentic/tools.py`): `_corpus_search` wraps `_conn` (`sqlite3.Error`/`OSError` → `"corpus_search error: …"`) and widens the query guard `OperationalError` → `Error`, copying `_sql_query`; a missing `documents_fts`/locked store now returns a string instead of aborting `run_loop` at the seed (`loop.py:780`). `_get_page`'s unguarded executes marked out-of-scope inline.
   - Curator scheduler (`scripts/curator_scheduler.py`): `rc≠0` no-`save_state` paths pinned by two new tests (curator-fail skips store + state; store-fail skips state), and the module docstring + rebuild comment state the ordering this scheduler owns (curator → store → state) vs `mise sync-*` (source-download(s) → store, never curator).
