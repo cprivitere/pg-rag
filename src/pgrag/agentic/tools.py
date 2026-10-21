@@ -16,7 +16,7 @@ from pathlib import Path
 
 DEFAULT_STORE = "data/sqlite_gorgon.db"
 
-AVAILABLE_TOOLS = "sql_query, find_entities, get_page, corpus_search, player_state"
+AVAILABLE_TOOLS = "sql_query, find_entities, get_page, corpus_search, corpus_get_doc, player_state"
 
 # Tables whose facts are first-class SQL tables in the store: `--corpus tool`
 # filters them out of corpus_search, keeping the lexical arm for prose/docs.
@@ -201,12 +201,14 @@ _SQL_ERROR_PREFIX = "SQL error: "
 _ENTITIES_MAX = 20
 _PAGE_CAP = 20_000
 # Per-hit text shown by corpus_search. 400 cut every hit before its tail, and a
-# corpus doc has no other reader (get_page serves wiki titles only), so anything
-# past the cut was unreachable: skillprofile_Pooping_chunk_0 (871 chars) hides
-# `Requires Beast` at 788 and the gourmand food-quality note at 451,
-# skillprofile_Gardening_chunk_4 (1089) hides the trainers at 703-830. 10 hits x
-# 1000 + prefixes ≈ 10.6K stays inside the loop's 12000-char tool-result cap.
-_SEARCH_SNIPPET = 1000
+# corpus doc has no other reader for long profiles (get_page serves wiki titles
+# only; corpus_get_doc covers chunked parents), so anything past the cut was
+# unreachable: skillprofile_Pooping_chunk_0 (871 chars) hides `Requires Beast`
+# at 788 and the gourmand food-quality note at 451, skillprofile_Gardening_chunk_4
+# (1089) hides the trainers at 703-830. 10 hits x 2000 + prefixes ≈ 20.6K
+# exceeds the loop's 12000-char tool-result cap, so multi-hit rounds cap via
+# _cap/_cap_rows (loop.py); the wider window buys single-hit tail visibility.
+_SEARCH_SNIPPET = 2000
 _ENTITY_SNIPPET = 120
 
 
@@ -495,6 +497,47 @@ def _corpus_search(store_path: str, args: dict, corpus: str = "full") -> str:
         return "0 results."
     lines = [f"- {did} | {name or did} ({tbl}) | {snippet}" for did, name, tbl, snippet in rows]
     return f"{len(lines)} results:\n" + "\n".join(lines)
+
+
+def _corpus_get_doc(store_path: str, args: dict) -> str:
+    """Reassemble a chunked parent: chunk id (or parent id) -> parent + chunks.
+
+    A corpus_search hit cut at _SEARCH_SNIPPET (2000) can end mid-section; when
+    the question needs more of that profile, fetch the whole parent instead of
+    spending extra corpus_search rounds. Errors are strings (execute_tool never
+    raises). Output goes through the loop's _cap path via the caller.
+    """
+    doc_id = (args.get("id") or "").strip()
+    if not doc_id:
+        return "corpus_get_doc error: missing required argument 'id'."
+    try:
+        conn = _conn(store_path)
+    except (sqlite3.Error, OSError) as exc:
+        return f"corpus_get_doc error: {exc}"
+    try:
+        key = conn.execute(
+            "SELECT COALESCE((SELECT parent_id FROM documents WHERE id = ?), ?) AS p",
+            (doc_id, doc_id),
+        ).fetchone()
+        parent = (key[0] if key else None) or doc_id
+        rows = conn.execute(
+            "SELECT id, text, parent_id FROM documents WHERE id = ? OR parent_id = ?",
+            (parent, parent),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        conn.close()
+        return f"corpus_get_doc error: {exc}"
+    conn.close()
+    if not rows:
+        return f"No document matching '{doc_id}'."
+
+    def _chunk_key(rid: str) -> tuple:
+        base, _, suffix = rid.rpartition("_chunk_")
+        return (0, rid) if not suffix.isdigit() else (1, base, int(suffix))
+
+    rows.sort(key=lambda r: (r[2] is not None, _chunk_key(r[0])))
+    parts = [f"## {rid}\n{text or ''}" for rid, text, _pid in rows]
+    return f"{len(rows)} part(s):\n" + "\n---\n".join(parts)
 
 
 _CHAT_PRICE_CHANNELS = (
@@ -824,11 +867,19 @@ def _player_state(store_path: str, args: dict) -> str:
     else:
         character = chars[0]
 
+    # The newest row for a character is usually a Storage dump (no Skills key);
+    # ability/skill/currency answers need the latest CharacterSheet report.
+    # Fall back to the newest row when no sheet exists (minimal fixtures).
     row = conn.execute(
-        "SELECT report, ts FROM char_reports WHERE character = ? ORDER BY ts DESC LIMIT 1",
-        (character,),
+        "SELECT report, ts FROM char_reports WHERE character = ?"
+        " AND json_extract(report, ?) = 'CharacterSheet' ORDER BY ts DESC LIMIT 1",
+        (character, "$.Report"),
     ).fetchone()
-    conn.close()
+    if row is None:
+        row = conn.execute(
+            "SELECT report, ts FROM char_reports WHERE character = ? ORDER BY ts DESC LIMIT 1",
+            (character,),
+        ).fetchone()
     if not row:
         return f"No report found for {character}."
     report = json.loads(row[0])
@@ -1100,6 +1151,8 @@ def execute_tool(
         return _get_page(store_path, args)
     if name == "corpus_search":
         return _corpus_search(store_path, args, corpus=corpus)
+    if name == "corpus_get_doc":
+        return _corpus_get_doc(store_path, args)
     if name == "player_state":
         return _player_state(store_path, args)
     return _UNKNOWN.format(name=name)

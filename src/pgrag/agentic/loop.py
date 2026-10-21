@@ -249,7 +249,8 @@ Notes:
   and 'Graffiti: Mastering "Poop"'. For 'what quest does mastering <skill>
   unlock', also query the quests table directly (quests.rewards / objectives
   reference the skill, e.g. Graffiti quests) since the quest line can sit past
-  corpus_search's 1000-char snippet cap.
+  corpus_search's 2000-char snippet cap. When a corpus_search hit ends
+  mid-section, corpus_get_doc(id) reassembles its whole parent.
 - keywords/slots/result_items are ' | '-joined TEXT; Lint_* internal markers
   are already filtered out of keyword columns (still in raw).
 - recipes.result_items format: "ItemCode xStackSize" (e.g. '5011 x3').
@@ -459,8 +460,12 @@ Tools (call to gather more data; up to {max_rounds} rounds):
 3. get_page(title) - full wiki page text by exact title (LIKE fallback lists
    candidates). Best for skill/mechanic prose and for trainer unlock costs
    (a trainer NPC's Training table).
-4. corpus_search(query, k=10) - FTS5 bm25() over the generated corpus.
-5. player_state(character=None, section="summary", query=None, skill=None) - live
+4. corpus_search(query, k=10) - FTS5 bm25() over the generated corpus. Each hit
+   is cut at 2000 chars; when a hit ends mid-section or the question needs more
+   of one profile, call corpus_get_doc(id) instead of more corpus_search rounds.
+5. corpus_get_doc(id) - reassemble a chunked parent: chunk id (or parent id)
+   returns the parent plus its chunks. Capped like other tool results.
+6. player_state(character=None, section="summary", query=None, skill=None) - live
    session data. section: summary, skills, currencies, quests, favor, items,
    stall, abilities. abilities REQUIRES skill=<skill name> (e.g. "Animal Handling")
    and diffs the character sheet's known-ability list against the CDN family —
@@ -494,7 +499,7 @@ How to call tools:
 
 
 def _tools_api() -> list[dict]:
-    """OpenAI tools-parameter definitions for the five tools."""
+    """OpenAI tools-parameter definitions for the six tools."""
     return [
         {
             "type": "function",
@@ -561,6 +566,22 @@ def _tools_api() -> list[dict]:
                         "k": {"type": "integer"},
                     },
                     "required": ["query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "corpus_get_doc",
+                "description": (
+                    "Reassemble a chunked corpus parent by chunk or parent id "
+                    "(parent plus its chunks, capped). Use when a corpus_search "
+                    "hit is cut mid-section."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}},
+                    "required": ["id"],
                 },
             },
         },
@@ -777,7 +798,7 @@ def run_loop(
     `query_type`/`rerank_used`)."""
     generation = dict(DEFAULT_GENERATION if generation is None else generation)
     trace_rounds: list = []
-    seed = execute_tool(store_path, "corpus_search", {"query": question, "k": 12}, corpus=corpus)
+    seed = execute_tool(store_path, "corpus_search", {"query": question, "k": 8}, corpus=corpus)
     # Everything the model is fed, in order: the FTS seed then every tool
     # result. Returned as `documents` so the harness can tell a retrieval gap
     # (fact never fetched) from a generation gap (fact fetched, not used).

@@ -319,6 +319,43 @@ def test_player_state_abilities_unknown_family(store):
     assert "no CDN ability family 'Unknown'" in out
 
 
+def test_player_state_prefers_charactersheet_over_newer_storage(store):
+    """Regression (2026-10-21): the newest char_reports row for a character is
+    usually a Storage dump (no Skills key); skill/ability/currency answers must
+    read the latest CharacterSheet report, not the newest row. A newer Storage
+    row must not blank the abilities audit."""
+    conn = sqlite3.connect(store)
+    try:
+        storage = {
+            "Character": "Tester",
+            "ServerName": "Dreva",
+            "Report": "Storage",
+            "Items": [],
+        }
+        conn.execute(
+            "INSERT OR REPLACE INTO char_reports VALUES (?,?,?,?)",
+            ("Tester", "Dreva", "2026-10-21 01:10:36Z", json.dumps(storage)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        out = execute_tool(
+            str(store), "player_state", {"section": "abilities", "skill": "First Aid"}
+        )
+        assert "known in this family: 2" in out  # the sheet, not the Storage dump
+        assert "sheet ts 2026-09-13" in out
+    finally:
+        conn = sqlite3.connect(store)
+        try:
+            conn.execute(
+                "DELETE FROM char_reports WHERE character = 'Tester' AND ts = '2026-10-21 01:10:36Z'"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
 def test_player_state_stall_no_glogger(tmp_path):
     """contract: without glogger ingestion there is no stall_events table; the
     section says so instead of erroring."""
@@ -842,7 +879,7 @@ def test_corpus_search_snippet_cap_bounds_the_payload(store):
     was once cut at 400 chars, and a corpus doc has no other reader (get_page
     serves wiki titles only), so facts past the cut were unreachable.
 
-    Contract: each hit is cut at `_SEARCH_SNIPPET` (1000) chars while the
+    Contract: each hit is cut at `_SEARCH_SNIPPET` (2000) chars while the
     payload stays under the loop's 12000-char tool-result cap.
     """
     import pgrag.agentic.tools as tools
@@ -852,7 +889,7 @@ def test_corpus_search_snippet_cap_bounds_the_payload(store):
         conn.execute(
             "INSERT INTO documents (id, type, text, source, tbl, name, keywords, documents_version)"
             " VALUES ('longdoc_tailtest', 'wiki', ?, 'wiki', 'wiki', 'Tail Test', '', 1)",
-            ("x" * 500 + " Requires Beast " + "y" * 2000,),
+            ("x" * 500 + " Requires Beast " + "y" * 3000,),
         )
         conn.commit()
     finally:
@@ -871,6 +908,48 @@ def test_corpus_search_snippet_cap_bounds_the_payload(store):
             conn.close()
 
 
+def test_corpus_get_doc_reassembles_parent(store):
+    """Contract: corpus_get_doc(id) returns the parent plus its chunks, so a
+    fact past the 2000-char corpus_search snippet cut is reachable without
+    extra search rounds. Unknown id / missing arg are error strings, never
+    raises (execute_tool never raises)."""
+
+    conn = sqlite3.connect(store)
+    try:
+        conn.execute(
+            "INSERT INTO documents (id, type, text, source, tbl, name, keywords, documents_version, parent_id)"
+            " VALUES ('longdoc_parent', 'wiki', ?, 'wiki', 'wiki', 'Zzxq Long Parent', '', 1, NULL)",
+            ("x" * 2100 + " Hidden Fact " + "y" * 500,),
+        )
+        conn.execute(
+            "INSERT INTO documents (id, type, text, source, tbl, name, keywords, documents_version, parent_id)"
+            " VALUES ('longdoc_parent_chunk_0', 'wiki', ?, 'wiki', 'wiki', 'Zzxq Long Parent', '', 1, 'longdoc_parent')",
+            ("x" * 2100 + " Hidden Fact " + "y" * 500,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        search = execute_tool(str(store), "corpus_search", {"query": "Zzxq Hidden Fact"})
+        assert "Hidden Fact" not in search  # buried past the 2000-char snippet
+        got = execute_tool(str(store), "corpus_get_doc", {"id": "longdoc_parent_chunk_0"})
+        assert "Hidden Fact" in got  # the chunk id reassembles the whole parent
+        assert "longdoc_parent_chunk_0" in got
+        same = execute_tool(str(store), "corpus_get_doc", {"id": "longdoc_parent"})
+        assert "Hidden Fact" in same  # the parent id resolves too
+        assert "No document" in execute_tool(str(store), "corpus_get_doc", {"id": "nope_missing"})
+        assert "missing required argument" in execute_tool(str(store), "corpus_get_doc", {})
+    finally:
+        conn = sqlite3.connect(store)
+        try:
+            conn.execute(
+                "DELETE FROM documents WHERE id IN ('longdoc_parent', 'longdoc_parent_chunk_0')"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
 def test_corpus_search_tokenizer_and_empty(store):
     """Missing query is an error string (data for the model), and a miss is a
     plain '0 results' rather than an exception. Quoted/operator-heavy queries
@@ -879,9 +958,12 @@ def test_corpus_search_tokenizer_and_empty(store):
 
     assert "missing required argument" in tools.execute_tool(str(store), "corpus_search", {})
     assert tools.execute_tool(str(store), "corpus_search", {"query": "zzzqqq"}) == "0 results."
-    assert tools.execute_tool(str(store), "corpus_search", {"query": "BUTTER churn"}) != "0 results."
+    assert (
+        tools.execute_tool(str(store), "corpus_search", {"query": "BUTTER churn"}) != "0 results."
+    )
     out = tools.execute_tool(str(store), "corpus_search", {"query": '"butter OR churn: test'})
     assert "corpus_search error:" not in out
+
 
 def test_corpus_search_failures_are_error_strings(tmp_path):
     """Contract: connect-time and query-time sqlite failures are error strings
@@ -902,7 +984,6 @@ def test_corpus_search_failures_are_error_strings(tmp_path):
     sqlite3.connect(empty).close()
     out = tools.execute_tool(str(empty), "corpus_search", {"query": "moonstone"})
     assert out.startswith("corpus_search error:")
-
 
 
 def test_corpus_search_tool_corpus_filters_sql_tables(store):
@@ -929,5 +1010,7 @@ def test_corpus_search_stopwords_are_query_side(store):
         str(store), "corpus_search", {"query": "what does the butter recipe need"}
     )
     assert "Butter" in out
-    assert tools._fts_query("what does the butter recipe need") == '"butter"* OR "recipe"* OR "need"*'
+    assert (
+        tools._fts_query("what does the butter recipe need") == '"butter"* OR "recipe"* OR "need"*'
+    )
     assert tools.execute_tool(str(store), "corpus_search", {"query": "what is it"}) != "0 results."

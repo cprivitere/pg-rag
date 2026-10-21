@@ -161,10 +161,13 @@ def test_chat_continuation_lines_bare_facts_and_wrap(tmp_path, capsys):
         os.utime(p, (p.stat().st_atime, p.stat().st_mtime + 5))
         ingest_session(conn, base)
         assert conn.execute("SELECT count(*) FROM chat_events").fetchone()[0] == 6
-        assert conn.execute(
-            "SELECT text FROM chat_events"
-            " WHERE source_file='Chat-26-10-04.log' AND channel='Trade'"
-        ).fetchone()[0] == rows[0][2]
+        assert (
+            conn.execute(
+                "SELECT text FROM chat_events"
+                " WHERE source_file='Chat-26-10-04.log' AND channel='Trade'"
+            ).fetchone()[0]
+            == rows[0][2]
+        )
     finally:
         conn.close()
         pass  # manifest isolation handled by _isolate_manifest
@@ -272,6 +275,45 @@ def test_reports_routing_char_and_items(tmp_path):
             "SELECT type_id, name, storage, stack, value FROM player_items ORDER BY seq"
         ).fetchall()
         assert rows[0] == (14141, "Letter of Authority", "CouncilVault", 200, 100)
+    finally:
+        conn.close()
+        pass  # manifest isolation handled by _isolate_manifest
+
+
+def test_report_history_keeps_two_sheets_one_storage(tmp_path):
+    """Contract: readers need only latest data + one previous sheet
+    (change-vs-yesterday, corrupt-export cover); older exports are pruned
+    from char_reports and player_items (shared (character, ts) key)."""
+    from pgrag.agentic.session import _KEEP_SHEETS, _KEEP_STORAGES
+
+    assert (_KEEP_SHEETS, _KEEP_STORAGES) == (2, 1)
+    reports = {}
+    for i, ts in enumerate(
+        ["2026-09-01 01:00:00Z", "2026-09-02 01:00:00Z", "2026-09-03 01:00:00Z"]
+    ):
+        reports[f"sheet_{i}.json"] = {
+            "Character": "Test",
+            "ServerName": "Dreva",
+            "Timestamp": ts,
+            "Report": "CharacterSheet",
+            "Skills": {},
+        }
+    for i, ts in enumerate(["2026-09-02 02:00:00Z", "2026-09-03 02:00:00Z"]):
+        reports[f"stor_{i}.json"] = {
+            "Character": "Test",
+            "ServerName": "Dreva",
+            "Timestamp": ts,
+            "Report": "Storage",
+            "Items": [{"TypeID": i, "Name": f"Item{i}"}],
+        }
+    base = _session(tmp_path, reports=reports)
+    conn = _conn(tmp_path)
+    try:
+        ingest_session(conn, base)
+        kept = [r[0] for r in conn.execute("SELECT ts FROM char_reports ORDER BY ts").fetchall()]
+        assert kept == ["2026-09-02 01:00:00Z", "2026-09-03 01:00:00Z", "2026-09-03 02:00:00Z"]
+        items = conn.execute("SELECT DISTINCT ts FROM player_items").fetchall()
+        assert [r[0] for r in items] == ["2026-09-03 02:00:00Z"]
     finally:
         conn.close()
         pass  # manifest isolation handled by _isolate_manifest

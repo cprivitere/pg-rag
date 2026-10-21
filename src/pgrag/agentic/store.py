@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS records (
     id TEXT PRIMARY KEY, tbl TEXT, raw TEXT);
 CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY, type TEXT, text TEXT, source TEXT, tbl TEXT,
-    name TEXT, keywords TEXT, documents_version INTEGER);
+    name TEXT, keywords TEXT, documents_version INTEGER, parent_id TEXT);
 CREATE TABLE IF NOT EXISTS wiki_pages (
     title TEXT PRIMARY KEY, filename TEXT, text TEXT);
 CREATE TABLE IF NOT EXISTS session_docs (
@@ -622,12 +622,13 @@ def _ingest_documents(conn: sqlite3.Connection, db: GameDatabase) -> int:
                 meta.get("name"),
                 meta.get("keywords"),
                 DOCUMENTS_VERSION,
+                meta.get("parent_id"),
             )
         )
     cur.executemany(
         "INSERT OR REPLACE INTO documents "
-        "(id, type, text, source, tbl, name, keywords, documents_version) "
-        "VALUES (?,?,?,?,?,?,?,?)",
+        "(id, type, text, source, tbl, name, keywords, documents_version, parent_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
         rows,
     )
     conn.commit()
@@ -663,6 +664,10 @@ def build_store(
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(_SCHEMA)
         conn.executescript(_DOCUMENTS_FTS_SCHEMA)
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(documents)").fetchall()]
+        if "parent_id" not in cols:
+            conn.execute("ALTER TABLE documents ADD COLUMN parent_id TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_parent ON documents(parent_id)")
         db = GameDatabase()
         if wiki_dir.exists():
             load_wiki(db, wiki_dir)

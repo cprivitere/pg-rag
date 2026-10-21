@@ -35,6 +35,15 @@ from pgrag.agentic.store import (
 # Reports: files whose Report field says which dump they are.
 _ITEMS_REPORT = "Storage"
 
+# Report history: every export accrues a full duplicate row (PK is
+# (character, ts)) but readers only need the latest data — plus one previous
+# CharacterSheet for change-vs-yesterday questions and corrupt-export cover.
+# Enforced at the end of _ingest_reports: per character, keep the 2 newest
+# CharacterSheets and the 1 newest Storage dump, delete the rest
+# (player_items shares (character, ts), so the same ts list prunes both).
+_KEEP_SHEETS = 2
+_KEEP_STORAGES = 1
+
 
 def _load_manifest() -> dict:
     try:
@@ -115,8 +124,7 @@ def _ingest_chat_logs(conn: sqlite3.Connection, chat_dir: Path) -> tuple[int, in
                         if last_row:
                             # wrap continuation of the previous chat row in this file
                             cur.execute(
-                                "UPDATE chat_events SET text = text || ' ' || ?"
-                                " WHERE rowid = ?",
+                                "UPDATE chat_events SET text = text || ' ' || ? WHERE rowid = ?",
                                 (line.strip(), last_row),
                             )
                         # else: file starts with a continuation; skip silently
@@ -126,8 +134,7 @@ def _ingest_chat_logs(conn: sqlite3.Connection, chat_dir: Path) -> tuple[int, in
                         # un-timestamped chat lines as continuations; facts and
                         # announcements were captured above.
                         cur.execute(
-                            "UPDATE chat_events SET text = text || ' ' || ?"
-                            " WHERE rowid = ?",
+                            "UPDATE chat_events SET text = text || ' ' || ? WHERE rowid = ?",
                             (line.strip(), last_row),
                         )
                     else:
@@ -251,12 +258,44 @@ def _ingest_reports(conn: sqlite3.Connection, reports_dir: Path) -> tuple[int, i
                 )
                 item_rows += 1
         _update_manifest("reports", [f])
+    _trim_report_history(conn)
     conn.commit()
     return char_rows, item_rows, nfiles
 
 
+def _trim_report_history(conn: sqlite3.Connection) -> dict[str, int]:
+    """Keep per character the newest _KEEP_SHEETS CharacterSheets and newest
+    _KEEP_STORAGES Storage dumps; delete older rows from char_reports and
+    player_items (shared (character, ts) key prunes both). Returns counts."""
+    cur = conn.cursor()
+    trimmed = {"char_reports": 0, "player_items": 0}
+    chars = [r[0] for r in cur.execute("SELECT DISTINCT character FROM char_reports").fetchall()]
+    for character in chars:
+        keep: set = set()
+        for report_type, limit in (
+            ("CharacterSheet", _KEEP_SHEETS),
+            (_ITEMS_REPORT, _KEEP_STORAGES),
+        ):
+            rows = cur.execute(
+                "SELECT ts FROM char_reports WHERE character = ?"
+                " AND json_extract(report, ?) = ? ORDER BY ts DESC LIMIT ?",
+                (character, "$.Report", report_type, limit),
+            ).fetchall()
+            keep.update(r[0] for r in rows)
+        if not keep:
+            continue
+        placeholders = ",".join("?" * len(keep))
+        for table in ("char_reports", "player_items"):
+            cur.execute(
+                f"DELETE FROM {table} WHERE character = ? AND ts NOT IN ({placeholders})",
+                (character, *keep),
+            )
+            trimmed[table] += cur.rowcount if cur.rowcount is not None else 0
+    conn.commit()
+    return trimmed
+
+
 def _ingest_books(conn: sqlite3.Connection, books_dir: Path) -> int:
-    """Books/*.txt stored verbatim (session_docs)."""
     cur = conn.cursor()
     added = 0
     files = sorted(books_dir.glob("*.txt"))
