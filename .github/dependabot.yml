@@ -8,9 +8,12 @@ updates:
       default-days: 7
     commit-message:
       prefix: "[actions] "
-  - package-ecosystem: "uv"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    commit-message:
-      prefix: "[uv] "
+  # uv ecosystem parked until Dependabot's updater image supports Python 3.15
+  # (tool_version_not_supported: detected >=3.15, image tops out at 3.14).
+  # Re-add the block below once dependabot-core ships 3.15 in its Dockerfile.
+  # - package-ecosystem: "uv"
+  #   directory: "/"
+  #   schedule:
+  #     interval: "weekly"
+  #   commit-message:
+  #     prefix: "[uv] "
