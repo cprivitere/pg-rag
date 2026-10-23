@@ -356,6 +356,47 @@ def test_player_state_prefers_charactersheet_over_newer_storage(store):
             conn.close()
 
 
+def test_player_state_items_labels_storage_ts_not_sheet_ts(store):
+    """Regression (review pass on be0e538..2db80d5): section=items reads
+    player_items (Storage-dump rows) but labeled them with the CharacterSheet
+    ts. A Storage dump newer than the sheet must show the items' own recency."""
+    conn = sqlite3.connect(store)
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO player_items VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "Tester",
+                "2026-10-21 01:10:36Z",
+                99999,
+                "Zzxq Newer Storage Item",
+                None,
+                "Backpack",
+                1,
+                5,
+                None,
+                None,
+                0,
+                "{}",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        out = execute_tool(str(store), "player_state", {"section": "items"})
+        assert "item rows (ts 2026-10-21 01:10:36Z)" in out
+        assert "Zzxq Newer Storage Item" in out
+    finally:
+        conn = sqlite3.connect(store)
+        try:
+            conn.execute(
+                "DELETE FROM player_items WHERE character = 'Tester' AND ts = '2026-10-21 01:10:36Z'"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
 def test_player_state_stall_no_glogger(tmp_path):
     """contract: without glogger ingestion there is no stall_events table; the
     section says so instead of erroring."""

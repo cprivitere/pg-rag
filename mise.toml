@@ -216,7 +216,7 @@ run = [
 alias = "fo"
 
 [tasks.lint-all]
-description = "All local linters: ruff, format-check, yaml, shell hook, markdown (advisory), workflow validators"
+description = "All local linters: ruff, format-check, yaml, shell hook, markdown (advisory)"
 run = [
   "uv run ruff check src scripts tests",
   "uv run ruff format --check src scripts tests",

@@ -301,9 +301,10 @@ test (prove the source is fine) or recording a deliberate contract change
   `[tools] node` + `[tasks.lint-ts]/[tasks.ts-deps]`, `scripts/check_ts.mjs`,
   and `package.json` (the `typescript` devDependency, installed into gitignored
   `node_modules/`). CI runner: `.github/workflows/ci.yml` (`checks` job
-  enforces this layer: `ruff check`, `ruff format --check`, drift, compliance),
-  plus validator tools `mise.toml [tools]` (`jactionlint`, `shellcheck`,
-  `zizmor`, `pinact`).
+  enforces this layer: `ruff check`, `ruff format --check`, drift, compliance;
+  workflow scanning in CI is poutine only), plus local-only validator tools
+  `mise.toml [tools]` (`jactionlint`, `shellcheck`, `zizmor`, `pinact` — run
+  by hand before workflow edits, not in CI).
 - **Contracts**: `uv run ruff check src scripts tests` returns 0 — any new
   finding in the linted trees fails `mise test`. `ruff.toml` `extend-exclude`
   (`data/`, caches) plus the per-file-ignores it carries (`scripts/**`:

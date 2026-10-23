@@ -881,9 +881,13 @@ def _player_state(store_path: str, args: dict) -> str:
             (character,),
         ).fetchone()
     if not row:
+        conn.close()
         return f"No report found for {character}."
     report = json.loads(row[0])
     ts = row[1]
+    # Every section below reads `report` (in memory) or opens its own handle —
+    # release the char_reports connection here so no return path leaks it.
+    conn.close()
 
     def skills_text() -> str:
         sk = report.get("Skills") or {}
@@ -1007,30 +1011,39 @@ def _player_state(store_path: str, args: dict) -> str:
         more = f" (+{len(rows) - 60} more)" if len(rows) > 60 else ""
         return f"{len(rows)} NPCs with non-Neutral favor (ts {ts}): {head}{more}"
     if section == "items":
+        # player_items rows come from Storage dumps (their own ts), not the
+        # CharacterSheet row above — label with the items' own recency.
         try:
-            conn = _conn(store_path)
+            conn2 = _conn(store_path)
+        except sqlite3.Error as exc:
+            return f"player_state error: {exc}"
+        try:
             if query:
                 like = f"%{query}%"
-                rows = conn.execute(
+                rows = conn2.execute(
                     "SELECT type_id, name, rarity, storage, stack, value"
                     " FROM player_items WHERE character = ? AND (name LIKE ? OR report LIKE ?)"
                     " ORDER BY storage, name LIMIT 50",
                     (character, like, like),
                 ).fetchall()
             else:
-                rows = conn.execute(
+                rows = conn2.execute(
                     "SELECT type_id, name, rarity, storage, stack, value"
                     " FROM player_items WHERE character = ?"
                     " ORDER BY storage, name LIMIT 50",
                     (character,),
                 ).fetchall()
-            conn.close()
+            items_ts = conn2.execute(
+                "SELECT MAX(ts) FROM player_items WHERE character = ?", (character,)
+            ).fetchone()[0]
         except sqlite3.Error as exc:
             return f"player_state error: {exc}"
+        finally:
+            conn2.close()
         if not rows:
             return f"No items matching '{query}'."
         body = _md_table(["type_id", "name", "rarity", "storage", "stack", "value"], rows)
-        return f"{len(rows)} item rows (ts {ts}):\n{body}"
+        return f"{len(rows)} item rows (ts {items_ts}):\n{body}"
 
     if section == "stall":
         # Own-stall sale history. stall_events is the glogger-mirrored ledger

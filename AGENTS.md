@@ -377,9 +377,9 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
 ## Testing & QA
 
 - **Framework**: pytest via `uv run pytest`; the counts this doc quotes are
-  **530 collected / 79 deselected / 451 default** (asserted by `mise drift`
+  **531 collected / 79 deselected / 452 default** (asserted by `mise drift`
   against a real collection) — the 79 being 16 data-heavy tests + the 63
-  parametrized golden cases, so the default offline run leaves **451** (one POSIX-only port-owner case skips on Windows) — all
+  parametrized golden cases, so the default offline run leaves **452** (one POSIX-only port-owner case skips on Windows) — all
   offline (temp-dir integration, mocked servers). The golden gate is the only
   suite that needs any server.
 - **Golden eval** (`tests/test_golden_check.py`): parametrized over
@@ -440,7 +440,7 @@ check everything at once.
 | YAML (`.github/*.yml`) | yamllint (config `.yamllint`) | `yamllint .github` |
 | Shell (`.githooks/pre-push`) | shellcheck | `shellcheck .githooks/pre-push` |
 | Markdown (docs/skills) | markdownlint-cli2, advisory (config `.markdownlint.jsonc`) | `mise lint-all` reports, does not fail |
-| Workflows | jactionlint + zizmor + pinact | validators in CI; run locally before workflow edits |
+| Workflows | jactionlint + zizmor + pinact, poutine | poutine in CI; validators local (not in CI); run before workflow edits |
 | TypeScript (`scripts/*.mjs`) | repo `check_ts.mjs` gate | `mise lint-ts` |
 
 Optional extras available but not installed: none — the primaries cover every
