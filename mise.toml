@@ -215,6 +215,17 @@ run = [
 ]
 alias = "fo"
 
+[tasks.lint-all]
+description = "All local linters: ruff, format-check, yaml, shell hook, markdown (advisory), workflow validators"
+run = [
+  "uv run ruff check src scripts tests",
+  "uv run ruff format --check src scripts tests",
+  "yamllint .github",
+  "shellcheck .githooks/pre-push",
+  "markdownlint-cli2 \"AGENTS.md\" \"TODO.md\" \"README.md\" \"docs/**/*.md\" \".agents/**/*.md\" \".omp/*.md\" || true",
+]
+alias = "la"
+
 [tools]
 python = "3.15"
 ruff = "latest"
@@ -231,3 +242,5 @@ jactionlint = "latest"
 shellcheck = "latest"
 zizmor = "latest"
 pinact = "latest"
+yamllint = "latest"
+"npm:markdownlint-cli2" = "latest"

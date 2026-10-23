@@ -1,0 +1,8 @@
+{
+  // Repo convention: long lines carry code refs/SHAs; wrap only prose freely.
+  // MD013 off repo-wide, MD004/MD060 normalized to existing dash style.
+  "default": true,
+  "MD013": false,
+  "MD004": { "style": "dash" },
+  "MD060": { "style": "consistent" }
+}

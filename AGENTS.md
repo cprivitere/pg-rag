@@ -167,7 +167,7 @@ Python ≥3.15, managed with `uv`. `mise tasks` lists everything. The
 `golden-short`, `golden-one`, `golden-type`, `golden-flaky`,
 `golden-flaky-list`, `debug-llm`, `chat`, `llm-start`, `llm-stop`,
 `chat-start`, `chat-stop`, `start`, `stop`, `status`, `drift`,
-`compliance`, `logs`, `tail-llm`, `lint-ts`, `ts-deps`, `lint`, `format`. Service tasks
+`compliance`, `logs`, `tail-llm`, `lint-ts`, `ts-deps`, `lint`, `format`, `lint-all`. Service tasks
 (`llm-start`, `llm-stop`, `chat-start`, `chat-stop`) run
 `scripts/services.py`; the `.mise/tasks/` directory is gone.
 
@@ -187,6 +187,7 @@ mise chat                           # Gradio chat (primary UI; started by `mise 
 mise lint                           # ruff check src scripts tests (alias li) — run after editing code; CI also gates `ruff format --check`, so run `mise format` too
 mise lint-ts                        # TypeScript parse gate for scripts/*.mjs (alias tsl; needs `mise ts-deps` once)
 mise format                         # ruff format + safe autofix (alias fo)
+mise lint-all                       # all local linters: ruff, format-check, yaml, shell, markdown-advisory (alias la)
 uv run pytest                       # offline test suite
 mise drift                          # check docs/skills against the repo (alias dc)
 mise compliance                     # TOS/CoC hard-line scan (alias comp) — also step 1 of mise test
@@ -426,6 +427,24 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
   live solely in `ruff.toml`; the per-file-ignores there (scripts: unused
   unpack/vars; tests: unused unpack) are deliberate. New rule
   ⇒ fix all findings in the same commit.
+
+## Linting
+
+Before committing, lint every file type you changed and fix what the linter
+reports — catch it locally, not in CI. Run `mise lint-all` (alias `la`) to
+check everything at once.
+
+| File type | Linter | Run |
+| --------- | ------ | --- |
+| Python (`.py`) | ruff (check + format) | `mise lint` + `mise format` |
+| YAML (`.github/*.yml`) | yamllint (config `.yamllint`) | `yamllint .github` |
+| Shell (`.githooks/pre-push`) | shellcheck | `shellcheck .githooks/pre-push` |
+| Markdown (docs/skills) | markdownlint-cli2, advisory (config `.markdownlint.jsonc`) | `mise lint-all` reports, does not fail |
+| Workflows | jactionlint + zizmor + pinact | validators in CI; run locally before workflow edits |
+| TypeScript (`scripts/*.mjs`) | repo `check_ts.mjs` gate | `mise lint-ts` |
+
+Optional extras available but not installed: none — the primaries cover every
+file type this repo ships.
 - **TypeScript gate** (same `tests/test_lint.py` / L8 layer): every JS/TS file
   the repo ships must parse — `scripts/*.mjs`, covered by the gate itself.
   `mise lint-ts` (`node scripts/check_ts.mjs`) exits 1 on any diagnostic.

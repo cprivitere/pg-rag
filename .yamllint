@@ -1,0 +1,14 @@
+extends: default
+
+rules:
+  # Workflows use `on:` / `off`-style truthy keys by GitHub design.
+  truthy:
+    allowed-values: ["true", "false", "on"]
+  # SHA pins + version comments run long; readability over 80 cols here.
+  line-length:
+    max: 120
+  # Single `# comment` style is used deliberately on `uses:` pin lines.
+  comments:
+    min-spaces-from-content: 1
+  # No `---` document start in this repo's YAML.
+  document-start: disable
