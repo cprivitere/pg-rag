@@ -76,7 +76,10 @@ def test_truncated_generation_is_reasked_not_returned(tiny_store, monkeypatch):
             }
         return {
             "choices": [
-                {"message": {"role": "assistant", "content": "complete answer"}, "finish_reason": "stop"}
+                {
+                    "message": {"role": "assistant", "content": "complete answer"},
+                    "finish_reason": "stop",
+                }
             ]
         }
 
@@ -222,7 +225,9 @@ def test_malformed_native_tool_call_falls_back_to_text_protocol(tiny_store, monk
                     }
                 ]
             }
-        return {"choices": [{"message": {"role": "assistant", "content": "It is the Empty Bottle."}}]}
+        return {
+            "choices": [{"message": {"role": "assistant", "content": "It is the Empty Bottle."}}]
+        }
 
     monkeypatch.setattr(loop, "_post", fake)
     result = loop.run_loop("items?", store_path=str(tiny_store))
@@ -258,7 +263,9 @@ def test_malformed_tool_call_on_final_no_tools_turn_is_retried(tiny_store, monke
             }
         if any("malformed JSON" in (m.get("content") or "") for m in messages):
             return {
-                "choices": [{"message": {"role": "assistant", "content": "It is the Empty Bottle."}}]
+                "choices": [
+                    {"message": {"role": "assistant", "content": "It is the Empty Bottle."}}
+                ]
             }
         raise loop.LLMServerError(
             "LLM server at http://x returned HTTP 500: "
@@ -284,7 +291,9 @@ def test_repeated_malformed_tool_call_forces_final_answer(tiny_store, monkeypatc
         calls.append((tools, messages[0].get("content")))
         if messages[0].get("content") == loop._FINAL_SYSTEM:
             return {
-                "choices": [{"message": {"role": "assistant", "content": "It is the Empty Bottle."}}]
+                "choices": [
+                    {"message": {"role": "assistant", "content": "It is the Empty Bottle."}}
+                ]
             }
         raise loop.LLMServerError(
             "LLM server at http://x returned HTTP 500: "

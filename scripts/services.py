@@ -54,6 +54,7 @@ _CREATE_FLAGS = (
     subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 )
 
+
 def _hidden_startupinfo() -> subprocess.STARTUPINFO | None:
     if os.name != "nt":
         return None
@@ -61,6 +62,7 @@ def _hidden_startupinfo() -> subprocess.STARTUPINFO | None:
     si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     si.wShowWindow = subprocess.SW_HIDE
     return si
+
 
 # key -> service spec: `label` is echoed by `status` verbatim; `process` is the
 # image name the recorded pid must still carry before `stop` will signal it, and

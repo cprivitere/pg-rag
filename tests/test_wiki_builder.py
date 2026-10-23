@@ -559,9 +559,7 @@ def test_favor_template_renders_tier():
     assert "favor tier Comfortable" in _rewrite_shell_templates(
         "At {{Favor|Comfortable}}, he reveals."
     )
-    assert "favor tier Neutral" in _rewrite_shell_templates(
-        "at '''{{favor|Neutral}}''' favor."
-    )
+    assert "favor tier Neutral" in _rewrite_shell_templates("at '''{{favor|Neutral}}''' favor.")
 
 
 def test_npc_training_rows_render_prices():
@@ -635,4 +633,3 @@ def test_entity_index_ignores_synthetic_keys():
     )
     assert "item_100" not in index
     assert "effect_1018" not in index
-

@@ -233,7 +233,9 @@ def build_wiki_grow_summaries(wiki):
             continue
         rows = []
         for m in _GROW_TABLE_RE.finditer(raw_text):
-            cells = [m.group(k).strip() for k in ("level", "time", "adequate", "verywell", "robust", "p")]
+            cells = [
+                m.group(k).strip() for k in ("level", "time", "adequate", "verywell", "robust", "p")
+            ]
             item = m.group("item").strip()
             if not item or not any(cells):
                 continue
@@ -244,7 +246,9 @@ def build_wiki_grow_summaries(wiki):
         lines = [f"{page_name} growing table (per item, wiki):"]
         for item, cells in rows:
             level, grow_time, adequate, verywell, robust, poor = cells
-            moon = f"; moon phases: robust in {robust}" + (f", poor in {poor}" if poor and poor != "-" else "")
+            moon = f"; moon phases: robust in {robust}" + (
+                f", poor in {poor}" if poor and poor != "-" else ""
+            )
             lines.append(
                 f"- {item}: {skill} level {level or 'N/A'}; grows in {grow_time or 'unknown'}; "
                 f"adequate substrate {adequate or 'unknown'}; very well in {verywell or 'unknown'}{moon}"

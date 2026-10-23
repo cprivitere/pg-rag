@@ -78,9 +78,10 @@ Each file:
   re-list it in `data/golden/FLAKY.txt` with fresh log evidence; do **not** "fix" a
   passing case by weakening its facts.
 
-## Running it (LLM only)
+## Running it (LLM only — goldens stay local, never in CI)
 
-Every mode needs **only the LLM at :8080** — no embedder, no reranker.
+Every mode needs **only the LLM at :8080** — no embedder, no reranker. Goldens
+stay local by decision and do not run in CI (they need LLM :8080).
 
 **Two gate modes, same commands** (details: `docs/LLM_MODEL_WIRING.md`):
 

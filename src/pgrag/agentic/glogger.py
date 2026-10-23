@@ -183,15 +183,13 @@ def _ensure_table(conn: sqlite3.Connection, table: str, cols: list[str]) -> None
     INSERT OR REPLACE is idempotent across watermark-race replays."""
     col_defs = ", ".join(f'"{c}"' for c in cols)
     if "id" in cols:
-        col_defs += ", PRIMARY KEY (\"id\")"
+        col_defs += ', PRIMARY KEY ("id")'
     conn.execute(f'CREATE TABLE IF NOT EXISTS "{table}" ({col_defs})')
 
 
 def _manifest() -> dict:
     try:
-        return (json.loads(MANIFEST_PATH.read_text(encoding="utf-8")) or {}).get(
-            "glogger", {}
-        )
+        return (json.loads(MANIFEST_PATH.read_text(encoding="utf-8")) or {}).get("glogger", {})
     except OSError:
         return {}
     except ValueError:
@@ -248,21 +246,14 @@ def ingest_glogger(
     return counts
 
 
-def _ingest_from_snapshot(
-    conn: sqlite3.Connection, sconn: sqlite3.Connection
-) -> dict[str, int]:
+def _ingest_from_snapshot(conn: sqlite3.Connection, sconn: sqlite3.Connection) -> dict[str, int]:
     """One sync pass. First run copies everything; later runs copy only NEW
     event rows (id > watermark) and re-copy snapshot/state tables only when
     the source advanced. A no-op rerun returns 0 for every table — idempotent
     per build_store's rerun-counts contract."""
     counts: dict[str, int] = {}
     per_table = _manifest()
-    src_tables = {
-        r[0]
-        for r in sconn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )
-    }
+    src_tables = {r[0] for r in sconn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
     def copy_rows(table: str, cols: list[str], rows) -> int:
         if not rows:
@@ -290,7 +281,7 @@ def _ingest_from_snapshot(
         refine = _refine_stall_row if table == "stall_events" else None
         wm = int(per_table.get(table, {}).get("wm") or 0)
         rows = sconn.execute(
-            f'SELECT {", ".join(chr(34) + c + chr(34) for c in cols)}'
+            f"SELECT {', '.join(chr(34) + c + chr(34) for c in cols)}"
             f' FROM "{table}" WHERE id > ? ORDER BY id',
             (wm,),
         ).fetchall()
@@ -319,7 +310,7 @@ def _ingest_from_snapshot(
         if _table_exists(conn, table):
             conn.execute(f'DELETE FROM "{table}"')
         rows = sconn.execute(
-            f'SELECT {", ".join(chr(34) + c + chr(34) for c in cols)}'
+            f"SELECT {', '.join(chr(34) + c + chr(34) for c in cols)}"
             f' FROM "{table}" WHERE snapshot_id = ?',
             (max_snapshot,),
         ).fetchall()
@@ -360,15 +351,15 @@ def glogger_indexes(conn: sqlite3.Connection) -> None:
     """Hot-path indexes for the tool loop's typical glogger queries. Only
     indexes tables that exist (an absent glogger install yields none)."""
     stmts = (
-        'CREATE INDEX IF NOT EXISTS idx_stall_action_item ON stall_events(action, item)',
-        'CREATE INDEX IF NOT EXISTS idx_stall_event_ts ON stall_events(event_timestamp)',
-        'CREATE INDEX IF NOT EXISTS idx_gift_npc ON game_state_gift_log(npc_key)',
-        'CREATE INDEX IF NOT EXISTS idx_gift_time ON game_state_gift_log(gifted_at)',
-        'CREATE INDEX IF NOT EXISTS idx_kills_enemy ON enemy_kills(enemy_name)',
-        'CREATE INDEX IF NOT EXISTS idx_kills_zone ON enemy_kills(zone)',
-        'CREATE INDEX IF NOT EXISTS idx_deaths_area ON character_deaths(area)',
-        'CREATE INDEX IF NOT EXISTS idx_tx_item ON item_transactions(item_name)',
-        'CREATE INDEX IF NOT EXISTS idx_tx_context ON item_transactions(context)',
+        "CREATE INDEX IF NOT EXISTS idx_stall_action_item ON stall_events(action, item)",
+        "CREATE INDEX IF NOT EXISTS idx_stall_event_ts ON stall_events(event_timestamp)",
+        "CREATE INDEX IF NOT EXISTS idx_gift_npc ON game_state_gift_log(npc_key)",
+        "CREATE INDEX IF NOT EXISTS idx_gift_time ON game_state_gift_log(gifted_at)",
+        "CREATE INDEX IF NOT EXISTS idx_kills_enemy ON enemy_kills(enemy_name)",
+        "CREATE INDEX IF NOT EXISTS idx_kills_zone ON enemy_kills(zone)",
+        "CREATE INDEX IF NOT EXISTS idx_deaths_area ON character_deaths(area)",
+        "CREATE INDEX IF NOT EXISTS idx_tx_item ON item_transactions(item_name)",
+        "CREATE INDEX IF NOT EXISTS idx_tx_context ON item_transactions(context)",
     )
     for stmt in stmts:
         table = stmt.split(" ON ")[1].split("(")[0].strip()

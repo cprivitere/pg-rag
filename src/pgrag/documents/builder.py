@@ -1345,9 +1345,9 @@ def _prepend_barter_options(documents, db):
         return
 
     by_id = {}
-    rows_by_name = {}       # NPC display name -> [(table_id, row text)]
+    rows_by_name = {}  # NPC display name -> [(table_id, row text)]
     coverage_by_table = {}  # table_id -> coverage text
-    entity_docs = {}        # item entity id (== sources_items key) -> [doc, ...]
+    entity_docs = {}  # item entity id (== sources_items key) -> [doc, ...]
     for doc in documents:
         by_id.setdefault(doc.get("id"), doc)
         meta = doc.get("metadata") or {}
@@ -1382,7 +1382,7 @@ def _prepend_barter_options(documents, db):
         if not item_name:
             continue
         pattern = re.compile(r"\b" + re.escape(item_name.lower()) + r"\b")
-        groups = []          # one line-group per qualifying NPC barter table
+        groups = []  # one line-group per qualifying NPC barter table
         seen_tables = set()
         for entry in source_data.get("entries") or []:
             if not isinstance(entry, dict):
@@ -1400,9 +1400,7 @@ def _prepend_barter_options(documents, db):
                 for tid, text in rows_by_name.get(npc_name, []):
                     if tid != table_id:
                         continue
-                    cells = [
-                        c.strip() for c in text.split("table row:", 1)[-1].split("|")
-                    ]
+                    cells = [c.strip() for c in text.split("table row:", 1)[-1].split("|")]
                     # Reward-cell evidence: the table qualifies only when this
                     # item is what the NPC GIVES (last cell) — a table that
                     # merely lists it as an ingredient must not be appended.

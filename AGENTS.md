@@ -184,7 +184,7 @@ mise golden-one fireball-ability    # rerun named golden case(s) fast (alias go;
 mise golden-type recipe             # golden subset by type (entity|recipe|comparison|general; alias gt)
 mise golden-flaky / golden-flaky-list # focus on historically-troublesome cases / audit stats
 mise chat                           # Gradio chat (primary UI; started by `mise start`; refreshes the store first; needs only LLM up)
-mise lint                           # ruff check src scripts tests (alias li) — run after editing code
+mise lint                           # ruff check src scripts tests (alias li) — run after editing code; CI also gates `ruff format --check`, so run `mise format` too
 mise lint-ts                        # TypeScript parse gate for scripts/*.mjs (alias tsl; needs `mise ts-deps` once)
 mise format                         # ruff format + safe autofix (alias fo)
 uv run pytest                       # offline test suite
@@ -241,10 +241,11 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
 - **Close-out needs the suite green on the frozen SHA.** A pass closes the review
   when it returns 0 critical, 0 high and 0 fix-now mediums in the changed code
   **and** the runner's suite verdict is green on that revision — the numeric rule
-  alone would close a pass whose suite never ran on the frozen revision. There is
-  no CI here, so a red suite is a **blocked** pass, not a finding. Everything else
+  alone would close a pass whose suite never ran on the frozen revision. CI
+  (`.github/workflows/ci.yml`) runs the same gates on push/PR, but never on the
+  frozen SHA and never the goldens, so a red suite is still a **blocked** pass,
+  not a finding. Everything else
   is backlog, i.e. ordinary work; at most one further verification-only pass is
-  allowed (verify the fixes, no new scope).
 - **Fan out by risk tier, at most 8 concurrent agents.** Changed *logic* (deep,
   and allowed to run code paths — both highs of the third pass came from an agent
   executing the path rather than reading it), wiring/config (`mise.toml`, hooks,
@@ -343,7 +344,8 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
   CLI (cache `F:\AI\models\hub\`; GGUF via `-hf org/repo:quant`). Node (mise
   `[tools]`, with `npm`) exists for one thing: the script-class JS gate
   (`mise lint-ts`, parser from `mise ts-deps`) — the repo ships no JavaScript
-  beyond `scripts/*.mjs`.
+  beyond `scripts/*.mjs`. `[tools]` also pins the workflow/shell validators
+  (`jactionlint`, `shellcheck`, `zizmor`, `pinact`).
 - **Local services** (running on Windows host):
   | svc | port | model / note |
   |-----|------|--------------|
@@ -418,8 +420,9 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
   didn't legitimately change, the failure is a source regression: fix the source, not the test.
 - **Lint gate** (`tests/test_lint.py`, layer L8 in `docs/TEST_CONTRACTS.md`):
   `uv run ruff check src scripts tests` must be clean — a failing check fails
-  `uv run pytest`. Run `mise lint` after editing code (`mise format` applies the
-  safe autofixes: import sort, unused imports, f-strings, formatting). Rules
+  `uv run pytest`. CI `checks` additionally gates `ruff format --check`, which
+  `mise lint` does not run — run `mise lint` after editing code, then `mise format`
+  (write) to satisfy the format gate. Rules
   live solely in `ruff.toml`; the per-file-ignores there (scripts: unused
   unpack/vars; tests: unused unpack) are deliberate. New rule
   ⇒ fix all findings in the same commit.
@@ -436,9 +439,9 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
   the working tree clean, cover every documented tree (including its two
   self-exclusions), report a planted violation in each family, and warn loudly
   when skipped. `mise compliance` (alias `comp`) runs it standalone, `mise test`
-  runs it before pytest, and `.githooks/pre-push` runs it on a provisioned
+  runs it before pytest, `.githooks/pre-push` runs it on a provisioned
   checkout (`core.hooksPath=.githooks` is local config — a fresh clone re-sets
-  it). There is no CI.
+  it), and CI `checks` runs it on every push to `main`/PR.
 - **Key suites** (from `tests/`): `test_documents.py` (doc shape),
   `test_chunking.py`, `test_llm.py`/`test_connectivity.py` (LLM client SSE +
   server errors), `test_agentic_tools.py`/`test_agentic_loop.py` (the five

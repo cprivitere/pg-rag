@@ -283,7 +283,6 @@ def test_wiki_page_for_nameless_skill_gets_entity_metadata():
         assert doc["metadata"]["entity_type"] == "skill"
 
 
-
 # --- Invariants ---
 
 

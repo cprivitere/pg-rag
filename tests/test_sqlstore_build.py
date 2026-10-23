@@ -18,7 +18,6 @@ def _isolated_wiki_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(wiki_builder, "CACHE_FILE", tmp_path / "wiki_parsed.json")
 
 
-
 @pytest.fixture()
 def store(tmp_path):
     cdn = tmp_path / "cdn"
@@ -222,8 +221,9 @@ def test_store_rerun_idempotent(store):
         assert conn.execute("SELECT count(*) FROM records").fetchone()[0] == 1
         assert conn.execute("SELECT count(*) FROM entity_names").fetchone()[0] > 0
         assert conn.execute("SELECT count(*) FROM documents").fetchone()[0] > 0
-        assert conn.execute("SELECT count(*) FROM documents_fts").fetchone()[0] == (
-            conn.execute("SELECT count(*) FROM documents").fetchone()[0]
+        assert (
+            conn.execute("SELECT count(*) FROM documents_fts").fetchone()[0]
+            == (conn.execute("SELECT count(*) FROM documents").fetchone()[0])
         )
     finally:
         conn.close()
@@ -251,6 +251,7 @@ def test_store_entity_names_fts(store):
     finally:
         conn.close()
 
+
 def test_store_documents_fts(store):
     """Contract: `build_store` runs the document builders in-process — every
     doc lands in `documents` stamped with `DOCUMENTS_VERSION` and is
@@ -277,7 +278,9 @@ def test_store_documents_fts(store):
             "WHERE documents_fts MATCH '\"butter\"*' ORDER BY bm25(documents_fts) LIMIT 5"
         ).fetchall()
         assert rows, "no FTS hits for a term the fixture documents hold"
-        assert conn.execute("SELECT count(*) FROM documents_fts").fetchone()[0] == counts["documents"]
+        assert (
+            conn.execute("SELECT count(*) FROM documents_fts").fetchone()[0] == counts["documents"]
+        )
     finally:
         conn.close()
     # ranking + query shaping go through the tool, not raw SQL

@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Manual re-run from the Actions tab (read-only; runs the same checks).
+  workflow_dispatch:
+
+# Token starts with nothing; each job grants only what it uses.
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint and static gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv with Python
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.15"
+          enable-cache: true
+
+      - name: Set up Node for TS gate
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install TS parser
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+
+      - name: Ruff check
+        run: |
+          set -euo pipefail
+          uv run ruff check src scripts tests
+
+      - name: Ruff format check
+        run: |
+          set -euo pipefail
+          uv run ruff format --check src scripts tests
+
+      - name: Drift check
+        run: |
+          set -euo pipefail
+          uv run python scripts/check_docs.py
+
+      - name: Compliance scan
+        run: |
+          set -euo pipefail
+          uv run python scripts/check_constraints.py
+
+  test:
+    name: Pytest offline suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: checks
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv with Python
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: "3.15"
+          enable-cache: true
+
+      - name: Set up Node for TS gate
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install TS parser
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+
+      - name: Run pytest
+        run: |
+          set -euo pipefail
+          uv run -m pytest tests/
+  poutine:
+    name: Poutine pipeline scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: checks
+    permissions:
+      contents: read
+      security-events: write # upload-sarif posts the findings
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Poutine scan
+        uses: boostsecurityio/poutine-action@e240ebd3eff8b2db5a8e5f6b28f58739d7db2247 # v1.1.4
+
+      - name: Upload poutine SARIF
+        uses: github/codeql-action/upload-sarif@9f759ee644a3e7c15c1390abf49868036c00067b # v3.38.3
+        with:
+          sarif_file: results.sarif

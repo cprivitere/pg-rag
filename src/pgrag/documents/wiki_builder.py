@@ -237,7 +237,9 @@ def _render_training_row(name: str, args: list[str]) -> str:
             key, value = arg.split("=", 1)
             kv[key.strip()] = value.strip()
     kind = "unlock" if "unlock" in name.lower() else "teaches"
-    what = re.sub(r"\s+", " ", (kv.get("item") or kv.get("ability") or "").replace("{{pipe}}", ": ")).strip()
+    what = re.sub(
+        r"\s+", " ", (kv.get("item") or kv.get("ability") or "").replace("{{pipe}}", ": ")
+    ).strip()
     bits = [what] if what else []
     for key, label in (("skilllevel", "skill level"), ("cost", "cost"), ("favor", "favor")):
         value = kv.get(key, "").strip()
@@ -273,7 +275,9 @@ def _rewrite_training_templates(text: str) -> str:
         if end == -1:
             return text  # unbalanced; leave for the hygiene guards
         name, _, rest = text[start + 2 : end - 2].partition("|")
-        rendered = _render_training_row(re.sub(r"\s+", " ", name).strip(), _split_top_args("|" + rest))
+        rendered = _render_training_row(
+            re.sub(r"\s+", " ", name).strip(), _split_top_args("|" + rest)
+        )
         text = text[:start] + rendered + text[end:]
 
 
@@ -469,9 +473,7 @@ def _parse_page_by_headings(page_name, raw_text, metadata, seen_ids):
                 .strip()
             )
             if not h_clean:
-                h_clean = (
-                    m.group(2).strip().replace("{", "").replace("}", "").strip()
-                )
+                h_clean = m.group(2).strip().replace("{", "").replace("}", "").strip()
             h_clean = h_clean.split("|", 1)[-1].strip()
             pieces.append((h_clean, raw_text[m.start() : end]))
     else:

@@ -75,9 +75,7 @@ def case_ids(tier: str, ids_arg: str | None = None) -> list[str]:
     chosen = [i for i in SHORT_TIER_IDS if i in every] if tier == "short" else every
     if ids_arg:
         wanted = [s.strip() for s in ids_arg.split(",") if s.strip()]
-        chosen = [i for i in chosen if i in set(wanted)] or [
-            i for i in wanted if i in every
-        ]
+        chosen = [i for i in chosen if i in set(wanted)] or [i for i in wanted if i in every]
     return chosen
 
 

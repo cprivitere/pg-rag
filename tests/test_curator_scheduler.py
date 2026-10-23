@@ -65,6 +65,7 @@ def test_scheduler_store_rebuild_after_curator():
     store_idx = calls.index([sys.executable, "scripts/build_sqlstore.py"])
     assert curator_idx < store_idx, "curator must run before the store rebuild"
 
+
 def test_scheduler_curator_failure_skips_store_and_state():
     calls = []
 
@@ -105,4 +106,3 @@ def test_scheduler_store_failure_skips_state():
 
     assert calls == EXPECTED_CHAIN
     saved.assert_not_called()
-

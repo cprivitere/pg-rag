@@ -401,8 +401,7 @@ def main() -> int:
     if WIKI_TITLE_EXTRAS:
         all_titles.extend(WIKI_TITLE_EXTRAS)
         print(
-            f"[{_ts()}] Explicit titles ({len(WIKI_TITLE_EXTRAS)}): "
-            f"{', '.join(WIKI_TITLE_EXTRAS)}"
+            f"[{_ts()}] Explicit titles ({len(WIKI_TITLE_EXTRAS)}): {', '.join(WIKI_TITLE_EXTRAS)}"
         )
 
     unique_titles = list(dict.fromkeys(all_titles))

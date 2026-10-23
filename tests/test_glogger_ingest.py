@@ -234,20 +234,18 @@ def test_new_snapshot_recopies_state(tmp_path, src_db, manifests):
     c2 = sqlite3.connect(src_db)
     c2.execute('INSERT INTO character_snapshots VALUES (9, "Tester", "ts2")')
     c2.execute("INSERT INTO character_recipe_completions VALUES (2, 9, 'Wax', 7)")
-    c2.execute('INSERT INTO game_state_favor VALUES ("Tester", "D", "NPC_Y", "Y", 3, "Warm", "t2", "log")')
+    c2.execute(
+        'INSERT INTO game_state_favor VALUES ("Tester", "D", "NPC_Y", "Y", 3, "Warm", "t2", "log")'
+    )
     c2.commit()
     c2.close()
     counts = ingest_glogger(conn, src_db)
     # snapshot table re-copied for snapshot 9 only; state tables re-copied.
     assert counts["character_recipe_completions"] == 1
     assert counts["game_state_favor"] == 2
-    rows = conn.execute(
-        "SELECT recipe_key FROM character_recipe_completions"
-    ).fetchall()
+    rows = conn.execute("SELECT recipe_key FROM character_recipe_completions").fetchall()
     assert rows == [("Wax",)]
-    rows = conn.execute(
-        "SELECT npc_key FROM game_state_favor ORDER BY npc_key"
-    ).fetchall()
+    rows = conn.execute("SELECT npc_key FROM game_state_favor ORDER BY npc_key").fetchall()
     assert rows == [("NPC_X",), ("NPC_Y",)]
     conn.close()
 
@@ -276,12 +274,11 @@ def test_wal_files_copied(tmp_path, src_db, manifests):
 
 def test_indexes_skip_missing_tables(tmp_path, manifests):
     conn = sqlite3.connect(tmp_path / "s.db")
-    conn.execute("CREATE TABLE game_state_gift_log (id INTEGER PRIMARY KEY, npc_key TEXT, gifted_at TEXT)")
+    conn.execute(
+        "CREATE TABLE game_state_gift_log (id INTEGER PRIMARY KEY, npc_key TEXT, gifted_at TEXT)"
+    )
     glogger.glogger_indexes(conn)
-    names = {
-        r[0]
-        for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
-    }
+    names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     assert "idx_gift_npc" in names
     assert "idx_stall_action_item" not in names
     conn.close()

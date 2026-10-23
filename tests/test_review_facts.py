@@ -32,9 +32,7 @@ def _offline_sheet(monkeypatch):
     three repo gates (one of which spawns that same collection): both are stubbed,
     so no second pytest runs inside this one. The rows' own code is covered by the
     unit tests below, and the real numbers by `mise drift`."""
-    monkeypatch.setattr(
-        rf, "counts", lambda: {"collected": 568, "deselected": 78, "default": 490}
-    )
+    monkeypatch.setattr(rf, "counts", lambda: {"collected": 568, "deselected": 78, "default": 490})
     monkeypatch.setattr(rf, "GATE_COMMANDS", (("head", ("git", "rev-parse", "--short", "HEAD")),))
 
 

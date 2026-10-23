@@ -227,3 +227,7 @@ ruff = "latest"
 # and its copy is not on node's resolution path; two pins of one compiler would
 # also drift.
 node = "lts"
+jactionlint = "latest"
+shellcheck = "latest"
+zizmor = "latest"
+pinact = "latest"

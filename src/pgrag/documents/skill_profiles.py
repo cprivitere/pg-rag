@@ -227,9 +227,7 @@ def _received_synergy_lines(received, skills, skill_id):
     if not sources:
         return []
     lines = []
-    for source_key in sorted(
-        sources, key=lambda k: _skill_display_name(skills.get(k), k).lower()
-    ):
+    for source_key in sorted(sources, key=lambda k: _skill_display_name(skills.get(k), k).lower()):
         levels = ", ".join(str(level) for level in sorted(sources[source_key]))
         lines.append(f"- {_skill_display_name(skills.get(source_key), source_key)}: level {levels}")
     return ["Synergy Levels (bonus levels received from other skills):", *lines]

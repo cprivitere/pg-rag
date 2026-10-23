@@ -177,7 +177,8 @@ test (prove the source is fine) or recording a deliberate contract change
   (skip-if-exists, `--force`, `--compare`).
 - **Change ⇒** `uv run pytest tests/test_agentic_tools.py
   tests/test_agentic_loop.py tests/test_agentic_tune.py` (+ the file you
-  edited), then `mise lint`. A tool-behavior change also wants an end-to-end
+  edited), then `mise lint` plus format-clean (`mise format`). A tool-behavior
+  change also wants an end-to-end
   `mise agentic-chat` smoke (needs LLM :8080 only).
 - **Shared-function facet coverage** (read before editing the function): a
   single function is asserted across files, each testing a *different facet*;
@@ -217,7 +218,7 @@ test (prove the source is fine) or recording a deliberate contract change
 - **Change ⇒** `uv run pytest tests/test_sqlstore_build.py
   tests/test_session_ingest.py tests/test_glogger_ingest.py
   tests/test_preflight_sync.py` (+ the file you
-  edited), then `mise sql-store` and `mise lint`.
+  edited), then `mise sql-store` and `mise lint` plus format-clean.
 - **Fixture hazard**: the `build_store` defaults are LIVE sources (real game
   dir, real glogger DB) — a fixture that omits `session_dir=`/`glogger_db=`
   tmp paths ingests live data and races it.
@@ -299,7 +300,10 @@ test (prove the source is fine) or recording a deliberate contract change
   (ruff pinned there, not in runtime deps); for TypeScript: `mise.toml`
   `[tools] node` + `[tasks.lint-ts]/[tasks.ts-deps]`, `scripts/check_ts.mjs`,
   and `package.json` (the `typescript` devDependency, installed into gitignored
-  `node_modules/`)
+  `node_modules/`). CI runner: `.github/workflows/ci.yml` (`checks` job
+  enforces this layer: `ruff check`, `ruff format --check`, drift, compliance),
+  plus validator tools `mise.toml [tools]` (`jactionlint`, `shellcheck`,
+  `zizmor`, `pinact`).
 - **Contracts**: `uv run ruff check src scripts tests` returns 0 — any new
   finding in the linted trees fails `mise test`. `ruff.toml` `extend-exclude`
   (`data/`, caches) plus the per-file-ignores it carries (`scripts/**`:
@@ -316,8 +320,8 @@ test (prove the source is fine) or recording a deliberate contract change
   runtime dep of this repo).
 - **Change ⇒** `uv run pytest tests/test_lint.py -q`; adding a rule = clean the
   new findings in the same commit (never raise the gate then violate it
-  elsewhere). Format-only work is `mise format` — the gate does not check
-  formatting.
+  elsewhere). Format drift fails CI `checks` (`ruff format --check`); run
+  `mise format` before pushing. `mise drift` does not cover `.github/`.
 - This layer replaces **none**: it guards hygiene across all layers; the
   functional layers above remain the authority on behavior.
 
@@ -327,8 +331,8 @@ test (prove the source is fine) or recording a deliberate contract change
 - **Source**: `scripts/check_constraints.py` (the scanner + its four pattern
   categories and glob set); policy owner
   `docs/research/pg-rag-game-interaction-limits.md` (§2 patterns, §6 wiring, §7
-  change-control); runners `.githooks/pre-push` and `mise compliance` (which
-  `mise test` runs before pytest).
+  change-control); runners `.githooks/pre-push`, `mise compliance` (which
+  `mise test` runs before pytest), and CI `checks` (push-`main`/PR, ubuntu).
 - **Contracts**: the scanner is a **test gate, not just a push hook**, and four
   invariants are asserted offline: (1) the working tree scans clean — a
   prohibited pattern in `src`/`scripts`/`tests`/`docs`/`.agents` or the root

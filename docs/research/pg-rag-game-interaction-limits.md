@@ -116,18 +116,19 @@ the client, any automation of gameplay, decompilation of any kind.
 
 Runs on every push **on a provisioned checkout** via `.githooks/pre-push`
 (`core.hooksPath=.githooks` is *local* git config — a fresh clone must re-set
-it), from `mise compliance`, and inside the offline suite
-(`tests/test_constraints.py`, layer **L9** of `docs/TEST_CONTRACTS.md`);
-`mise test` runs the scan before pytest. The hook's tracked mode was `100644`,
+it), from `mise compliance`, inside the offline suite
+(`tests/test_constraints.py`, layer **L9** of `docs/TEST_CONTRACTS.md`),
+and on every push to `main`/PR via CI `checks`
+(`.github/workflows/ci.yml`, ubuntu) — an unprovisioned clone is gated by CI.
+The hook's tracked mode was `100644`,
 which made POSIX clones skip it — fixed 2026-10-13 with `git update-index
---chmod=+x .githooks/pre-push`. There is still **no CI**, so an unprovisioned
-clone with no `mise test` run is the one ungated path.
+--chmod=+x .githooks/pre-push`.
 In full-compliance mode the scanner's candidate set is exactly `ALL_GLOBS`:
 `src/**/*.py`, `scripts/**/*.py`, `tests/**/*.py` for the code-shaped
 categories, plus `docs/**/*.md`, `.agents/**/*.md`, root `*.md` and root
 `*.toml` (`mise.toml`/`pyproject.toml`/`ruff.toml`) for artifacts and
-wire-protocol names. `notebooks/`, `.omp/`, and any `*.ps1` file are
-outside the globs by construction.
+wire-protocol names. `notebooks/`, `.omp/`, `.github/`, and any `*.ps1` file
+are outside the globs by construction.
 
 Verified 2026-10-13, re-verified 2026-10-17 after the task/script audit
 deleted files: `compliance check: OK (99 files
