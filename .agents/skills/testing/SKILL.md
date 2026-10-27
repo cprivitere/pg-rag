@@ -60,7 +60,7 @@ sweep/compare, `test_golden_check.py` = the offline gate drives it via
 - Corpus change → `tests/test_agentic_tools.py` (`corpus_search` is FTS5 over
   the store's `documents`), then `mise sql-store`.
 - Tool-loop change → the L3 suite (`test_agentic_tools.py`,
-  `test_agentic_loop.py`, `test_agentic_tune.py`), then a `mise agentic-chat`
+  `test_agentic_loop.py`, `test_agentic_tune.py`), then a `mise chat`
   smoke (LLM only).
 - Store-ingestion change → L4 (`test_sqlstore_build.py`,
   `test_session_ingest.py`, `test_glogger_ingest.py`, `test_preflight_sync.py`),

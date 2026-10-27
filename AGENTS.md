@@ -164,12 +164,12 @@ corpus_search, player_state`.
 
 Python ≥3.15, managed with `uv`. `mise tasks` lists everything. The
 `mise.toml` `[tasks]` set is exactly: `test`, `sync-fast`, `sync-full`,
-`sync-wiki`, `sql-store`, `agentic-chat`, `agentic-tune`, `golden`,
+`sync-wiki`, `sql-store`, `chat`, `agentic-tune`, `golden`,
 `golden-short`, `golden-one`, `golden-type`, `golden-flaky`,
-`golden-flaky-list`, `debug-llm`, `debug-chat`, `llm-start`, `llm-stop`,
-`chat-start`, `chat-stop`, `start`, `stop`, `status`, `drift`,
+`golden-flaky-list`, `debug-llm`, `chatui`, `llm-start`, `llm-stop`,
+`chatui-start`, `chatui-stop`, `start`, `stop`, `status`, `drift`,
 `compliance`, `logs`, `tail-llm`, `lint`, `format`, `lint-all`. Service tasks
-(`llm-start`, `llm-stop`, `chat-start`, `chat-stop`) run
+(`llm-start`, `llm-stop`, `chatui-start`, `chatui-stop`) run
 `scripts/services.py`; the `.mise/tasks/` directory is gone.
 
 ```sh
@@ -178,13 +178,12 @@ uv run pgrag download-cdn           # fetch CDN json
 mise sync-fast / sync-full          # CDN (+wiki) → rebuild the store incl. generated corpus (aliases sy/syf)
 mise sync-wiki                      # converge wiki to current source, then rebuild the store (alias syw)
 mise sql-store (alias sq)           # build data/sqlite_gorgon.db: CDN + wiki + generated corpus + session + glogger
-mise agentic-chat (alias ac)        # agentic CLI chat over the store (tool loop; needs only LLM :8080; pre-chat session+glogger refresh runs automatically, --no-sync skips)
+mise chat (alias c)                  # agentic CLI chat over the store (tool loop; needs only LLM :8080; pre-chat session+glogger refresh runs automatically, --no-sync skips)
 mise golden                         # full golden eval through the loop (LLM only; LONG — batch it in the background)
 mise golden-short                   # the 8-case fast tier (alias gds)
 mise golden-one fireball-ability    # rerun named golden case(s) fast (alias go; comma-separate ids)
-mise golden-type recipe             # golden subset by type (entity|recipe|comparison|general; alias gt)
 mise golden-flaky / golden-flaky-list # focus on historically-troublesome cases / audit stats
-mise debug-chat                     # Gradio chat in foreground (debug; same app as chat-start, opens a browser tab; refreshes the store first; needs only LLM up)
+mise chatui                         # Gradio chat in foreground (debug; same app as chatui-start, opens a browser tab; refreshes the store first; needs only LLM up)
 mise lint                           # ruff check src scripts tests (alias li) — run after editing code; CI also gates `ruff format --check`, so run `mise format` too
 mise format                         # ruff format + safe autofix (alias fo)
 mise lint-all                       # all local linters: ruff, format-check, yaml, shell, markdown (alias la)
@@ -193,8 +192,8 @@ mise drift                          # check docs/skills against the repo (alias 
 mise compliance                     # TOS/CoC hard-line scan (alias comp) — also step 1 of mise test
 ```
 
-**Build/refresh needs no servers**; only Q&A/eval (`golden*`, `chat-start`/`debug-chat`,
-`agentic-chat`) need the LLM at :8080.
+**Build/refresh needs no servers**; only Q&A/eval (`golden*`, `chatui-start`/`chatui`,
+`chat`) need the LLM at :8080.
 
 ## Code review loop
 
@@ -350,10 +349,10 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
   | svc | port | model / note |
   |-----|------|--------------|
   | LLM | 8080 | `LLM_MODEL` (`[env]`; `LLM_FLAGS` carries launch tuning) — the one hard dependency; the tool loop answers through it. A running instance OOMs before start → `mise stop` first |
-  | Chat (Gradio) | 7860 | primary UI — part of `mise start` (`chat-start` service; `debug-chat` foreground); loop-driven, refreshes the store at startup, needs LLM :8080 |
+  | Chat (Gradio) | 7860 | primary UI — part of `mise start` (`chatui-start` service; `chatui` foreground); loop-driven, refreshes the store at startup, needs LLM :8080 |
 
   Service control is `scripts/services.py`: `mise llm-start`/`llm-stop`,
-  `chat-start`/`chat-stop`, `status`, `debug-llm`/`debug-chat`. The manager itself is
+  `chatui-start`/`chatui-stop`, `status`, `debug-llm`/`chatui`. The manager itself is
   cross-platform (the deleted `.mise/tasks/*.ps1` launchers were Windows-only)
   and every service task is a plain `uv run python …`, so the task set runs on
   POSIX too; only `logs`/`tail-llm`/`golden-type` pin `pwsh`. No-console

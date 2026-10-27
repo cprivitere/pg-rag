@@ -154,9 +154,9 @@ already handles adds no signal; every golden is a permanent acceptance gate.
 
 1. **Research** against the store (`data/sqlite_gorgon.db`) and corpus. Sync
    first when the user just played: `ingest_glogger`/`ingest_session` are
-   incremental (or run `mise agentic-chat`, whose preflight syncs).
+   incremental (or run `mise chat`, whose preflight syncs).
 2. **Answer from the oracle, labeled as oracle.** Ground every claim in a store table or corpus doc; label the answer as direct-store research, NOT loop output. Make NO claim about what the loop would do — not even "the loop handles this the same way". Note any fact you derived by hand (a JOIN, arithmetic, name-mapping) — that is exactly the part the model may fumble and the core of the gap measurement.
-3. **MUST run the loop before any loop verdict (blocking).** Ask the same question back through the loop (`mise agentic-chat`, or `run_loop` directly for a trace) and compare against your oracle answer — before deciding on a golden and before any statement about loop behavior. A golden is warranted ONLY when that run is lower quality than it should be: a fact missing, a wrong route, or an answer that needed manual SQL gymnastics the model will not repeat. If the loop answers as well as you did, stop — no golden. "No golden needed" without a run transcript is an inferred verdict — forbidden by the hard rule above.
+3. **MUST run the loop before any loop verdict (blocking).** Ask the same question back through the loop (`mise chat`, or `run_loop` directly for a trace) and compare against your oracle answer — before deciding on a golden and before any statement about loop behavior. A golden is warranted ONLY when that run is lower quality than it should be: a fact missing, a wrong route, or an answer that needed manual SQL gymnastics the model will not repeat. If the loop answers as well as you did, stop — no golden. "No golden needed" without a run transcript is an inferred verdict — forbidden by the hard rule above.
 4. **Ask the user before writing a golden.** Even when step 3 shows a gap, state
    the measured gap plus the proposed id and facts, and get an explicit yes.
 5. **Derive fact groups** from what you verified (grep the store /

@@ -55,7 +55,7 @@ reranker service, and no embedding server.
   `RULES.md #2`.
 - Corpus freshness: the store build runs the builders in-process and stamps
   every row with `DOCUMENTS_VERSION`; there is no staleness refusal.
-- Refresh picker: just played → the preflight auto-syncs (`mise agentic-chat`);
+- Refresh picker: just played → the preflight auto-syncs (`mise chat`);
   builder/loop/tool/doc changed → `mise sql-store`; CDN changed →
   `mise sync-fast`; wiki changed → `mise sync-wiki`. `mise sync-full` only on
   request (`RULES.md #1`).
