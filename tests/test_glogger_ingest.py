@@ -134,14 +134,14 @@ def test_new_event_rows_incremental(tmp_path, src_db, manifests):
     conn.close()
 
 
-def test_release_fallback_when_personal_absent(tmp_path, manifests, monkeypatch):
-    """contract: DEFAULT_GLOGGER_DB points at the Personal build; when it's
-    absent and no explicit path was passed, ingest falls back to the Release
-    install. An explicit missing path still no-ops (no surprise fallback)."""
-    personal = tmp_path / "personal"
+def test_personal_fallback_when_release_absent(tmp_path, manifests, monkeypatch):
+    """contract: DEFAULT_GLOGGER_DB points at the Release build; when it's
+    absent and no explicit path was passed, ingest falls back to the legacy
+    Personal install. An explicit missing path still no-ops (no surprise fallback)."""
     release = tmp_path / "release"
-    release.mkdir()
-    src_db = release / "glogger.db"
+    personal = tmp_path / "personal"
+    personal.mkdir()
+    src_db = personal / "glogger.db"
     c = sqlite3.connect(src_db)
     c.executescript(
         """
@@ -159,8 +159,8 @@ def test_release_fallback_when_personal_absent(tmp_path, manifests, monkeypatch)
     )
     c.commit()
     c.close()
-    monkeypatch.setattr(glogger, "DEFAULT_GLOGGER_DB", personal / "glogger.db")
-    monkeypatch.setattr(glogger, "RELEASE_GLOGGER_DB", src_db)
+    monkeypatch.setattr(glogger, "DEFAULT_GLOGGER_DB", release / "glogger.db")
+    monkeypatch.setattr(glogger, "PERSONAL_GLOGGER_DB", src_db)
 
     conn = _store(tmp_path)
     counts = ingest_glogger(conn)

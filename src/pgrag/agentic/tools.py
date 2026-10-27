@@ -769,8 +769,8 @@ _OTHER_STALL_HEADER = (
 def _other_stall_lines(conn: sqlite3.Connection, query: str, limit: int = 20) -> list[str]:
     """What YOU observed at OTHER players' stalls for ``query``.
 
-    glogger's Personal build keeps prices seen at other players' stalls in
-    ``stall_price_observations`` (v68 market intel: typed/OCR captures plus
+    glogger keeps prices seen at other players' stalls in
+    ``stall_price_observations`` (market intel: typed/OCR captures plus
     auto-detected purchases; ``price_unit`` 0 = price pending, ``owner_name``
     NULL = stall not identified). A priceless row still says that stall sells
     the item, so rows are reported as dated OBSERVATIONS — never mixed with the

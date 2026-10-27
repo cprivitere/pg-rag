@@ -91,8 +91,8 @@ corpus_search, player_state`.
   hand-mapped CDN tables, raw wiki pages, the generated corpus, live play-session data
   (`~/AppData/LocalLow/Elder Game/Project Gorgon`: ChatLogs, Player.log,
   Reports, Books), and glogger play-history (`src/pgrag/agentic/glogger.py`
-  reads `%APPDATA%/glogger.Personal/glogger.db` (the fork-local daily driver;
-  `glogger.Release` is the fallback) via a WAL-safe snapshot copy:
+  reads `%APPDATA%/glogger.Release/glogger.db` (the daily driver;
+  legacy `glogger.Personal` is the fallback) via a WAL-safe snapshot copy:
   stall sales, gift/favor deltas, kills/deaths, loot transactions, recipe
   completions, Words of Power, vendor gold — watermark-incremental in
   `data/sqlite_state.json` under `"glogger"`; glogger's own CDN mirrors are
@@ -310,8 +310,8 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
 - `src/pgrag/cli.py` — entry point; `config.py` — constants/paths.
 - `src/pgrag/agentic/glogger.py` — glogger play-history ingestion (WAL-safe
   snapshot copy → watermark-incremental mirror into the store;
-  `DEFAULT_GLOGGER_DB` = `%APPDATA%/glogger.Personal/glogger.db` (`RELEASE_GLOGGER_DB`
-  is the fallback) is what moves if
+  `DEFAULT_GLOGGER_DB` = `%APPDATA%/glogger.Release/glogger.db` (legacy
+  `PERSONAL_GLOGGER_DB` is the fallback) is what moves if
   glogger relocates).
 - `scripts/rag_chat.py` — Gradio chat over the tool loop (port 7860).
 - `scripts/curator.py` + `curator_scheduler.py` — heuristic (non-LLM) curation:

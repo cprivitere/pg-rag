@@ -159,7 +159,7 @@
 
 - Track pricing of items in player stalls and player work orders
   - **DONE 2026-10-15 — Other players' stalls are a live store surface.**
-    glogger's Personal-build `stall_price_observations` (v68 market intel,
+    glogger's `stall_price_observations` (market intel,
     `price_unit 0` = price pending) was mirrored but read by nothing, and both
     the tool banner and the loop's schema note told the model "this store has no
     other players' stalls" — a false claim. Now: `player_state section=stall`

@@ -492,7 +492,7 @@ def test_player_state_stall_sales_individual_prices(store):
 
 def test_player_state_stall_other_players_observations(store):
     """contract: section=stall surfaces glogger's OTHER-players'-stall intel
-    (`stall_price_observations`, Personal-build v68 market intel) as dated,
+    (`stall_price_observations`, market intel) as dated,
     clearly-labeled observations — another player's stall, never one of the
     player's own sales, and 'price not recorded (pending)' when glogger has no
     price yet (price_unit 0 sentinel). Before this contract the store had no

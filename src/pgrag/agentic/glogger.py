@@ -31,11 +31,11 @@ from pathlib import Path
 
 from pgrag.agentic.store import MANIFEST_PATH
 
-# The user's daily driver is the fork-local PERSONAL build (glogger.Personal
-# appdata, schema v68 with stall_price_observations + richer game_state
-# tables). The Release install stays as fallback for fresh-copy resync.
-DEFAULT_GLOGGER_DB = Path.home() / "AppData" / "Roaming" / "glogger.Personal" / "glogger.db"
-RELEASE_GLOGGER_DB = Path.home() / "AppData" / "Roaming" / "glogger.Release" / "glogger.db"
+# The user's daily driver is the RELEASE build (glogger.Release appdata).
+# A legacy Personal install (glogger.Personal, the old fork-local build) stays
+# as fallback so the store never silently loses the glogger source.
+DEFAULT_GLOGGER_DB = Path.home() / "AppData" / "Roaming" / "glogger.Release" / "glogger.db"
+PERSONAL_GLOGGER_DB = Path.home() / "AppData" / "Roaming" / "glogger.Personal" / "glogger.db"
 
 # id-keyed event-log tables: copied incrementally by id > watermark.
 # (source table, our PK is the source's id) — column sets are identical to
@@ -63,7 +63,7 @@ _SNAPSHOT_TABLES = (
 )
 
 # Live game-state tables glogger upserts in place (no history): full re-copy.
-# game_state_inventory/equipment/mount are Personal-build v68 additions
+# game_state_inventory/equipment/mount are v68 additions in the Release build
 # (live bag state, paper-doll appearance, mounted flag) — same upsert regime.
 _STATE_TABLES = (
     "game_state_favor",
@@ -74,8 +74,7 @@ _STATE_TABLES = (
     "game_state_mount",
 )
 
-# Small append-only oddballs without clean ids: full refresh is cheapest.
-# stall_price_observations: Personal-build v68 market-intel table — prices
+# stall_price_observations: market-intel table (v68+) — prices
 # observed at OTHER players' stalls (typed/OCR captures + auto-detected
 # purchases; 0 sentinel = price pending). Append-only, no watermark id.
 _FULL_TABLES = ("gourmand_eaten_foods", "stall_price_observations")
@@ -187,6 +186,20 @@ def _ensure_table(conn: sqlite3.Connection, table: str, cols: list[str]) -> None
     conn.execute(f'CREATE TABLE IF NOT EXISTS "{table}" ({col_defs})')
 
 
+def _ensure_mirrored(conn: sqlite3.Connection, table: str, cols: list[str]) -> None:
+    """Ensure the store table matches the source columns, rebuilding on drift.
+
+    glogger owns the schema and adds columns over time; a CREATE-IF-NOT-EXISTS
+    mirror keeps the stale shape forever and the next INSERT fails with "no
+    column named". Compare PRAGMA column lists and DROP + recreate on mismatch
+    (callers re-copy the full table contents right after)."""
+    if _table_exists(conn, table):
+        have = _columns(conn, table)
+        if have != list(cols):
+            conn.execute(f'DROP TABLE "{table}"')
+    _ensure_table(conn, table, cols)
+
+
 def _manifest() -> dict:
     try:
         return (json.loads(MANIFEST_PATH.read_text(encoding="utf-8")) or {}).get("glogger", {})
@@ -224,10 +237,10 @@ def ingest_glogger(
     snapshot and state tables propagate deletions on their next re-copy.
     """
     src = Path(glogger_db or DEFAULT_GLOGGER_DB)
-    if not src.exists() and glogger_db is None and RELEASE_GLOGGER_DB.exists():
-        # Personal build uninstalled/absent — fall back to the Release
-        # install so the store never silently loses the glogger source.
-        src = RELEASE_GLOGGER_DB
+    if not src.exists() and glogger_db is None and PERSONAL_GLOGGER_DB.exists():
+        # Release build absent — fall back to the legacy Personal install
+        # so the store never silently loses the glogger source.
+        src = PERSONAL_GLOGGER_DB
     if not src.exists():
         print(f"glogger DB not found at {src}; skipping glogger tables.")
         return {}
@@ -256,9 +269,9 @@ def _ingest_from_snapshot(conn: sqlite3.Connection, sconn: sqlite3.Connection) -
     src_tables = {r[0] for r in sconn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
     def copy_rows(table: str, cols: list[str], rows) -> int:
+        _ensure_mirrored(conn, table, cols)
         if not rows:
             return 0
-        _ensure_table(conn, table, cols)
         placeholders = ", ".join("?" for _ in cols)
         col_list = ", ".join(f'"{c}"' for c in cols)
         conn.executemany(
@@ -304,10 +317,11 @@ def _ingest_from_snapshot(conn: sqlite3.Connection, sconn: sqlite3.Connection) -
         cols = _columns(sconn, table)
         prev_snap = int(per_table.get(table, {}).get("max_snapshot") or 0)
         if prev_snap == max_snapshot:
-            _ensure_table(conn, table, cols)
+            _ensure_mirrored(conn, table, cols)
             counts[table] = 0
             continue
         if _table_exists(conn, table):
+            _ensure_mirrored(conn, table, cols)
             conn.execute(f'DELETE FROM "{table}"')
         rows = sconn.execute(
             f"SELECT {', '.join(chr(34) + c + chr(34) for c in cols)}"
@@ -328,10 +342,11 @@ def _ingest_from_snapshot(conn: sqlite3.Connection, sconn: sqlite3.Connection) -
             continue
         cols = _columns(sconn, table)
         if prev_state_snap == max_snapshot:
-            _ensure_table(conn, table, cols)
+            _ensure_mirrored(conn, table, cols)
             counts[table] = 0
             continue
         if _table_exists(conn, table):
+            _ensure_mirrored(conn, table, cols)
             conn.execute(f'DELETE FROM "{table}"')
         rows = sconn.execute(
             f'SELECT {", ".join(chr(34) + c + chr(34) for c in cols)} FROM "{table}"'
