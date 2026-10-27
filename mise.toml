@@ -131,9 +131,10 @@ alias = "xl"
 
 # --- Gradio chat ---
 
-[tasks.chat]
-description = "Run Gradio chat UI (refreshes the store at startup; requires the LLM service up). Port 7860"
+[tasks."debug-chat"]
+description = "Run Gradio chat UI in foreground (debug; same app as chat-start, refreshes the store at startup, opens a browser tab). Port 7860"
 run = "uv run --with gradio python scripts/rag_chat.py"
+alias = "dsc"
 
 [tasks."chat-start"]
 description = "Start Gradio chat on :7860 with logging (primary chat UI; refreshes the store at startup)"

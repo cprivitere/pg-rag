@@ -14,7 +14,7 @@ reranker) was deleted; there is no vector store or reranker service.
 ## Chat
 
 The product is the local agentic method: `mise agentic-chat` (CLI) and
-`mise chat` (Gradio UI, part of `mise start`), both driving the production
+`mise chat-start` (Gradio UI, part of `mise start`; `debug-chat` for foreground), both driving the production
 `run_loop` over the local SQLite store through the local LLM. (The molab-hosted
 marimo notebook was retired — old-style delivery.)
 

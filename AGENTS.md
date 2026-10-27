@@ -165,7 +165,7 @@ Python ≥3.15, managed with `uv`. `mise tasks` lists everything. The
 `mise.toml` `[tasks]` set is exactly: `test`, `sync-fast`, `sync-full`,
 `sync-wiki`, `sql-store`, `agentic-chat`, `agentic-tune`, `golden`,
 `golden-short`, `golden-one`, `golden-type`, `golden-flaky`,
-`golden-flaky-list`, `debug-llm`, `chat`, `llm-start`, `llm-stop`,
+`golden-flaky-list`, `debug-llm`, `debug-chat`, `llm-start`, `llm-stop`,
 `chat-start`, `chat-stop`, `start`, `stop`, `status`, `drift`,
 `compliance`, `logs`, `tail-llm`, `lint-ts`, `ts-deps`, `lint`, `format`, `lint-all`. Service tasks
 (`llm-start`, `llm-stop`, `chat-start`, `chat-stop`) run
@@ -183,7 +183,7 @@ mise golden-short                   # the 8-case fast tier (alias gds)
 mise golden-one fireball-ability    # rerun named golden case(s) fast (alias go; comma-separate ids)
 mise golden-type recipe             # golden subset by type (entity|recipe|comparison|general; alias gt)
 mise golden-flaky / golden-flaky-list # focus on historically-troublesome cases / audit stats
-mise chat                           # Gradio chat (primary UI; started by `mise start`; refreshes the store first; needs only LLM up)
+mise debug-chat                     # Gradio chat in foreground (debug; same app as chat-start, opens a browser tab; refreshes the store first; needs only LLM up)
 mise lint                           # ruff check src scripts tests (alias li) — run after editing code; CI also gates `ruff format --check`, so run `mise format` too
 mise lint-ts                        # TypeScript parse gate for scripts/*.mjs (alias tsl; needs `mise ts-deps` once)
 mise format                         # ruff format + safe autofix (alias fo)
@@ -193,7 +193,7 @@ mise drift                          # check docs/skills against the repo (alias 
 mise compliance                     # TOS/CoC hard-line scan (alias comp) — also step 1 of mise test
 ```
 
-**Build/refresh needs no servers**; only Q&A/eval (`golden*`, `chat`,
+**Build/refresh needs no servers**; only Q&A/eval (`golden*`, `chat-start`/`debug-chat`,
 `agentic-chat`) need the LLM at :8080.
 
 ## Code review loop
@@ -351,10 +351,10 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
   | svc | port | model / note |
   |-----|------|--------------|
   | LLM | 8080 | `LLM_MODEL` (`[env]`; `LLM_FLAGS` carries launch tuning) — the one hard dependency; the tool loop answers through it. A running instance OOMs before start → `mise stop` first |
-  | Chat (Gradio) | 7860 | primary UI — part of `mise start`; `mise chat` foreground; loop-driven, refreshes the store at startup, needs LLM :8080 |
+  | Chat (Gradio) | 7860 | primary UI — part of `mise start` (`chat-start` service; `debug-chat` foreground); loop-driven, refreshes the store at startup, needs LLM :8080 |
 
   Service control is `scripts/services.py`: `mise llm-start`/`llm-stop`,
-  `chat-start`/`chat-stop`, `status`, `debug-llm`. The manager itself is
+  `chat-start`/`chat-stop`, `status`, `debug-llm`/`debug-chat`. The manager itself is
   cross-platform (the deleted `.mise/tasks/*.ps1` launchers were Windows-only)
   and every service task is a plain `uv run python …`, so the task set runs on
   POSIX too; only `logs`/`tail-llm`/`golden-type` pin `pwsh`. No-console
