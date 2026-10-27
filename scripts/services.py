@@ -36,7 +36,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 LOG_DIR = Path(os.environ.get("LOGS_DIR", "").strip() or (REPO_ROOT / "logs"))
 LLM_PORT = 8080
 CHAT_PORT = 7860
-START_GRACE_S = 5.0  # accept-connection wait after a spawn
+# accept-connection wait after a spawn. The poll exits early on success, so a
+# longer grace only costs time when a port never opens. 5s was too short for
+# Windows chat: uv spawn + Gradio import + the pre-bind session/glogger
+# refresh (tens of thousands of rows) routinely exceeds it, misreporting a
+# healthy startup as "still loading".
+START_GRACE_S = 30.0
 PORT_PROBE_TIMEOUT = 0.5
 STOP_GRACE_S = 10.0  # SIGTERM -> SIGKILL grace on POSIX
 _CHILD_TIMEOUT_S = 10.0  # a wedged probe must not hang start/stop/status
