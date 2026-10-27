@@ -228,11 +228,10 @@ alias = "la"
 
 [tools]
 python = "3.15"
-ruff = "latest"
 # Runtime for the `scripts/*.mjs` TypeScript gate (`mise run lint-ts`), pinned here
-# like python/ruff. The parser is a *library* the check imports (typescript +
+# like python. The parser is a *library* the check imports (typescript +
 # @types/node), so it lives in package.json/package-lock.json installed by
-# `mise run ts-deps` — the same split as python/ruff (mise tools) vs pyproject
+# `mise run ts-deps` — the same split as python (mise tools) vs pyproject
 # (libraries). mise's own `npm:` backend is for CLIs and says so: it shims
 # executables and warns "add a library to your project's package.json instead",
 # and its copy is not on node's resolution path; two pins of one compiler would
