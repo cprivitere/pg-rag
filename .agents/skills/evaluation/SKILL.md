@@ -36,12 +36,12 @@ Each file:
 - `store: true` marks a case whose facts live in the SQLite store (glogger play
   history). The loop reads the store, so it runs through the same path — there
   is no separate store-only harness anymore.
-- 64 files exist today (22 entity / 30 general / 7 recipe / 5 comparison),
+- 65 files exist today (22 entity / 30 general / 8 recipe / 5 comparison),
   spanning recipes-by-ingredient, level-gated crafting, item acquisition/drops,
   ability lookups, comparisons, quest requirements, wiki lore, wiki how-to
   assembly, and player-state audits. 10 store-only cases (player facts,
   `"store": true`). Future additions should favor the thin buckets (comparison
-  is 5/64 today).
+  is 5/65 today).
 - **Question-shape rule (learned the hard way, 2026-10-11):** every dimension a
   case's facts check must be asked for by its question. A question that asks
   "where" while its facts also demand loot level and creature type fails a
@@ -93,7 +93,7 @@ stay local by decision and do not run in CI (they need LLM :8080).
   over the full set. Single-sample noise is expected; a FAIL is a triage item
   (`--diagnose` labels it GEN-side vs RET-side), not proof.
 
-- `mise golden` — all 62 files through the loop, exit 1 listing missing facts
+- `mise golden` — all 65 files through the loop, exit 1 listing missing facts
   on failure. `--tier {short,all}`, `--ids`, `--type
   {entity,recipe,comparison,general}`, `--max-facts N`, `--corpus {full,tool}`,
   `--max-rounds`, `--store`, `--report`, `--diagnose`, `--export [PATH]` are the
@@ -114,7 +114,7 @@ stay local by decision and do not run in CI (they need LLM :8080).
 
 Per-case cost is dominated by the reasoning model's rounds (reasoning-ON,
 budget 4096): a store-only case with 1–2 rounds answers in tens of seconds, but
-a 5–6 round wiki case can take minutes per case. **A full 62-case run is a long
+a 5–6 round wiki case can take minutes per case. **A full 65-case run is a long
 background job — batch it, don't watch it in a foreground terminal.** Use
 `mise golden-one` while iterating and `--tier short` for a smoke check.
 

@@ -377,8 +377,8 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
 ## Testing & QA
 
 - **Framework**: pytest via `uv run pytest`; the counts this doc quotes are
-  **533 collected / 80 deselected / 453 default** (asserted by `mise drift`
-  against a real collection) — the 80 being 16 data-heavy tests + the 64
+  **534 collected / 81 deselected / 453 default** (asserted by `mise drift`
+  against a real collection) — the 81 being 16 data-heavy tests + the 65
   parametrized golden cases, so the default offline run leaves **453** (one POSIX-only port-owner case skips on Windows) — all
   offline (temp-dir integration, mocked servers). The golden gate is the only
   suite that needs any server.
@@ -393,14 +393,14 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
   is the harness's defense. For a byte-reproducible comparison, launch the
   server with `--reasoning off`. See `docs/LLM_MODEL_WIRING.md` → "Card flags &
   determinism".
-- **Golden CLI**: `mise golden` (all 62 files through the loop, exit 1 on
+- **Golden CLI**: `mise golden` (all 65 files through the loop, exit 1 on
   missing facts), `mise golden-short` (`--tier short`, 8 cases),
   `mise golden-one <id>` (named cases), `mise golden-type <type...>`. `--tier`,
   `--ids`, `--type`, `--max-facts`, `--diagnose`, `--export`, `--corpus`,
   `--max-rounds`, `--store`, `--report` are the `golden_check.py` flags.
   Per-case cost is dominated by the reasoning model's rounds — a store-only
   case with 1-2 rounds answers in tens of seconds, but a 5-6 round wiki case
-  takes minutes, so a full 62-case run is a long background job, not a
+  takes minutes, so a full 65-case run is a long background job, not a
   foreground watch. `--diagnose` labels a miss GEN-side (fact was in the fed
   context, the model dropped it) vs RET-side (never retrieved) from the
   `documents`/`trace_rounds` the loop returns.

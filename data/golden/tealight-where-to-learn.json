@@ -1,0 +1,22 @@
+{
+  "id": "tealight-where-to-learn",
+  "question": "Where do I learn how to make tealights, and what skill and level are required?",
+  "type": "recipe",
+  "facts": [
+    [
+      "Gorvessa"
+    ],
+    [
+      "Hogan's Basement"
+    ],
+    [
+      "Candle Making",
+      "CandleMaking"
+    ],
+    [
+      "level 3",
+      "level3",
+      "level required 3"
+    ]
+  ]
+}
