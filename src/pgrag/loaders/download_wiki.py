@@ -55,6 +55,11 @@ WIKI_TITLE_EXTRAS = [
     "Peaceableness",
     "Community",
     "Special Behavior Badges",
+    # Teleportation Machine codes: the only machine-code table on the wiki.
+    # Uncategorized for fetch (sole category is Register of Lore, a 310-page
+    # lorebook set nothing else needs), and Windy View Cave's embedded copy
+    # predates the March 2025 code rotation (0003 = Prestonbule pad there).
+    "Teleportation Machine",
 ]
 
 MAX_RETRIES = 5

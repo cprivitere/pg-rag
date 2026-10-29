@@ -405,6 +405,33 @@ def test_h2_stub_sections_fall_back_to_any_level_split():
     assert all(d["metadata"]["name"] == "Stub Page" for d in docs)
 
 
+def test_h3_only_page_routes_to_per_heading_split():
+    """Contract: a page with zero level-2 headings but real level-3 sections
+    (Teleporation Machine: all content under `===`) takes the per-heading
+    path even though its collapsed lead would clear the minimum-length guard
+    on the level-2 path — that path emits only the lead and drops every
+    sub-heading section (the codes list)."""
+    raw = (
+        "Lead paragraph describing the machine in enough detail to clear the fifty character minimum length guard easily.\n\n"
+        "=== Windy View Cave Teleportation Machine ===\n"
+        "A fully operational machine is found in the cave and a standard pad can be found nearby for travelers to use.\n\n"
+        "=== Teleportation Machine Codes ===\n"
+        "{{Spoiler|Destination List|\n"
+        "; [[Gazluk]]\n"
+        ": [[Prestonbule]] Teleportation Pad.\n"
+        ":: 0003\n"
+        ": 3-crystal patch north of [[New Prestonbule Cave]]\n"
+        ":: 0009\n"
+        "}}\n"
+    )
+    db = FakeDB({"Teleportation Machine": raw})
+    docs = build_wiki_documents(db)
+    by_section = {d["metadata"]["section"]: d for d in docs}
+    codes = by_section.get("Teleportation Machine Codes")
+    assert codes is not None, "codes section must be emitted as its own doc"
+    assert "0003" in codes["text"] and "Prestonbule" in codes["text"]
+
+
 def test_no_heading_page_with_template_infobox_stays_empty():
     """Infobox-only dumps (no headings) emit NO documents at all — the real
     Acid Arrow page parses to []. The infobox templates contain NESTED

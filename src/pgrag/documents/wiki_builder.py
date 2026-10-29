@@ -12,7 +12,7 @@ CACHE_FILE = WIKI_PARSED_CACHE
 # Bump when the cached doc shape OR generated text changes, so stale cache
 # entries are rebuilt instead of served with old content (a mtime-equal page
 # with a changed section-cleanup step would otherwise keep residue forever).
-CACHE_VERSION = 11
+CACHE_VERSION = 12
 
 # CDN tables whose entity names wiki pages can link to.
 _ENTITY_TABLES = {
@@ -570,8 +570,20 @@ def _parse_page(page_name, raw_text, entity_info=None):
         metadata["entity_id"], metadata["entity_type"] = entity_info
 
     wikicode = mwparserfromhell.parse(raw_text)
+    # A page whose real sections sit at level 3+ (no level-2 headings at
+    # all — e.g. Teleportation Machine, whose content sections are all
+    # `===`) collapses into ONE get_sections(levels=[2]) section whose
+    # stripped lead leaves the sub-heading content unreached. Route those
+    # pages to the per-heading fallback, which splits the same text
+    # correctly. Pages with no headings at all keep the old path (its
+    # table-stripper handles infobox-only dumps the fallback would emit as
+    # nothing — identical output either way).
     sections = wikicode.get_sections(levels=[2], include_lead=True)
-
+    if len(sections) <= 1 and any(
+        isinstance(n, mwparserfromhell.nodes.heading.Heading) and n.level >= 3
+        for n in wikicode.nodes
+    ):
+        return _parse_page_by_headings(page_name, raw_text, metadata, seen_ids)
     table_offset = 0
     display = page_name.replace("_", " ")
     safe = "wiki_" + "".join(c if c.isalnum() else "_" for c in page_name)
