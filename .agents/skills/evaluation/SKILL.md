@@ -36,12 +36,12 @@ Each file:
 - `store: true` marks a case whose facts live in the SQLite store (glogger play
   history). The loop reads the store, so it runs through the same path — there
   is no separate store-only harness anymore.
-- 63 files exist today (22 entity / 29 general / 7 recipe / 5 comparison),
+- 64 files exist today (22 entity / 30 general / 7 recipe / 5 comparison),
   spanning recipes-by-ingredient, level-gated crafting, item acquisition/drops,
   ability lookups, comparisons, quest requirements, wiki lore, wiki how-to
   assembly, and player-state audits. 10 store-only cases (player facts,
   `"store": true`). Future additions should favor the thin buckets (comparison
-  is 5/63 today).
+  is 5/64 today).
 - **Question-shape rule (learned the hard way, 2026-10-11):** every dimension a
   case's facts check must be asked for by its question. A question that asks
   "where" while its facts also demand loot level and creature type fails a
