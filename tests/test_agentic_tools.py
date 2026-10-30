@@ -947,6 +947,38 @@ def test_player_state_stall_prefers_recipe_scroll_over_product(store):
     assert " 180" not in out.split("base value")[1].split("\n")[0]
 
 
+def test_player_state_stall_family_query_lists_every_scroll_tier(store):
+    """contract: a family query spanning several scroll tiers lists EACH
+    matching scroll with its base value — resolving to one row hid the other
+    tiers (live: 'Masquerade Mask' priced Nice-tier, both Great-tier scrolls
+    'not stated'). A lone scroll adds no family block; a broad family caps
+    with a narrow-the-query note."""
+    conn = sqlite3.connect(store)
+    for code, name, value in (
+        (83, "Tailoring: Nice Forest Masquerade Mask", 1025.0),
+        (84, "Tailoring: Great Forest Masquerade Mask", 1525.0),
+        (85, "Cooking: Sugar-Laced Green Apple", 400.0),
+    ):
+        conn.execute(
+            "INSERT OR REPLACE INTO items VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (code, name, f"Internal{code}", None, None, value, 1, None, None, None, None, None),
+        )
+    conn.commit()
+    conn.close()
+    out = execute_tool(
+        str(store), "player_state", {"section": "stall", "query": "Forest Masquerade Mask"}
+    )
+    assert "matching recipe scrolls (per-tier vendor floors):" in out
+    assert "recipe scroll: Tailoring: Nice Forest Masquerade Mask — base value 1025" in out
+    assert "recipe scroll: Tailoring: Great Forest Masquerade Mask — base value 1525" in out
+    # Lone scroll: no family block, just the base-value line.
+    out2 = execute_tool(
+        str(store), "player_state", {"section": "stall", "query": "Sugar-Laced Green Apple"}
+    )
+    assert "matching recipe scrolls" not in out2
+    assert "Cooking: Sugar-Laced Green Apple 400" in out2
+
+
 def test_player_state_stall_multi_character_defaults_to_stall_owner(tmp_path):
     """contract: with several sheet characters but one stall owner, section=stall
     answers from the owner's ledger instead of hard-failing for a character=
