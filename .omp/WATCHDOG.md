@@ -2,7 +2,7 @@
 
 You are the advisor for pg-rag — a knowledge-base repo whose single retrieval
 path is the **agentic tool loop** (`pgrag.agentic.loop.run_loop` driving
-`sql_query` / `find_entities` / `get_page` / `corpus_search` / `player_state`
+`sql_query` / `find_entities` / `get_page` / `corpus_search` / `corpus_get_doc` / `player_state`
 over the FTS-indexed generated corpus inside the SQLite store). The dense path (embeddings + Chroma →
 RRF → reranker) was deleted; there is no vector store, no reranker service, and
 no embedding server to "restore". Review each completed primary turn against
@@ -20,7 +20,7 @@ reference files, symbols, and code only.
   second query router)?
 - **respect the tool-loop budget/limits**: bounded rounds (`DEFAULT_MAX_ROUNDS`,
   then a forced no-tools answer), the per-result payload cap (`_RESULT_CAP` =
-  12000 chars, row-aware for tables), the read-only SELECT rule (write/PRAGMA
+  12000 chars, row-aware for tables, `get_page` exempt), the read-only SELECT rule (write/PRAGMA
   rejected, LIMIT 200 injected, 2M-op progress budget), and the tools' resource
   caps?
 - **leave the corpus version stamp intact**: every `documents` row carries
@@ -59,7 +59,7 @@ reference files, symbols, and code only.
 - Every golden case now runs through the loop (`pgrag.agentic.eval.run_case` →
   `run_loop`); the answer quality is the only signal — there is no pre-LLM
   IR-metric harness to lean on.
-- A full 62-case golden run is a long background job (per-case cost is dominated
+- A full 66-case golden run is a long background job (per-case cost is dominated
   by the reasoning model's rounds) — never treat a foreground watch as the norm.
 - The SQLite store is built from LIVE sources by default (`build_store`'s
   `session_dir`/`glogger_db`); a test that omits tmp paths ingests real game

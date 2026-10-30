@@ -20,7 +20,7 @@ cdn/*.json + wiki/*.txt ─► loaders: GameDatabase
       scripts/build_sqlstore.py → data/sqlite_gorgon.db (CDN + wiki + generated corpus + live session + glogger)
 
 question ─► agentic.loop.run_loop (the ONLY retrieval path)
-              tools: sql_query · find_entities · get_page · corpus_search · player_state
+              tools: sql_query · find_entities · get_page · corpus_search · corpus_get_doc · player_state
               └► LLM :8080 → grounded answer
 ```
 
@@ -34,13 +34,14 @@ reranker service, and no embedding server.
 ## Key stages & files
 
 - `loaders/` — source → in-memory: `cdn_loader.py`, `wiki_loader.py`,
-  `database.py`; wiki sync + orphan cleanup in `download_wiki.py`.
+  `database.py`, `download_cdn.py`; wiki sync + orphan cleanup in `download_wiki.py`.
 - `documents/` — `builder.py` (CDN entity → docs), `wiki_builder.py`
-  (sections/chunks, `parent_id`), `chunking.py`, `resolver.py` +
+  (sections/chunks, `parent_id`), `chunking.py`, `tokenizer.py` (the token counter
+  the chunk budgets measure with), `resolver.py` +
   `skill_profiles.py` + `summaries.py` + `creature_zones.py` + `combat_xp.py`.
 - `rag/llm.py` — the LLM client.
 - `agentic/` — `store.py`/`session.py`/`glogger.py` (SQLite store build),
-  `tools.py` (the five tools), `loop.py` (`run_loop`), `eval.py` (golden
+  `tools.py` (the six tools), `loop.py` (`run_loop`), `eval.py` (golden
   fact-presence eval + tier membership).
 - `scripts/` — `build_sqlstore.py`, `agentic_chat.py`,
   `agentic_tune.py`, `golden_check.py`, `golden_rerun.py`.

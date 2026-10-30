@@ -1,12 +1,12 @@
 # pg-rag
 
 Fact-grounded Q&A for [*Project Gorgon*](https://projectgorgon.com/wiki). The
-game's CDN data tables and wiki dumps are built into a BM25 corpus
-(`data/documents.json` + `data/bm25_index.pkl`) and a SQLite store
-(`data/sqlite_gorgon.db`), and every question is answered by one retrieval
+game's CDN data tables and wiki dumps are built into a SQLite store
+(`data/sqlite_gorgon.db`) holding the generated corpus (`documents` +
+`documents_fts`), and every question is answered by one retrieval
 path: the **agentic tool loop** — an LLM (`pgrag.agentic.loop.run_loop`) that
 issues bounded rounds of `sql_query`, `find_entities`, `get_page`,
-`corpus_search`, and `player_state` calls, then answers from what it gathered.
+`corpus_search`, `corpus_get_doc`, and `player_state` calls, then answers from what it gathered.
 
 The earlier dense path (embeddings + Chroma → RRF fusion → cross-encoder
 reranker) was deleted; there is no vector store or reranker service.
@@ -21,9 +21,8 @@ marimo notebook was retired — old-style delivery.)
 ## Pipeline
 
 ```text
-cdn/*.json + wiki/*.txt ─► typed documents ─► BM25 index (+ tool-corpus variant)
-                          └► SQLite store (CDN + wiki + live session + glogger)
-    ─► run_loop: sql_query / find_entities / get_page / corpus_search / player_state ─► local LLM
+cdn/*.json + wiki/*.txt ─► typed documents ─► SQLite store (CDN + wiki + generated corpus + live session + glogger)
+    ─► run_loop: sql_query / find_entities / get_page / corpus_search / corpus_get_doc / player_state ─► local LLM
 ```
 
 ## Quickstart

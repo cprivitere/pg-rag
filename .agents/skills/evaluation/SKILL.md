@@ -69,7 +69,7 @@ Each file:
   The 2026-10-11 batch went 54 → 58 files at roughly the same wall time (the
   focused cases are 1-2 rounds each).
 - **Former residuals recovered (2026-10-13, `data/golden/FLAKY.txt`).** After the split
-  and the `corpus_search` snippet fix (400 → 1000 chars; see the retrieval
+  and the `corpus_search` snippet fix (400 → 1000 chars, later 2000 with `corpus_get_doc` for the tail; see the retrieval
   skill), `dungcrafting-*`, `royal-jelly-*` and both audit cases pass in both
   gate modes. `gardening-basics` and `gardening-trainers-and-fertilizer` recovered
   via the loop's tool-choice guidance (`_SCHEMA_SUMMARY` prescribes the trainer-list
@@ -127,7 +127,7 @@ background job — batch it, don't watch it in a foreground terminal.** Use
 - `tests/test_golden_check.py` parametrizes over `data/golden/*.json` at
   collection time → new goldens are AUTO-collected as offline-skipped tests
   (skip unless the LLM is up); `-m short` selects the tier, the default
-  `not slow` deselects the long tier. No test code per golden.
+  `not slow` deselects all 66 golden cases (both tiers are `slow`). No test code per golden.
 
 ### Diagnosis: GEN-side vs RET-side
 

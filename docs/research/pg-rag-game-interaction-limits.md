@@ -57,11 +57,11 @@ the categories that a Python repo *could* reintroduce:
 
 | ACTk detects | Hard line | Check |
 |---|---|---|
-| Process injection / memory tampering | **NEVER** open a handle to the game process, never read/write game memory | Grep: `OpenProcess`, `ReadProcessMemory`, `WriteProcessMemory`, `VirtualAllocEx`, `CreateRemoteThread`, `DebugActiveProcess`, `SetWindowsHookEx` — zero hits |
+| Process injection / memory tampering | **NEVER** open a handle to the game process, never read/write game memory | Grep: `OpenProcess`, `ReadProcessMemory`, `WriteProcessMemory`, `VirtualAllocEx`, `CreateRemoteThread`, `DebugActiveProcess`, `SetWindowsHookEx` — zero hits (illustrative subset; `scripts/check_constraints.py` `FORBIDDEN_API` is the enforced superset — thread-creation variants, `VirtualProtectEx`, input synthesis, and clock hooks — scanned code-only over `src/`+`scripts/`+`tests/`) |
 | Input automation | **NEVER** synthesize input into the game | Grep: `SendInput`, `keybd_event`, `mouse_event`, `BlockInput` — zero hits |
-| Packet interception | **NEVER** capture/decode game traffic | Grep: `WinDivert`, `pcap`, `Npcap`, `tshark`, `tcpdump`, socket binds to the game port — zero hits |
-| Client-derived artifacts | **NEVER** store/ship client binaries or dump outputs | Grep: `GameAssembly`, `global-metadata`, `dump\.cs`, `DummyDll`, `Il2CppDumper`, `Cpp2IL` — zero hits anywhere incl. docs |
-| Wire-protocol knowledge | **NEVER** encode knowledge of the game's wire format | Grep: `LEB128`-style readers, `GorgonClient`, `ServerCommand`/`ClientCommand` protocol readers — zero hits |
+| Packet interception | **NEVER** capture/decode game traffic | Grep: `WinDivert`, `pcap`, `Npcap`, `tshark`, `tcpdump`, socket binds to the game port — zero hits (illustrative subset; `PACKET_TOOLING` in the scanner adds `pcapng`/`pktmon`/`PacketMon`/`CapturePacket`/`PacketCapture`/`windump`/`9002`) |
+| Client-derived artifacts | **NEVER** store/ship client binaries or dump outputs | Grep: `GameAssembly`, `global-metadata`, `dump\.cs`, `DummyDll`, `Il2CppDumper`, `Cpp2IL` — zero hits anywhere incl. docs (illustrative subset; `RE_ARTIFACT` in the scanner also covers `il2cpp_data`/`Metadata.dat`/`il2cpp`, scanned over code + docs + manifests) |
+| Wire-protocol knowledge | **NEVER** encode knowledge of the game's wire format | Grep: `LEB128`-style readers, `GorgonClient`, `ServerCommand`/`ClientCommand` protocol readers — zero hits (illustrative subset; `WIRE_KNOWLEDGE` in the scanner also covers `ReadLeb128`/`WriteLeb128`/`GorgonProtocolUtils`/`ReadBytesWithDebugPadding`) |
 
 No push without a green `scripts/check_constraints.py` (§6).
 

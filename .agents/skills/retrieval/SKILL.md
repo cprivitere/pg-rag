@@ -12,33 +12,34 @@ by issuing bounded rounds of tool calls against `data/sqlite_gorgon.db`
 fusion → reranker), the query classifier, spelling correction, entity dossiers
 and `_gap_fill` were **deleted** — do not look for them.
 
-## The five tools (in `src/pgrag/agentic/tools.py`)
+## The six tools (in `src/pgrag/agentic/tools.py`)
 
 `AVAILABLE_TOOLS = "sql_query, find_entities, get_page, corpus_search,
-player_state"`.
+corpus_get_doc, player_state"`.
 
 | tool | what it hits | use it for |
 |---|---|---|
 | `sql_query` | one read-only SELECT over the store | structured facts: recipes/levels/XP, item sources, calls/favor, stall sales. `LIMIT 200` injected; >2M-op scans aborted |
 | `find_entities` | FTS5 over `entity_names` | resolving a name to its typed entity (item/recipe/ability/quest/npc/effect/skill), up to 20 hits |
-| `get_page` | raw wiki page text by exact title (LIKE fallback lists candidates) | prose/mechanics — how a skill works, growing/farming, crafting workflows |
-| `corpus_search` | FTS5 `bm25()` over the store's `documents` | generated-corpus recall when SQL/FTS don't fit — the lexical arm; `--corpus tool` filters to non-SQL-table docs |
+| `get_page` | raw wiki page text by exact title (LIKE fallback lists candidates) | prose/mechanics — how a skill works, growing/farming, crafting workflows. Exempt from the 12000-char result cap |
+| `corpus_search` | FTS5 `bm25()` over the store's `documents` | generated-corpus recall when SQL/FTS don't fit — the lexical arm; `--corpus tool` filters to non-SQL-table docs. Each hit cut at `_SEARCH_SNIPPET` (2000) chars |
+| `corpus_get_doc` | parent + chunks for one corpus id | when a `corpus_search` hit ends mid-section — chunk id (or parent id) returns the whole parent instead of more search rounds |
 | `player_state` | live-session sections (summary/skills/currencies/quests/favor/items/stall/abilities) | the player's own state; `section=abilities` needs `skill=`; `section=stall` holds the only *realized* prices (own stall — `stall_events`) and appends the item's `source:` lines, CDN base value, OTHER PLAYERS' STALLS observations (`stall_price_observations`), the work-order payout and best-effort chat price mentions |
 
-The loop is blocking and bounded (`DEFAULT_MAX_ROUNDS` rounds; each tool-result
-payload capped at 12000 chars). Tool errors come back as strings for the model
+The loop is blocking and bounded (`DEFAULT_MAX_ROUNDS` rounds; every tool-result
+payload except `get_page` capped at 12000 chars). Tool errors come back as strings for the model
 to self-correct, never as exceptions.
 
-**`corpus_search` shows only the first `_SEARCH_SNIPPET` chars of each hit, and
-that snippet is the ONLY window onto a corpus doc** — `get_page` serves wiki
+**`corpus_search` shows only the first `_SEARCH_SNIPPET` (2000) chars of each hit; `corpus_get_doc(id)`
+reassembles the whole parent when a hit ends mid-section** — so a fact past the cut costs one more
+tool call, not a lost golden. (`get_page` serves wiki
 titles, so it returns a near-empty error for a corpus id like `skill_Pooping`
-(the model does try, and burns rounds). Facts that sit past the cut are
-unreachable no matter how good the query is: at the old 400-char budget
+(the model does try, and burns rounds) — reach for `corpus_get_doc` instead.) At the old 400-char budget
 `skillprofile_Pooping_chunk_0` (871 chars) hid `Requires Beast` (offset 788) and
 the gourmand food-quality note (451), and `skillprofile_Gardening_chunk_4`
 (1089) hid its trainer list (703-830) — all of which failed goldens with no
-corpus gap at all (raised to 1000 on 2026-10-11; 10 hits x 1000 + prefixes ≈
-10.6K stays inside the payload cap). When a fact goes missing, check the offset
+corpus gap at all (raised to 2000 after the 1000-char step on 2026-10-11; 10 hits x 2000 + prefixes ≈
+20.6K caps via the loop's row-aware `_cap` on multi-hit rounds). When a fact goes missing, check the offset
 first: `python -c "import sqlite3;t=sqlite3.connect('data/sqlite_gorgon.db').execute(\"SELECT text FROM documents WHERE id='<id>'\").fetchone()[0];print(t.find('<fact>'))"`.
 A related trap: for skill questions the model often answers from the CDB
 `skills`/`abilities` SQL tables (which carry no `BonusToSkill` rewards), so it
@@ -108,7 +109,7 @@ Then:
 - One stage at a time; re-run the layer's tests after each (`docs/TEST_CONTRACTS.md`
   L2/L3).
 - The retrieval tests are `tests/test_agentic_tools.py`,
-  `tests/test_agentic_loop.py` — there is **no** dense/RRF/rerank regression set
+  `tests/test_agentic_loop.py`, `tests/test_agentic_tune.py` — there is **no** dense/RRF/rerank regression set
   anymore (the BM25 pickle suite went with the corpus→store move).
 
 ## Evaluation loop (see `evaluation` skill)
