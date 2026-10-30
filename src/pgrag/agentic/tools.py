@@ -692,7 +692,15 @@ def _stall_item_base_value(conn: sqlite3.Connection, query: str) -> str | None:
     The fallback when the stall ledger holds no price for the item: dead-ending
     at "no price" is useless for the zero-stall-history items (Gloamwood,
     Soulbiter Larva, Orcish N Core, most slabs/sands) — surface the base value
-    instead, clearly labeled as the vendor floor and NOT a realized sale."""
+    instead, clearly labeled as the vendor floor and NOT a realized sale.
+
+    Recipe-scroll ambiguity: "Great Forest Masquerade Mask" used alone names
+    the crafted PRODUCT (value 180), but a pricing question about "Tailoring
+    recipes" means the SCROLL ('Tailoring: Great Forest Masquerade Mask',
+    value 1525). When the query has no skill prefix, also try the known
+    recipe-scroll prefixes ('Tailoring:', 'Cooking:', 'Blacksmithing:', ...)
+    and prefer the scroll row when one matches — the scroll is the tradeable
+    recipe item, the product is crafted gear."""
     try:
         row = conn.execute(
             "SELECT name, value FROM items WHERE name = ? COLLATE NOCASE", (query,)
@@ -704,11 +712,59 @@ def _stall_item_base_value(conn: sqlite3.Connection, query: str) -> str | None:
                 f"SELECT name, value FROM items WHERE {clause} ORDER BY LENGTH(name), name LIMIT 1",
                 pats,
             ).fetchone()
+        if row is not None and not row[0].startswith(
+            tuple(p + " " for p in _RECIPE_SCROLL_PREFIXES)
+        ):
+            # Bare product name matched (or its LIKE variant): prefer the
+            # recipe scroll when one exists — the scroll is the tradeable
+            # recipe item, the product is crafted gear.
+            scroll = _recipe_scroll_match(conn, query)
+            if scroll is not None:
+                row = scroll
     except sqlite3.Error:
         return None
     if row is None or row[1] is None:
         return None
     return f"base value (items.value, the vendor floor — NOT a stall price): {row[0]} {row[1]:g}"
+
+
+_RECIPE_SCROLL_PREFIXES = (
+    "Tailoring:",
+    "Cooking:",
+    "Blacksmithing:",
+    "Carpentry:",
+    "Alchemy:",
+    "Brewing:",
+    "Cheesemaking:",
+    "Fletching:",
+    "Jewelry Crafting:",
+    "Leatherworking:",
+    "Masonry:",
+    "Shoe Making:",
+    "Sigil Scripting:",
+    "Textile Creation:",
+    "Toolcrafting:",
+    "Weaponsmithing:",
+)
+
+
+def _recipe_scroll_match(conn: sqlite3.Connection, query: str) -> tuple | None:
+    """A recipe-scroll row for ``query`` ('Tailoring: <query>'), or None.
+
+    Exact scroll-name match first (the query may already carry the prefix —
+    then this is a no-op for the caller's exact lookup); else a LIKE over
+    each known scroll prefix. Shortest name wins so a family query
+    ('Forest Masquerade Mask') resolves the scroll, not a longer variant."""
+    try:
+        pats = [f"{p} {query}" for p in _RECIPE_SCROLL_PREFIXES]
+        pats += [f"{p} %{query}%" for p in _RECIPE_SCROLL_PREFIXES]
+        clause = " OR ".join("name LIKE ? ESCAPE '\\'" for _ in pats)
+        return conn.execute(
+            f"SELECT name, value FROM items WHERE {clause} ORDER BY LENGTH(name), name LIMIT 1",
+            pats,
+        ).fetchone()
+    except sqlite3.Error:
+        return None
 
 
 def _stall_source_lines(conn: sqlite3.Connection, query: str) -> list[str]:
@@ -861,6 +917,26 @@ def _player_state(store_path: str, args: dict) -> str:
         wanted = args.get("character")
         if wanted in chars:
             character = wanted
+        elif section == "stall":
+            # The stall ledger is keyed by glogger owner, not by sheet
+            # character: default to the stall owner instead of hard-failing.
+            # DISTINCT owner is one row-scan over a small table; a store with
+            # several owners keeps the explicit-choice error below.
+            try:
+                owners = [
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT DISTINCT owner FROM stall_events WHERE owner IS NOT NULL"
+                    ).fetchall()
+                    if r[0]
+                ]
+            except sqlite3.Error:
+                owners = []
+            if len(owners) == 1 and owners[0] in chars:
+                character = owners[0]
+            else:
+                conn.close()
+                return "Multiple characters in store; pass character= one of: " + ", ".join(chars)
         else:
             conn.close()
             return "Multiple characters in store; pass character= one of: " + ", ".join(chars)

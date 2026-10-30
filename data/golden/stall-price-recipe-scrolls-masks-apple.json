@@ -1,0 +1,29 @@
+{
+ "id": "stall-price-recipe-scrolls-masks-apple",
+ "question": "What are the vendor base values of these recipe scrolls — Tailoring: Great Forest Masquerade Mask, Tailoring: Great Bat Witch Hat, Tailoring: Nice Bat Witch Hat, Tailoring: Nice Fiery Masquerade Mask, Cooking: Sugar-Laced Green Apple — and is there any stall sale history or chat asking-price for their item families?",
+ "type": "general",
+ "facts": [
+  [
+   "1525"
+  ],
+  [
+   "1500"
+  ],
+  [
+   "1000"
+  ],
+  [
+   "1025"
+  ],
+  [
+   "400"
+  ],
+  [
+   "50k",
+   "50 000",
+   "50000"
+  ]
+ ],
+ "store": true,
+ "notes": "Store-only case (live-session intake, 2026-10-30): pricing question over five recipe SCROLLS. Two tool gaps forced this: (a) player_state section=stall hard-failed on multi-character stores ('pass character=') instead of defaulting to the stall owner, and (b) a bare product name ('Great Forest Masquerade Mask') resolved the crafted product's base value (180) instead of the scroll's ('Tailoring: ...', 1525). Scroll vendor floors from items.value: Tailoring: Great Forest Masquerade Mask 1525, Tailoring: Great Bat Witch Hat 1500, Tailoring: Nice Bat Witch Hat 1000, Tailoring: Nice Fiery Masquerade Mask 1025, Cooking: Sugar-Laced Green Apple 400. Chat layer: AiQueGata WTB Tailoring: Astounding/Awesome Forest Masquerade Mask 50k x5 (Trade/Global, 2026-10-23) — same family asking-price. Zero stall_events history for all five (verified 2026-10-29). Pre-fix loop run: 6/6 rounds, zero player_state calls, 1/5 values (RET-side)."
+}

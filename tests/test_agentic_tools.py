@@ -897,6 +897,116 @@ def test_player_state_stall_work_order_payout(store):
     assert "WORK ORDER" not in out2
 
 
+def test_player_state_stall_prefers_recipe_scroll_over_product(store):
+    """contract: a bare product name resolves the recipe SCROLL's base value,
+    not the crafted product's — 'Great Forest Masquerade Mask' alone means the
+    'Tailoring: Great Forest Masquerade Mask' scroll (1525) in a pricing
+    question, never the crafted mask (180). The live miss priced all four
+    scrolls at product values / 'not stated'."""
+    conn = sqlite3.connect(store)
+    conn.execute(
+        "INSERT OR REPLACE INTO items VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            81,
+            "Great Forest Masquerade Mask",
+            "MasqueradeMaskNature6",
+            None,
+            None,
+            180.0,
+            1,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO items VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            82,
+            "Tailoring: Great Forest Masquerade Mask",
+            "Recipe_MasqueradeMaskNature6",
+            None,
+            None,
+            1525.0,
+            1,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    out = execute_tool(
+        str(store), "player_state", {"section": "stall", "query": "Great Forest Masquerade Mask"}
+    )
+    assert "Tailoring: Great Forest Masquerade Mask 1525" in out
+    assert " 180" not in out.split("base value")[1].split("\n")[0]
+
+
+def test_player_state_stall_multi_character_defaults_to_stall_owner(tmp_path):
+    """contract: with several sheet characters but one stall owner, section=stall
+    answers from the owner's ledger instead of hard-failing for a character=
+    argument the model was never told to pass (live: ???, EclipsiavonLuna,
+    TwinkleofToes + owner TwinkleofToes). Other sections keep the hard fail.
+    Self-contained db: the module fixture's stall_events already holds other
+    owners by the time this test runs."""
+    from pgrag.agentic.store import _SCHEMA
+
+    db = tmp_path / "multichar.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(_SCHEMA)
+    for char in ("Tester", "Second"):
+        conn.execute(
+            "INSERT OR REPLACE INTO char_reports VALUES (?,?,?,?)",
+            (
+                char,
+                "Dreva",
+                "2026-09-14 01:45:36Z",
+                json.dumps({"Character": char, "Report": "CharacterSheet"}),
+            ),
+        )
+    conn.execute(
+        "CREATE TABLE stall_events ("
+        "id TEXT PRIMARY KEY, event_timestamp TEXT, event_at TEXT,"
+        "log_timestamp TEXT, log_title TEXT, action TEXT, player TEXT,"
+        "owner TEXT, item TEXT, quantity INTEGER, price_unit REAL,"
+        "price_total REAL, raw_message TEXT, entry_index TEXT,"
+        "ignored INTEGER, created_at TEXT)"
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO stall_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "o1",
+            "2026-08-01 10:00:00",
+            "2026-08-01 10:00:00",
+            None,
+            None,
+            "bought",
+            "Buyer",
+            "Tester",
+            "Butter Churn",
+            1,
+            500.0,
+            500,
+            None,
+            None,
+            0,
+            None,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    out = execute_tool(str(db), "player_state", {"section": "stall", "query": "Churn"})
+    assert "Multiple characters" not in out
+    assert "Butter Churn x1 @ 500 each = 500 | buyer Buyer" in out
+    out2 = execute_tool(str(db), "player_state", {"section": "summary"})
+    assert "Multiple characters" in out2
+
+
 def test_corpus_search_ranks_and_snippets_from_the_store(store):
     """Contract: corpus_search is one FTS5 query over the store's `documents`.
 
