@@ -309,6 +309,25 @@ Notes:
   (Verified: 'astounding ink vendor' ranks source_items_item_4105 #1 with Spot /
   Hirochi / Wintria / Michael / Vendor Fox / Liamu, while a bare 'astounding
   ink' query returns only recipe-uses tables.)
+- Mob-drop lookup ('where do I find/loot X', 'which mobs drop X'): the item's
+  own wiki page often has an EMPTY Drops section (an unexpanded dynamic table)
+  and the sources table may carry no rows for it — that is not a dead end.
+  The drop facts live on the MOB pages' Reported Loot tables, written as
+  {{Loot|<item>}} template calls: enumerate EVERY dropping mob in one query
+  with the item's SHORT name (no 'Tail'/'Claw' suffix words the model might
+  paraphrase — quote the template pipe verbatim):
+  SELECT title FROM wiki_pages WHERE text LIKE '%Loot|<short name>%'
+  (e.g. '%Loot|Panther%' → Fae Panther, Fey Panther, Fey Panther Groupie,
+  Giant Razorslash Panther, Panther, Razorslash Panther in 71ms).
+  Then resolve EACH dropping mob's location, never just the first: the
+  generated creature_<Mob> docs carry 'Locations:' lines
+  (creature_Razorslash_Panther → Kur Mountains), or get_page('<mob>') and read
+  its Locations section. List every dropping mob — stopping after the first
+  one found is the known failure mode. Mob drops are only ONE acquisition
+  channel: after listing droppers, ALSO cover the item's other channels (its
+  How to Obtain gathering/vendor/quest-reward lines and the sources-table /
+  vendor guidance above) — a 'where find' answer that lists only mob drops is
+  incomplete when gathering or vendor sources exist.
 - Ingredient item codes always resolve: JOIN ingredients.item_code = items.code
   to get names (e.g. SELECT i.item_code, it.name, i.stack FROM ingredients i
   JOIN items it ON it.code = i.item_code WHERE i.recipe_id = ?). Never tell
