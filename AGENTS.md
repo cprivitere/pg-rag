@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 Oh My Pi agent guide for **pg-rag** — the unified repo for the Project
-Gorgon knowledge base: corpus build (documents + BM25 + tool corpus), the
+Gorgon knowledge base: corpus build (typed documents into the store's `documents` + `documents_fts`), the
 agentic SQLite store, and the single retrieval path — the agentic tool loop —
 in one place. The corpus-chat **mirror notebook was deleted** with
 the dense-RAG cutover, and the molab-hosted tool-loop notebook
@@ -33,7 +33,7 @@ Two sources plus live play history feed one SQLite store
 generated corpus (`documents` + `documents_fts`, stamped per-row with
 `DOCUMENTS_VERSION`), and session/glogger history. **All retrieval is the
 agentic tool loop** (`pgrag.agentic.loop.run_loop`,
-`src/pgrag/agentic/loop.py`) driving five tools over that store. Ships a CLI
+`src/pgrag/agentic/loop.py`) driving six tools over that store. Ships a CLI
 (`pgrag`), the Gradio chat, agentic CLI chat, curation tooling, and the
 golden eval.
 
@@ -52,16 +52,17 @@ data/wiki/curated/*.txt ──────────────────�
 Question → agentic.loop.run_loop (blocking, bounded rounds; temp 0 / seed 0 by default)
             ├─ sql_query      read-only SELECT over the store (LIMIT 200, 2M-op budget)
             ├─ find_entities  FTS5 over entity_names
-            ├─ get_page       full wiki page text
+            ├─ get_page       full wiki page text (exempt from the result cap)
             ├─ corpus_search  FTS5 bm25() over documents (or tbl-filtered --corpus tool)
+            ├─ corpus_get_doc reassemble a chunked parent (chunk id → parent + chunks)
             └─ player_state   live-session sections (summary/skills/stall/abilities/…)
                         ▼
               prompt + tool results → LLM :8080 → grounded answer
 ```
 
-The five tool names are the exact `AVAILABLE_TOOLS` string in
+The six tool names are the exact `AVAILABLE_TOOLS` string in
 `src/pgrag/agentic/tools.py`: `sql_query, find_entities, get_page,
-corpus_search, player_state`.
+corpus_search, corpus_get_doc, player_state`.
 
 - **DELETED in the cutover and the corpus→store move** — do not name these as
   live: the whole dense path (`pgrag.rag.{pipeline,retriever,reranker_client,
@@ -98,11 +99,11 @@ corpus_search, player_state`.
   completions, Words of Power, vendor gold — watermark-incremental in
   `data/sqlite_state.json` under `"glogger"`; glogger's own CDN mirrors are
   deliberately skipped, ours is fresher). `src/pgrag/agentic/loop.py` runs the
-  LLM in a bounded tool loop (`DEFAULT_MAX_ROUNDS` rounds; each tool-result
-  payload capped at 12000 chars; a final no-tools answer is forced once the
+  LLM in a bounded tool loop (`DEFAULT_MAX_ROUNDS` rounds; every tool result
+  except `get_page` capped at 12000 chars; a final no-tools answer is forced once the
   budget is exhausted). `run_loop` returns the same 5-key shape as the deleted
   `pipeline.ask` — `{answer, documents, sources, rounds, trace_rounds}` (plus legacy
-  `query_type: "agentic"` / `rerank_used: False` in every return arm) — where
+  `query_type: "agentic"` / `rerank_used: False` in both return arms) — where
   `documents` is exactly what the model was fed and `sources` is one entry per
   tool round.
 - **Tuning sweeps** live in `scripts/agentic_tune.py` (`mise agentic-tune`,
@@ -129,7 +130,7 @@ corpus_search, player_state`.
     maps), `creature_zones.py`, `combat_xp.py`.
   - `rag/llm.py` — the LLM client (SSE parse, server-error types).
   - `agentic/` — `store.py` + `session.py` + `glogger.py` (SQLite store
-    build), `tools.py` (the five tools), `loop.py` (the tool loop),
+    build), `tools.py` (the six tools), `loop.py` (the tool loop),
     `eval.py` (golden fact-presence eval + tier membership).
 - `scripts/` — eval + service tooling (see Important Files).
 - `tests/` — pytest suite, imports the installed `pgrag` package.
@@ -186,7 +187,7 @@ mise golden-flaky / golden-flaky-list # focus on historically-troublesome cases 
 mise chatui                         # Gradio chat in foreground (debug; same app as chatui-start, opens a browser tab; refreshes the store first; needs only LLM up)
 mise lint                           # ruff check src scripts tests (alias li) — run after editing code; CI also gates `ruff format --check`, so run `mise format` too
 mise format                         # ruff format + safe autofix (alias fo)
-mise lint-all                       # all local linters: ruff, format-check, yaml, shell, markdown (alias la)
+mise lint-all                       # all local linters: ruff, format-check, yaml, shell, markdown
 uv run pytest                       # offline test suite
 mise drift                          # check docs/skills against the repo (alias dc)
 mise compliance                     # TOS/CoC hard-line scan (alias comp) — also step 1 of mise test
@@ -429,7 +430,7 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
 ## Linting
 
 Before committing, lint every file type you changed and fix what the linter
-reports — catch it locally, not in CI. Run `mise lint-all` (alias `la`) to
+reports — catch it locally, not in CI. Run `mise lint-all` to
 check everything at once.
 
 | File type | Linter | Run |
@@ -454,7 +455,7 @@ file type this repo ships.
   it), and CI `checks` runs it on every push to `main`/PR.
 - **Key suites** (from `tests/`): `test_documents.py` (doc shape),
   `test_chunking.py`, `test_llm.py`/`test_connectivity.py` (LLM client SSE +
-  server errors), `test_agentic_tools.py`/`test_agentic_loop.py` (the five
+  server errors), `test_agentic_tools.py`/`test_agentic_loop.py` (the six
   tools + the round protocol), `test_sqlstore_build.py`/
   `test_session_ingest.py`/`test_glogger_ingest.py` (store ingestion),
   `test_golden_check.py` (the golden gate), `test_services.py` (service

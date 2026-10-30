@@ -33,7 +33,7 @@ dev = [
 markers = [
     "slow: tests that load real CDN/wiki data (deselect with '-m \"not slow\"')",
     "short: fast golden evaluation subset (8 representative cases)",
-    "long: full golden evaluation set (54 files; excludes the 8-case short tier — batch it in the background)",
+    "long: remaining golden evaluation set (58 files; excludes the 8-case short tier — batch it in the background)",
 ]
 addopts = "-m 'not slow'"
 filterwarnings = [

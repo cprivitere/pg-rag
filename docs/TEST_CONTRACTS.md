@@ -139,8 +139,9 @@ test (prove the source is fine) or recording a deliberate contract change
 - **Source**: `src/pgrag/agentic/tools.py` (`execute_tool`), `loop.py`
   (`run_loop`, `_post`, `_parse_tool_blocks`, `_cap`), `eval.py`
   (`run_case`/`run_eval`), `scripts/agentic_tune.py`
-- **Contracts**: the five tools (`sql_query, find_entities, get_page,
-  corpus_search, player_state`) and the `AVAILABLE_TOOLS` string; `execute_tool`
+- **Contracts**: the six tools (`sql_query, find_entities, get_page,
+  corpus_search, corpus_get_doc, player_state`) and the `AVAILABLE_TOOLS` string (`corpus_get_doc`
+  reassembles a chunked parent: chunk id or parent id → parent + chunks); `execute_tool`
   returns errors as strings (model self-corrects) — and it allows only single
   read-only SELECTs (write/PRAGMA rejected, LIMIT 200 injected, 2M-op
   progress-handler budget), and caps rows/cells/pages. `player_state
@@ -168,8 +169,8 @@ test (prove the source is fine) or recording a deliberate contract change
   trace_rounds}` (plus legacy `query_type`/`rerank_used` in every return arm),
   executes at most `max_rounds` tool rounds (native tool_calls
   OR two text forms: fenced ```` ```tool ```` JSON, and the Qwen template's
-  `<tool_call><function=…><parameter=…>` XML — three counting native), caps each tool-result payload at
-  12000 chars (row-aware for tables), and forces a final no-tools answer once
+  `<tool_call><function=…><parameter=…>` XML — three counting native), caps every `_execute` round payload except
+  `get_page` at 12000 chars (row-aware for tables; the initial k=8 `corpus_search` seed enters uncapped), and forces a final no-tools answer once
   the budget is exhausted. Tests monkeypatch `loop._post` — never a live LLM.
   `loop._post` reads its transport config at CALL time: `PGRAG_LLM_URL`,
   `PGRAG_LLM_MODEL`, `PGRAG_LLM_NATIVE_TOOLS`. `agentic_tune.py` sweeps (model, temperature,
@@ -188,7 +189,7 @@ test (prove the source is fine) or recording a deliberate contract change
     `eval.run_case`), `test_golden_check.py` (the offline golden gate drives
     `eval.run_case` → `run_loop`).
   - `execute_tool` — `test_agentic_tools.py` owns it; `test_agentic_loop.py`
-    exercises it through `_execute`.
+    reaches it only indirectly, through `loop._execute` during `run_loop` rounds.
 
 ### L4 — SQLite store + source ingestion
 
@@ -258,7 +259,7 @@ test (prove the source is fine) or recording a deliberate contract change
   never delete one, when the corpus wording legitimately differs. The pytest
   gate parametrizes over every file at collection time and skips unless the LLM
   (:8080) is up (**LLM only**) — `-m short` selects the 8-case
-  `SHORT_TIER_IDS`; the default `not slow` marker deselects the long tier.
+  `SHORT_TIER_IDS`; the default `not slow` marker deselects all 66 golden cases (both tiers are `slow`).
   retry-once for reasoning-ON noise; both attempts failing = regression.
   `SHORT_TIER_IDS`/`GOLDEN_DIR` are single-sourced in
   `pgrag.agentic.eval` (asserted by `scripts/check_docs.py`).
@@ -342,9 +343,10 @@ test (prove the source is fine) or recording a deliberate contract change
 
 - **Tests**: `test_services.py`
 - **Source**: `scripts/services.py`; consumers `mise.toml` (`llm-start`/`llm-stop`/`chatui-start`/
-  `chatui-stop`/`start`/`stop`/`status`/`chatui`), `scripts/agentic_tune.py` (stops/starts via
-  `mise run llm-stop`/`llm-start`, and builds its `--llm-restart` server argv with
-  `services.llm_argv` — the two contender rows carry their own model/flags, while the `ornith` row
+  `chatui-stop`/`start`/`stop`/`status`/`chatui`), `scripts/agentic_tune.py` (stops via
+  `mise run llm-stop`, then spawns `llama-server` directly with
+  `services.llm_argv` — never `llm-start`, which would re-apply `[env]` — and builds its `--llm-restart` server argv with
+  that same builder; the two contender rows carry their own model/flags, while the `ornith` row
   re-reads `[env]`, so no production literal lives in that registry)
 - **Contracts**: the LLM argv carries `LLM_MODEL` + `LLM_FLAGS` from `[env]` (never a literal),
   `--reasoning off` is appended when `LLM_REASONING=off`; chat spawns `uv run --with gradio python
@@ -402,7 +404,9 @@ test (prove the source is fine) or recording a deliberate contract change
   provisions a tmp tree and asserts the provisioned one is clean and each drift is reported — the
   pointer scan, the ownership map (including a `*`/`+` bullet, a fenced example of the convention and
   a file named twice in one block), the lint-suppression arm,
-  the task list and the count quote are all covered there — while the
+  the task list and the count quote are all covered there — while the missing-input loudness
+  (`test_a_missing_input_is_loud_and_never_a_traceback`) and the live-tree invariant
+  (`test_the_real_docs_point_only_at_live_files`) pin the gate's failure modes, not its happy path.
 - **Change ⇒** `uv run pytest tests/test_check_docs.py`, then `mise drift` (must print `0 drift`).
 
 ### L12 — Review tooling (`scripts/review_facts.py`)
@@ -420,7 +424,8 @@ test (prove the source is fine) or recording a deliberate contract change
   task names + aliases, tolerating mise's trivial string-task form), `tree` (HEAD and whether the
   working tree is frozen), `liveness` (how python and node
   each classify a released pid — the platform fact reviewers kept re-measuring, and the case where the
-  two agree, not the case where they diverge), and `limits`
+  two agree, not the case where they diverge), and `limits` (clone-invisible inputs:
+  the SQLite store, `data/wiki/.meta.json`, `data/golden` — present/tracked state spelled out per path).
 - **Change ⇒** `uv run pytest tests/test_review_facts.py`, then `uv run python scripts/review_facts.py`
   to see the sheet a review pass pastes into its shared context.
 

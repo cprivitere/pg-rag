@@ -19,7 +19,7 @@ to actually free :8080).
 `run_loop`), not the deleted one-shot dense pipeline. Generation is pinned to
 `EVAL_GENERATION = {"temperature": 0, "seed": 0}` in `pgrag.agentic.eval`. All
 "facts missing" numbers below are historical single-draw measurements on the
-older pipeline harness at set sizes that have since grown to 62; they are kept
+older pipeline harness at set sizes that have since grown to 66; they are kept
 as comparative evidence for model/flag choices, not as current golden verdicts.
 
 ## Common flags (all models)
