@@ -12,7 +12,7 @@ directories, services) see `AGENTS.md`.
 
 ## Data flow
 
-```
+```text
 cdn/*.json + wiki/*.txt ─► loaders: GameDatabase
       └► document generation (documents/) ─► store.documents + documents_fts
               (per-row DOCUMENTS_VERSION stamp)

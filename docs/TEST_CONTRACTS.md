@@ -92,13 +92,13 @@ test (prove the source is fine) or recording a deliberate contract change
   template shells — `{{Spoiler|…}}`/`{{Quote|…}}` unwrap (keep the body),
   `{{Favor|X}}` renders as "favor tier X", event/storage templates keep
   `key = value` lines; `{{NPC training row}}`/`{{NPC training unlock row}}`
-  render one line per row (`Unlock: <Skill>: <what> - skill level N - cost C
-  - favor F` / `Teaches: <ability> - …`) — they are the only carrier of trainer
+  render one line per row (`Unlock: SKILL: WHAT - skill level N - cost C
+  - favor F` / `Teaches: ABILITY - …`) — they are the only carrier of trainer
   prices, and dropping them left 209 training sections as an empty table shell
   with no unlock cost anywhere in the corpus; quest **Currency** rewards and
-  NPC **Preferences** render; `_build_entity_index` falls back to the record
-  key for the `skills` table (`_KEY_IS_NAME_TABLES`) so key-only CDN records
-  still link their wiki page. `_prepend_barter_options` (`builder.py`): item docs whose CDN
+  NPC **Preferences** render;`_build_entity_index` falls back to the record
+  key for the `skills`table (`_KEY_IS_NAME_TABLES`) so key-only CDN records
+  still link their wiki page.`_prepend_barter_options`(`builder.py`): item docs whose CDN
   `sources_items` entry is `type=Barter` get the NPC page's barter-table trade
   lines **prepended** (chunk-tail placement once ranked it low).
 - **Change ⇒** `uv run pytest tests/test_documents.py tests/test_chunking.py

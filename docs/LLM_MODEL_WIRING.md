@@ -170,7 +170,7 @@ Validated against this llama.cpp:
 - **Determinism rule of thumb**: reasoning ON + greedy is NOT reproducible (the
   thinking trajectory isn't greedy-pinned — observed 7/8/10 single-draw golden
   variance was LLM-side, not a harness miss). reasoning OFF (`--reasoning off`)
-  + greedy + seed IS byte-reproducible for gemma AND qwen. The golden harness
+  - greedy + seed IS byte-reproducible for gemma AND qwen. The golden harness
   absorbs the residual noise with a **retry-once** (better attempt wins).
 
 ### Dev gate vs acceptance gate (two modes, one harness)
@@ -212,7 +212,8 @@ Revert with `mise llm-stop; $env:LLM_REASONING = ''; mise llm-start` — POSIX:
 `mise llm-stop && mise llm-start` (the inline assignment never persisted) (or
 remove `--reasoning off` from `LLM_FLAGS` if you added it there instead).
 
-### Deterministic re-baseline (identical conditions: reasoning OFF, temp 0,
+### Deterministic re-baseline (identical conditions: reasoning OFF, temp 0
+
 seed 0)
 
 | model | facts missing | FAIL cases |

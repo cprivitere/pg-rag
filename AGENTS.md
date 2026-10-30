@@ -22,6 +22,7 @@ agentic method.
 ## Project Overview
 
 Two sources feed a searchable, fact-grounded knowledge base:
+
 - **CDN**: structured `data/cdn/*.json` tables (items, recipes, abilities,
   skills, quests, npcs, areas, effects).
 - **Wiki**: raw `data/wiki/*.txt` page dumps (hashed filenames, titles via
@@ -38,7 +39,7 @@ golden eval.
 
 ## Architecture & Data Flow
 
-```
+```text
 cdn/*.json ─┐
             ├─ loaders → GameDatabase(tables + wiki) ─┐
 wiki/*.txt ─┘                                          ├─ documents/ (builder + wiki_builder + skill_profiles + summaries)
@@ -186,7 +187,7 @@ mise golden-flaky / golden-flaky-list # focus on historically-troublesome cases 
 mise debug-chat                     # Gradio chat in foreground (debug; same app as chat-start, opens a browser tab; refreshes the store first; needs only LLM up)
 mise lint                           # ruff check src scripts tests (alias li) — run after editing code; CI also gates `ruff format --check`, so run `mise format` too
 mise format                         # ruff format + safe autofix (alias fo)
-mise lint-all                       # all local linters: ruff, format-check, yaml, shell, markdown-advisory (alias la)
+mise lint-all                       # all local linters: ruff, format-check, yaml, shell, markdown (alias la)
 uv run pytest                       # offline test suite
 mise drift                          # check docs/skills against the repo (alias dc)
 mise compliance                     # TOS/CoC hard-line scan (alias comp) — also step 1 of mise test
@@ -342,9 +343,10 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
 - **Runtime**: Python ≥3.15 via `uv`; model binaries fetched with `hf` global
   CLI (cache `F:\AI\models\hub\`; GGUF via `-hf org/repo:quant`). The repo ships
   no JavaScript; Node (mise `[tools]`, with `npm`) backs the `npm:`-shimmed CLI
-  (`markdownlint-cli2`, advisory in `lint-all`). `[tools]` also pins the
+  (`markdownlint-cli2` in `lint-all`). `[tools]` also pins the
   workflow/shell validators (`jactionlint`, `shellcheck`, `zizmor`, `pinact`).
 - **Local services** (running on Windows host):
+
   | svc | port | model / note |
   |-----|------|--------------|
   | LLM | 8080 | `LLM_MODEL` (`[env]`; `LLM_FLAGS` carries launch tuning) — the one hard dependency; the tool loop answers through it. A running instance OOMs before start → `mise stop` first |
@@ -436,11 +438,12 @@ check everything at once.
 | Python (`.py`) | ruff (check + format) | `mise lint` + `mise format` |
 | YAML (`.github/*.yml`) | yamllint (config `.yamllint`) | `yamllint .github` |
 | Shell (`.githooks/pre-push`) | shellcheck | `shellcheck .githooks/pre-push` |
-| Markdown (docs/skills) | markdownlint-cli2, advisory (config `.markdownlint.jsonc`) | `mise lint-all` reports, does not fail |
+| Markdown (docs/skills) | markdownlint-cli2 (config `.markdownlint.jsonc`) | `mise lint-all`, fails |
 | Workflows | jactionlint + zizmor + pinact, poutine | poutine in CI; validators local (not in CI); run before workflow edits |
 
 Optional extras available but not installed: none — the primaries cover every
 file type this repo ships.
+
 - **Compliance gate** (`tests/test_constraints.py`, layer L9 in
   `docs/TEST_CONTRACTS.md`; policy doc `docs/research/pg-rag-game-interaction-limits.md`):
   `scripts/check_constraints.py` must scan

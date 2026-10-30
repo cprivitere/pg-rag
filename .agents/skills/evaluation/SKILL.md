@@ -152,7 +152,6 @@ already handles adds no signal; every golden is a permanent acceptance gate.
 
 **Oracle–loop separation (HARD RULE, 2026-10-30):** direct SQL/store research builds the *oracle* only — it proves nothing about the loop. NEVER state or imply what the loop "routes", "returns", "handles", or "does the same way" from reading `tools.py`/`loop.py` or from your own SQL results. Code capability is not run behavior; only a `run_loop` answer + `trace_rounds` proves what the loop did. A loop claim without a run transcript is fabrication. Run the loop BEFORE any verdict about the loop — including "no golden needed".
 
-
 1. **Research** against the store (`data/sqlite_gorgon.db`) and corpus. Sync
    first when the user just played: `ingest_glogger`/`ingest_session` are
    incremental (or run `mise agentic-chat`, whose preflight syncs).
@@ -206,7 +205,7 @@ already handles adds no signal; every golden is a permanent acceptance gate.
   individually (averages erase the spread) and prints the item's CDN base value
   in every branch (sales / asking / zero-sale — plus the work-order payout and
   chat mentions when they exist), so a zero-stall item falls back to base value
-  + `sources`→`npcs`/`quests` — or to a dated chat mention — instead of
+  - `sources`→`npcs`/`quests` — or to a dated chat mention — instead of
   dead-ending (golden `stall-price-slabs-sands-gizmos`).
 - **Synergy is directional, and the CDN stores it one way only.** A skill's
   `Rewards[level].BonusToSkill = X` means that skill grants a bonus level TO
