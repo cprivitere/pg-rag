@@ -1,0 +1,11 @@
+# Poutine pipeline-scan suppressions.
+# `astral-sh/setup-uv` is fully SHA-pinned in CI; poutine v1.1.4 fires
+# `github_action_from_unverified_creator_used` because its bundled creator
+# list predates astral-sh's verification (present on poutine main, in none
+# of the 1.1.x releases). Skipping the purl (versionless prefix matches every
+# pin) keeps the note-level noise out without muting the rule for anything
+# else. Revisit when the pinned poutine-action moves past 1.1.x.
+skip:
+  - rule: github_action_from_unverified_creator_used
+    purl:
+      - pkg:githubactions/astral-sh/setup-uv
