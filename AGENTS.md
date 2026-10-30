@@ -436,9 +436,9 @@ check everything at once.
 | File type | Linter | Run |
 | --------- | ------ | --- |
 | Python (`.py`) | ruff (check + format) | `mise lint` + `mise format` |
-| YAML (`.github/*.yml`) | yamllint (config `.yamllint`) | `yamllint .github` |
-| Shell (`.githooks/pre-push`) | shellcheck | `shellcheck .githooks/pre-push` |
-| Markdown (docs/skills) | markdownlint-cli2 (config `.markdownlint.jsonc`) | `mise lint-all`, fails |
+| YAML (`.github/*.yml`) | yamllint (config `.yamllint`) | `yamllint .github` — and CI `checks` |
+| Shell (`.githooks/pre-push`) | shellcheck | `shellcheck .githooks/pre-push` — and CI `checks` |
+| Markdown (docs/skills) | markdownlint-cli2 (config `.markdownlint.jsonc`) | `mise lint-all`, fails — and CI `checks` |
 | Workflows | jactionlint + zizmor + pinact, poutine | poutine in CI; validators local (not in CI); run before workflow edits |
 
 Optional extras available but not installed: none — the primaries cover every

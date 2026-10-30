@@ -53,6 +53,27 @@ jobs:
           set -euo pipefail
           uv run python scripts/check_constraints.py
 
+      - name: YAML lint
+        run: |
+          set -euo pipefail
+          uvx yamllint .github
+
+      - name: Shell lint
+        run: |
+          set -euo pipefail
+          command -v shellcheck >/dev/null || { sudo apt-get update -qq; sudo apt-get install -y -qq shellcheck; }
+          shellcheck .githooks/pre-push
+
+      - name: Set up Node for markdown gate
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+
+      - name: Markdown lint
+        run: |
+          set -euo pipefail
+          npx -y markdownlint-cli2@latest "AGENTS.md" "TODO.md" "README.md" "docs/**/*.md" ".agents/**/*.md" ".omp/*.md"
+
   test:
     name: Pytest offline suite
     runs-on: ubuntu-latest

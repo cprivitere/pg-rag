@@ -299,9 +299,8 @@ test (prove the source is fine) or recording a deliberate contract change
   `[tasks.lint]/[tasks.format]`, `pyproject.toml` `[dependency-groups].dev`
   (ruff pinned there, not in runtime deps). CI runner: `.github/workflows/ci.yml`
   (`checks` job enforces this layer: `ruff check`, `ruff format --check`, drift,
-  compliance; workflow scanning in CI is poutine only), plus local-only validator
-  tools `mise.toml [tools]` (`jactionlint`, `shellcheck`, `zizmor`, `pinact` — run
-  by hand before workflow edits, not in CI).
+  compliance, yamllint, shellcheck, markdownlint; workflow scanning in CI is
+  poutine only), plus local-only validator
 - **Contracts**: `uv run ruff check src scripts tests` returns 0 — any new
   finding in the linted trees fails `mise test`. `ruff.toml` `extend-exclude`
   (`data/`, caches) plus the per-file-ignores it carries (`scripts/**`:
