@@ -211,7 +211,7 @@ run = [
   "uv run ruff format --check src scripts tests",
   "yamllint .github",
   "shellcheck .githooks/pre-push",
-  "markdownlint-cli2 \"AGENTS.md\" \"TODO.md\" \"README.md\" \"docs/**/*.md\" \".agents/**/*.md\" \".omp/*.md\"",
+  "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#.venv\"",
 ]
 
 [tools]

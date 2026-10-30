@@ -72,7 +72,7 @@ jobs:
       - name: Markdown lint
         run: |
           set -euo pipefail
-          npx -y markdownlint-cli2@latest "AGENTS.md" "TODO.md" "README.md" "docs/**/*.md" ".agents/**/*.md" ".omp/*.md"
+          npx -y markdownlint-cli2@latest "**/*.md" "#node_modules" "#.venv"
 
   test:
     name: Pytest offline suite
