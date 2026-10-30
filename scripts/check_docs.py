@@ -9,16 +9,11 @@ script is the documentation analogue. It asserts stable, meaningful facts:
   layer of it (and nothing it references has vanished) — the layer->test map
   cannot quietly diverge;
 - file paths named in backticks under AGENTS.md / the skills actually exist
-  (`.py`, `.sh`, `.ps1`, `.mjs`, `.md`, `.json` and `.toml` — the executable
+  (`.py`, `.sh`, `.ps1`, `.md`, `.json` and `.toml` — the executable
   classes were deleted by the task/script audit, so a `.py`-only scan could not
   see a surviving pointer), and a *missing* source is drift rather than a skip;
-- contract constants (DOCUMENTS_VERSION) and the golden shape agree across the
-  docs that quote them;
-- the golden-set counts the evaluation skill quotes are real;
 - every lint suppression in `ruff.toml` names a rule `select` carries (six of
   nine entries were dead, suppressing nothing while looking like a safeguard);
-- the gates' own runner files (`scripts/check_ts.mjs`, `package.json`,
-  `package-lock.json`) are tracked by git, or a clone has no runner at all;
 - AGENTS.md's `[tasks]` list is the real `mise.toml` task set, set for set;
 - the suite counts the docs quote match a real `pytest --collect-only`
   ("N collected / M deselected / K default" — the numbers churned three review
@@ -70,7 +65,7 @@ def _exists(*parts: str) -> bool:
 # the pointers this scan exists for. `.mise/tasks/` is a prefix because that
 # whole tree was deleted with the same audit.
 _DOC_PATH_RE = re.compile(
-    r"`((?:scripts|src|tests|docs|\.mise/tasks)/[A-Za-z0-9_./-]+\.(?:py|sh|ps1|mjs|md|json|toml))"
+    r"`((?:scripts|src|tests|docs|\.mise/tasks)/[A-Za-z0-9_./-]+\.(?:py|sh|ps1|md|json|toml))"
     # A pointer may carry a selector after the path — `::test_name`, `:12-40`,
     # ` --flag`. The path is what must resolve, so the selector is matched and
     # dropped rather than excluding the pointer from the scan (which is how
@@ -151,32 +146,6 @@ def _code_selected(code: str, select: list[str]) -> bool:
         if sel_family is not None and code.startswith(sel) and sel_family.group() == family.group():
             return True
     return False
-
-
-def _git_tracked(paths: tuple[str, ...]) -> set[str] | None:
-    """The subset of `paths` the git index knows, or None when git cannot answer
-    (not a repo, no git binary).
-
-    The explicit codec is load-bearing: a decode failure kills subprocess's reader
-    thread, so `stdout` comes back `None` with no exception and `splitlines()` on
-    it raises. `cwd=ROOT` is load-bearing too — `git ls-files -- package.json`
-    from a subdirectory answers rc 0 with empty output, which would report every
-    runner as untracked."""
-    try:
-        proc = subprocess.run(
-            ["git", "ls-files", "--", *paths],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=60,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
-        return None
-    return {line.strip() for line in (proc.stdout or "").splitlines() if line.strip()}
 
 
 def _parse_collection(out: str) -> tuple[int, int, int] | None:
@@ -522,22 +491,8 @@ def main() -> int:
     else:
         _report("OK", "every lint suppression names a selected rule")
 
-    # --- 9. The gates' own runner files are tracked -------------------------
-    # `mise lint-ts` and the L8 tests shell out to these. Untracked (in .gitignore's
-    # "tracked" shadow, say) a fresh clone has no runner at all — and the TS tests
-    # *skip* when the parser is missing, so nothing else would ever say so.
-    gate_files = ("scripts/check_ts.mjs", "package.json", "package-lock.json")
-    tracked = _git_tracked(gate_files)
-    if tracked is None:
-        _drift("cannot read the git index", "git ls-files failed")
-    else:
-        untracked = [p for p in gate_files if p not in tracked]
-        if untracked:
-            _drift("gate runner files are untracked", ", ".join(untracked))
-        else:
-            _report("OK", "the gates' runner files are tracked")
+    # --- 9. AGENTS.md's task list is the real task set ----------------------
 
-    # --- 10. AGENTS.md's task list is the real task set ---------------------
     # The doc says "exactly", so it is compared set-for-set; a task added without
     # the doc (or a deleted one left listed) is drift.
     try:
@@ -567,7 +522,7 @@ def main() -> int:
             else:
                 _report("OK", f"AGENTS.md lists all {len(task_names)} tasks")
 
-    # --- 11. The suite counts the docs quote are the live ones --------------
+    # --- 10. The suite counts the docs quote are the live ones ---------------
     # Volatile by nature (every added test moves them), so nothing but a real
     # collection may be their source — and every doc that quotes them must quote
     # the same triple, or the reader cannot tell which one is current. This map

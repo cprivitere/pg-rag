@@ -2,14 +2,13 @@
 
 Two halves. The *scan*: every backticked `scripts|src|tests|docs|.mise/tasks`-prefixed path in
 AGENTS.md and the skills must exist — at the repo root, or (for a skill) next to the SKILL.md that
-names it, since a skill bundles its own scripts — over `.py`, `.sh`, `.ps1`, `.mjs`, `.md`, `.json`
+names it, since a skill bundles its own scripts — over `.py`, `.sh`, `.ps1`, `.md`, `.json`
 and `.toml`. The executable-script classes and the hyphen in the character class are both
 load-bearing: the 2026-10-16 task/script audit deleted `.mise/tasks/*.ps1` and hyphenated
 `scripts/*.ps1` / `*.sh` files, and a `.py`-only, hyphen-free scan passes exactly the pointers this
 gate exists for. The *report*: a provisioned tree is clean, and every unprovisioned input — a
-missing source, a dead lint suppression, an untracked gate runner, a
-task list that disagrees with `mise.toml`, a stale suite count — is a printed drift, never a
-traceback and never a silent skip.
+missing source, a dead lint suppression, a task list that disagrees with `mise.toml`, a stale
+suite count — is a printed drift, never a traceback and never a silent skip.
 """
 
 from __future__ import annotations
@@ -27,13 +26,13 @@ _REAL_COLLECTED_COUNTS = cd._collected_counts
 
 
 def test_captures_every_script_class():
-    """`.py`, `.sh`, `.ps1`, `.mjs`, `.md`, `.json` and `.toml` pointers under the
+    """`.py`, `.sh`, `.ps1`, `.md`, `.json` and `.toml` pointers under the
     scanned prefixes are named — hyphenated names included, which is the class
     the audit deleted."""
     refs = cd._doc_refs(
-        "`scripts/check_ts.mjs` `docs/TEST_CONTRACTS.md` `docs/data/x.json` `data/golden/*.json`"
+        "`scripts/build_sqlstore.py` `docs/TEST_CONTRACTS.md` `docs/data/x.json` `data/golden/*.json`"
     )
-    assert refs == {"scripts/check_ts.mjs", "docs/TEST_CONTRACTS.md", "docs/data/x.json"}
+    assert refs == {"scripts/build_sqlstore.py", "docs/TEST_CONTRACTS.md", "docs/data/x.json"}
     refs = cd._doc_refs(
         "see `scripts/build_sqlstore.py`, `scripts/fixture_sample.ps1`, "
         "`scripts/fixture-sample.sh`, `docs/note.md`, `src/pgrag/agentic/store.py` "
@@ -174,8 +173,6 @@ def _stub_collection(monkeypatch):
     monkeypatch.setattr(
         cd, "_collected_counts", lambda: ((0, 0, 0), "0 collected / 0 deselected / 0 default")
     )
-    # the tmp trees live outside the repo: `git ls-files` there answers nothing
-    monkeypatch.setattr(cd, "_git_tracked", lambda paths: set(paths))
 
 
 def test_collection_summaries_are_parsed():
@@ -411,25 +408,6 @@ def test_a_missing_input_is_loud_and_never_a_traceback(
     monkeypatch.setattr(cd, "ROOT", _clean_tree(tmp_path, **{missing: None}))
     assert cd.main() == 1
     assert label in capsys.readouterr().out
-
-
-def test_an_untracked_runner_and_an_unanswerable_git_are_their_own_drifts(
-    tmp_path, monkeypatch, capsys
-):
-    """§9's two arms, neither pinned elsewhere: a runner file the index does not
-    know (a fresh clone then has no TypeScript gate at all, and its tests merely
-    *skip*), and a git that cannot answer — which must not be reported as the
-    first, because "untracked" is a fact git never stated."""
-    monkeypatch.setattr(cd, "ROOT", _clean_tree(tmp_path))
-    monkeypatch.setattr(cd, "_git_tracked", lambda paths: {p for p in paths if p != "package.json"})
-    assert cd.main() == 1
-    assert "gate runner files are untracked" in capsys.readouterr().out
-
-    monkeypatch.setattr(cd, "_git_tracked", lambda paths: None)
-    assert cd.main() == 1
-    out = capsys.readouterr().out
-    assert "cannot read the git index" in out
-    assert "gate runner files are untracked" not in out
 
 
 def test_the_real_docs_point_only_at_live_files():

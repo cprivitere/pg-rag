@@ -250,7 +250,5 @@ logs/
 # Other AI tool local files — never commit
 .devin/
 
-# Dev-only TypeScript parser for the extension-hook gate (`package.json`
-# devDependency, installed by `npm install`; tests/test_lint.py runs the gate).
-# package.json + package-lock.json are tracked — the installed tree is not.
+# Installed `npm:`-shimmed CLIs (markdownlint-cli2) live here — never commit.
 node_modules/

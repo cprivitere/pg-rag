@@ -4,13 +4,11 @@ One read-only sheet per review pass, so sixteen reviewers stop re-deriving the
 same numbers (and stop reporting a fact as a "finding"). The contract is the
 *shape* it promises — a section per fact class, each either measured or explicitly
 unavailable — plus the facts that must never be quietly wrong: whether the tree is
-frozen, whether the runner files the repo's own gates shell out to are actually
-committed, and whether git answered at all. The sheet caught three of these on
-itself: a "last output line" reader reported one file of three, a plain membership
+frozen, and whether git answered at all. The sheet caught two of these on
+itself: a plain membership
 test called the tracked `data/golden` fixture set "clone-invisible" (`git ls-files`
 never prints a directory), and its own docstring described the two liveness probes
 the wrong way round.
-
 Nothing here runs the sheet's slow rows or the suite: `mise drift` / `mise test`
 already run the gates for real, and re-running them from inside the offline suite
 costs seconds per test and races the outer pytest's `.pytest_cache`.
@@ -101,26 +99,17 @@ def test_the_sheet_is_read_only_and_self_consistent(capsys):
     assert counts is None or set(counts) == {"collected", "deselected", "default"}
 
 
-def test_the_runners_the_gates_need_are_tracked():
-    """The sheet's tree section is what tells a reviewer whether a clone could run
-    the gates at all; it must read *every* `git ls-files` line, not the last, and it
-    must ask git **once** for the whole set."""
-    assert set(rf._git_lines(["ls-files", "--", *rf.GATE_FILES]) or []) == set(rf.GATE_FILES)
-    assert rf._tracked(rf.GATE_FILES) == set(rf.GATE_FILES)
-    assert rf._tracked(("scripts/nope_missing.py",)) == set()  # an answer, not a failure
+def test_the_tree_reports_frozen_state():
+    """The sheet's tree section tells a reviewer whether the tree is frozen."""
     data = rf.tree()
-    assert data["untracked_gate_files"] == []
     assert data["frozen"] is (not data["dirty"])
 
 
-def test_a_git_that_cannot_answer_is_not_an_untracked_verdict(monkeypatch):
-    """`_git_lines`/`_tracked` answer None (not `[]`) when git fails, and both
-    consumers say so: `tree()` must not list the runners as untracked, and
-    `limits()` must not call a present input "clone-invisible" — a certificate
-    git never issued."""
+def test_a_git_that_cannot_answer_is_reported_as_itself(monkeypatch):
+    """`limits()` must not call a present input "clone-invisible" when git cannot
+    answer — a certificate git never issued."""
     assert rf._git_lines(["not-a-subcommand"]) is None
     monkeypatch.setattr(rf, "_git_lines", lambda args: None)
-    assert rf.tree()["untracked_gate_files"] == ["<git ls-files failed>"]
     # `limits()` lists only the inputs a working tree happens to have, so the
     # assertion is on the rows that exist (a bare clone has none).
     assert all("git could not answer" in row for row in rf.limits())

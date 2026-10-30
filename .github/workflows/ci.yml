@@ -33,17 +33,6 @@ jobs:
           python-version: "3.15"
           enable-cache: true
 
-      - name: Set up Node for TS gate
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: lts/*
-          cache: npm
-
-      - name: Install TS parser
-        run: |
-          set -euo pipefail
-          npm ci --no-audit --no-fund
-
       - name: Ruff check
         run: |
           set -euo pipefail
@@ -82,17 +71,6 @@ jobs:
         with:
           python-version: "3.15"
           enable-cache: true
-
-      - name: Set up Node for TS gate
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: lts/*
-          cache: npm
-
-      - name: Install TS parser
-        run: |
-          set -euo pipefail
-          npm ci --no-audit --no-fund
 
       - name: Run pytest
         run: |

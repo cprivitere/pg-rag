@@ -292,18 +292,15 @@ test (prove the source is fine) or recording a deliberate contract change
   assert these types, never a live server.
 - **Change ⇒** `uv run pytest tests/test_llm.py tests/test_connectivity.py`.
 
-### L8 — Lint gate (`ruff`) + TypeScript parse gate
+### L8 — Lint gate (`ruff`)
 
 - **Tests**: `test_lint.py`
 - **Source**: `ruff.toml` (repo root — the single rule source), `mise.toml`
   `[tasks.lint]/[tasks.format]`, `pyproject.toml` `[dependency-groups].dev`
-  (ruff pinned there, not in runtime deps); for TypeScript: `mise.toml`
-  `[tools] node` + `[tasks.lint-ts]/[tasks.ts-deps]`, `scripts/check_ts.mjs`,
-  and `package.json` (the `typescript` devDependency, installed into gitignored
-  `node_modules/`). CI runner: `.github/workflows/ci.yml` (`checks` job
-  enforces this layer: `ruff check`, `ruff format --check`, drift, compliance;
-  workflow scanning in CI is poutine only), plus local-only validator tools
-  `mise.toml [tools]` (`jactionlint`, `shellcheck`, `zizmor`, `pinact` — run
+  (ruff pinned there, not in runtime deps). CI runner: `.github/workflows/ci.yml`
+  (`checks` job enforces this layer: `ruff check`, `ruff format --check`, drift,
+  compliance; workflow scanning in CI is poutine only), plus local-only validator
+  tools `mise.toml [tools]` (`jactionlint`, `shellcheck`, `zizmor`, `pinact` — run
   by hand before workflow edits, not in CI).
 - **Contracts**: `uv run ruff check src scripts tests` returns 0 — any new
   finding in the linted trees fails `mise test`. `ruff.toml` `extend-exclude`
@@ -312,13 +309,7 @@ test (prove the source is fine) or recording a deliberate contract change
   suppression must name a code `lint.select` actually carries, resolved inside
   the code's linter family (`B` covers `B008`, never `BLE001`): a suppression for
   a family that is *off* suppresses nothing while looking like a safeguard.
-  L11 §8 enforces that. And `mise lint-ts`
-  (`node scripts/check_ts.mjs`) must parse the repo's script-class JS
-  (`scripts/*.mjs`, covered by the gate itself) clean — every diagnostic
-  fails, including a planted syntax error, which the layer self-tests. No
-  node / no `node_modules` (a checkout that never ran `mise install` +
-  `mise ts-deps`) ⇒ the two TS tests skip loudly (developer tooling, not a
-  runtime dep of this repo).
+  L11 §8 enforces that.
 - **Change ⇒** `uv run pytest tests/test_lint.py -q`; adding a rule = clean the
   new findings in the same commit (never raise the gate then violate it
   elsewhere). Format drift fails CI `checks` (`ruff format --check`); run
@@ -386,7 +377,7 @@ test (prove the source is fine) or recording a deliberate contract change
 - **Contracts**: every `tests/test_*.py` is named in this map, owned by exactly one layer's
   `**Tests**` block, and every test path this map names exists; every backticked
   `scripts|src|tests|docs|.mise/tasks`-prefixed path in AGENTS.md and the skills resolves over
-  `.py`, `.sh`, `.ps1`, `.mjs`, `.md`, `.json` and `.toml` — with `-` in the name class, since the
+  `.py`, `.sh`, `.ps1`, `.md`, `.json` and `.toml` — with `-` in the name class, since the
   audit's deleted names are hyphenated, and a path a SKILL.md addresses as `scripts/…` resolving next
   to that SKILL.md too (a skill bundles its own scripts) — while a *missing* source is drift, never a
   silent skip; `DOCUMENTS_VERSION` is quoted as a symbol (never a literal) in AGENTS.md / this map /
@@ -402,10 +393,7 @@ test (prove the source is fine) or recording a deliberate contract change
   `lint.select` carries, resolved the way ruff resolves it — inside the code's linter family, so
   `B` covers `B008` but **not** `BLE001` (a raw string prefix accepted exactly the dead
   suppressions the check exists for), with the `lint.ignore` arm dormant until that key returns
-  to `ruff.toml`; the gates' runner files
-  (`scripts/check_ts.mjs`, `package.json`, `package-lock.json`) are `git ls-files`-tracked, because a
-  clone without them has no TypeScript gate at all and its tests merely *skip* — and a git that cannot
-  answer (rc ≠ 0) is its own drift, never "untracked"; AGENTS.md's
+  to `ruff.toml`; AGENTS.md's
   "`[tasks]` set is exactly:" list equals `mise.toml`'s task set, set for set; and the two docs
   quoting the suite counts must quote the live `N collected / M deselected / K default` from a real
   `pytest --collect-only` — parsed from any summary shape pytest prints (with a deselect count or
@@ -414,9 +402,8 @@ test (prove the source is fine) or recording a deliberate contract change
   offline unit test** (`test_check_docs.py`), which
   provisions a tmp tree and asserts the provisioned one is clean and each drift is reported — the
   pointer scan, the ownership map (including a `*`/`+` bullet, a fenced example of the convention and
-  a file named twice in one block), the lint-suppression arm, the untracked-runner
-  and unanswerable-git arms, the task list and the count quote are all covered there — while the
-  model-literal *leak* (as opposed to a missing consumer file) is asserted only under `mise drift`;
+  a file named twice in one block), the lint-suppression arm,
+  the task list and the count quote are all covered there — while the
 - **Change ⇒** `uv run pytest tests/test_check_docs.py`, then `mise drift` (must print `0 drift`).
 
 ### L12 — Review tooling (`scripts/review_facts.py`)
@@ -430,17 +417,11 @@ test (prove the source is fine) or recording a deliberate contract change
   `(unavailable)` rather than as the number zero), `gates` (the three repo-wide **Python** gates —
   ruff / drift / compliance — each as `rc <code> — <summary>`, where a non-zero rc is a *fact* to
   report, not an error to raise, and the summary keeps the diagnosis as well as the trailer; the full
-  suite and `mise lint-ts` are deliberately not rows), `tasks` (the `mise.toml`
-  task names + aliases, tolerating mise's trivial string-task form), `tree` (HEAD, whether the working
-  tree is frozen, and whether the runner files
-  the gates shell out to are `git ls-files`-tracked — read from *every* `ls-files` line, because a
-  "last output line" reader reported two of three files as untracked — with an unanswerable git
-  reported as itself, never as "untracked"), `liveness` (how python and node
+  suite is deliberately not a row), `tasks` (the `mise.toml`
+  task names + aliases, tolerating mise's trivial string-task form), `tree` (HEAD and whether the
+  working tree is frozen), `liveness` (how python and node
   each classify a released pid — the platform fact reviewers kept re-measuring, and the case where the
   two agree, not the case where they diverge), and `limits`
-  (working-tree-only `data/` inputs a clone cannot see, with a *directory* counted as tracked when any
-  file under it is — `git ls-files` never prints the directory). The markdown block and `--json` carry the same
-  facts.
 - **Change ⇒** `uv run pytest tests/test_review_facts.py`, then `uv run python scripts/review_facts.py`
   to see the sheet a review pass pastes into its shared context.
 

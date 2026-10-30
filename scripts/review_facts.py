@@ -4,8 +4,7 @@ A review fans out over the same questions from every slice: how many tests does
 the suite collect, do the gates pass, which tasks exist, is the tree frozen,
 what does the platform say about a dead pid. Re-deriving them in each brief cost
 roughly a third of the last pass's wall time and produced three "findings" that
-were really just facts a machine already knew (a stale count, an untracked gate
-runner, a drift status).
+were really just facts a machine already knew (a stale count and a drift status).
 
 Run it once on the frozen SHA (`uv run python scripts/review_facts.py`, `--json`
 for machines) and paste the output into the *shared context* of every reviewer
@@ -15,9 +14,8 @@ Read-only by construction: it inspects, it writes nothing git-visible (bytecode
 and the ruff cache only), and it starts no service. The gate rows (ruff / drift /
 compliance) are the slow part (~2.5 s warm here, ~7 s cold) — `--no-gates` skips
 them, `--json` emits the same facts for a machine, and an interrupt exits 130
-without a traceback (nothing was half-written). Two verdicts are deliberately
-**not** rows: the suite's (`uv run pytest` costs minutes, and `counts` is a
-*collection*, not a run) and the TypeScript gate's (`mise lint-ts`).
+without a traceback (nothing was half-written). The suite's verdict is deliberately
+not a row: `uv run pytest` costs minutes, and `counts` is a *collection*, not a run.
 """
 
 from __future__ import annotations
@@ -32,11 +30,6 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-
-# The runner files the repo's gates shell out to: if one is untracked, a fresh
-# clone has no TypeScript gate at all (and its tests only *skip*, so nothing
-# reports that).
-GATE_FILES = ("scripts/check_ts.mjs", "package.json", "package-lock.json")
 
 GATE_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("ruff", ("uv", "run", "ruff", "check", "src", "scripts", "tests")),
@@ -150,9 +143,9 @@ def counts() -> dict[str, int] | None:
 
 def gates(enabled: bool = True) -> dict[str, str]:
     """`name -> "rc <code> — <summary>"` for the three repo-wide Python gates
-    (ruff / drift / compliance). The suite and `mise lint-ts` are deliberately not
-    rows: a full `uv run pytest` costs minutes, and `counts` is a collection, not a
-    verdict — a reviewer who needs either asks for it. These three are the slow
+    (ruff / drift / compliance). The suite is deliberately not a row: a full
+    `uv run pytest` costs minutes, and `counts` is a collection, not a verdict
+    — a reviewer who needs it asks for it. These three are the slow
     part of the sheet (~2.5 s warm), so a caller that already knows their verdicts
     can skip them."""
     if not enabled:
@@ -185,25 +178,17 @@ def tasks() -> dict[str, object]:
 
 
 def tree() -> dict[str, object]:
-    """Whether the tree under review is frozen, and what the git index knows."""
+    """Whether the tree under review is frozen."""
     status_rc, status = _run_raw(["git", "status", "--porcelain"])
     dirty = (
         sorted(line[3:] for line in status.splitlines() if len(line) > 3)
         if status_rc == 0
         else [f"<git status failed: {status.strip()}>"]
     )
-    tracked = _tracked(GATE_FILES)
     return {
         "head": _git(["rev-parse", "--short", "HEAD"]),
         "frozen": not dirty,
         "dirty": dirty,
-        # An unanswered `ls-files` is reported as itself: an empty set would read
-        # as "all three untracked", a fact git never stated.
-        "untracked_gate_files": (
-            ["<git ls-files failed>"]
-            if tracked is None
-            else [p for p in GATE_FILES if p not in tracked]
-        ),
     }
 
 

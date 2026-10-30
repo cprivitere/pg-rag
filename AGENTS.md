@@ -167,7 +167,7 @@ Python ≥3.15, managed with `uv`. `mise tasks` lists everything. The
 `golden-short`, `golden-one`, `golden-type`, `golden-flaky`,
 `golden-flaky-list`, `debug-llm`, `debug-chat`, `llm-start`, `llm-stop`,
 `chat-start`, `chat-stop`, `start`, `stop`, `status`, `drift`,
-`compliance`, `logs`, `tail-llm`, `lint-ts`, `ts-deps`, `lint`, `format`, `lint-all`. Service tasks
+`compliance`, `logs`, `tail-llm`, `lint`, `format`, `lint-all`. Service tasks
 (`llm-start`, `llm-stop`, `chat-start`, `chat-stop`) run
 `scripts/services.py`; the `.mise/tasks/` directory is gone.
 
@@ -185,7 +185,6 @@ mise golden-type recipe             # golden subset by type (entity|recipe|compa
 mise golden-flaky / golden-flaky-list # focus on historically-troublesome cases / audit stats
 mise debug-chat                     # Gradio chat in foreground (debug; same app as chat-start, opens a browser tab; refreshes the store first; needs only LLM up)
 mise lint                           # ruff check src scripts tests (alias li) — run after editing code; CI also gates `ruff format --check`, so run `mise format` too
-mise lint-ts                        # TypeScript parse gate for scripts/*.mjs (alias tsl; needs `mise ts-deps` once)
 mise format                         # ruff format + safe autofix (alias fo)
 mise lint-all                       # all local linters: ruff, format-check, yaml, shell, markdown-advisory (alias la)
 uv run pytest                       # offline test suite
@@ -223,9 +222,8 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
   ~1.6 s, `--json` for machines). The sheet carries the suite *counts*, the
   `ruff` / `mise drift` / `mise compliance` verdicts, the task set, the freeze
   state, the platform's liveness answer and clone-invisible inputs — deliberately **not** the suite
-  verdict or `mise lint-ts`, which the one runner measures once on the frozen SHA
-  (`uv run pytest` and `node scripts/check_ts.mjs`) and reports alongside the
-  sheet. A red row is a fact to report once, not a per-file finding, and no slice
+  verdict, which the one runner measures once on the frozen SHA (`uv run pytest`)
+  and reports alongside the sheet. A red row is a fact to report once, not a per-file finding, and no slice
   re-derives a row.
 - **Intake is three categories.** (1) behaviour nobody intended, (2) a claim the
   code or its docs make that the code does not honour, (3) a gate whose
@@ -342,11 +340,10 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
 ## Runtime/Tooling Preferences
 
 - **Runtime**: Python ≥3.15 via `uv`; model binaries fetched with `hf` global
-  CLI (cache `F:\AI\models\hub\`; GGUF via `-hf org/repo:quant`). Node (mise
-  `[tools]`, with `npm`) exists for one thing: the script-class JS gate
-  (`mise lint-ts`, parser from `mise ts-deps`) — the repo ships no JavaScript
-  beyond `scripts/*.mjs`. `[tools]` also pins the workflow/shell validators
-  (`jactionlint`, `shellcheck`, `zizmor`, `pinact`).
+  CLI (cache `F:\AI\models\hub\`; GGUF via `-hf org/repo:quant`). The repo ships
+  no JavaScript; Node (mise `[tools]`, with `npm`) backs the `npm:`-shimmed CLI
+  (`markdownlint-cli2`, advisory in `lint-all`). `[tools]` also pins the
+  workflow/shell validators (`jactionlint`, `shellcheck`, `zizmor`, `pinact`).
 - **Local services** (running on Windows host):
   | svc | port | model / note |
   |-----|------|--------------|
@@ -377,9 +374,9 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
 ## Testing & QA
 
 - **Framework**: pytest via `uv run pytest`; the counts this doc quotes are
-  **537 collected / 82 deselected / 455 default** (asserted by `mise drift`
+  **534 collected / 82 deselected / 452 default** (asserted by `mise drift`
   against a real collection) — the 82 being 16 data-heavy tests + the 66
-  parametrized golden cases, so the default offline run leaves **455** (one POSIX-only port-owner case skips on Windows) — all
+  parametrized golden cases, so the default offline run leaves **452** (one POSIX-only port-owner case skips on Windows) — all
   offline (temp-dir integration, mocked servers). The golden gate is the only
   suite that needs any server.
 - **Golden eval** (`tests/test_golden_check.py`): parametrized over
@@ -441,17 +438,9 @@ check everything at once.
 | Shell (`.githooks/pre-push`) | shellcheck | `shellcheck .githooks/pre-push` |
 | Markdown (docs/skills) | markdownlint-cli2, advisory (config `.markdownlint.jsonc`) | `mise lint-all` reports, does not fail |
 | Workflows | jactionlint + zizmor + pinact, poutine | poutine in CI; validators local (not in CI); run before workflow edits |
-| TypeScript (`scripts/*.mjs`) | repo `check_ts.mjs` gate | `mise lint-ts` |
 
 Optional extras available but not installed: none — the primaries cover every
 file type this repo ships.
-- **TypeScript gate** (same `tests/test_lint.py` / L8 layer): every JS/TS file
-  the repo ships must parse — `scripts/*.mjs`, covered by the gate itself.
-  `mise lint-ts` (`node scripts/check_ts.mjs`) exits 1 on any diagnostic.
-  `mise install` provides node (`[tools]`, pinned like
-  python/ruff) and `mise ts-deps` (`npm install`) the parser devDependency
-  (`node_modules/` is gitignored; without it the layer's two TS tests skip
-  loudly instead of failing). Nothing else in the suite reads TypeScript.
 - **Compliance gate** (`tests/test_constraints.py`, layer L9 in
   `docs/TEST_CONTRACTS.md`; policy doc `docs/research/pg-rag-game-interaction-limits.md`):
   `scripts/check_constraints.py` must scan
