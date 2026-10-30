@@ -19,4 +19,4 @@ CURATED_DIR = WIKI_DIR / "curated"
 # this (`documents_version`); bump whenever document generation changes shape
 # (new metadata keys, table records, chunking) so a reader can tell which
 # generator rendered each row.
-DOCUMENTS_VERSION = 25
+DOCUMENTS_VERSION = 26

@@ -748,6 +748,42 @@ _RECIPE_SCROLL_PREFIXES = (
 )
 
 
+def _recipe_scroll_family(conn: sqlite3.Connection, query: str, limit: int = 40) -> list[str]:
+    """Every recipe-scroll row matching ``query`` (name + base value each).
+
+    A family query ('Masquerade Mask', 'Bat Witch Hat') spans many scroll
+    tiers; resolving it to ONE row (the shortest LIKE hit) hides the other
+    tiers' values — the live miss priced Nice-tier scrolls and left both
+    Great-tier scrolls 'not stated'. List each matching scroll individually
+    so a per-item price answer can quote them all. Capped at 40 rows (~2.6K
+    chars, well under the tool-result cap): a broad query ('Tailoring', 285
+    scrolls) still notes the remainder instead of dumping everything."""
+    try:
+        pats = _item_name_like(query)
+        like_clause = " OR ".join("name LIKE ?" for _ in pats)
+        prefix_clause = " OR ".join("name LIKE ? ESCAPE '\\'" for _ in _RECIPE_SCROLL_PREFIXES)
+        scroll_pats = [f"{p} %{q}%" for p in _RECIPE_SCROLL_PREFIXES for q in pats]
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM items WHERE ({like_clause}) AND ({prefix_clause})",
+            (*pats, *scroll_pats),
+        ).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT name, value FROM items WHERE ({like_clause})"
+            f" AND ({prefix_clause}) ORDER BY name LIMIT ?",
+            (*pats, *scroll_pats, limit),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    out = [
+        f"  recipe scroll: {name} — base value {value:g}"
+        for name, value in rows
+        if value is not None
+    ]
+    if total > limit:
+        out.append(f"  (+{total - limit} more scrolls match — narrow the query for the rest)")
+    return out
+
+
 def _recipe_scroll_match(conn: sqlite3.Connection, query: str) -> tuple | None:
     """A recipe-scroll row for ``query`` ('Tailoring: <query>'), or None.
 
@@ -872,6 +908,13 @@ def _stall_zero_sale_lines(store_path: str, query: str, base: str) -> str:
         bv = _stall_item_base_value(conn, query)
         if bv:
             lines.append(bv)
+        family = _recipe_scroll_family(conn, query)
+        if len(family) > 1:
+            # Family query spanning several scroll tiers: the single base-value
+            # line above carries only one tier — list every matching scroll so
+            # no tier's price is hidden (a lone scroll adds nothing).
+            lines.append("matching recipe scrolls (per-tier vendor floors):")
+            lines.extend(family)
         lines.append(f"{base} matching '{query}'.")
         source_lines = _stall_source_lines(conn, query)
         chat_lines = _chat_price_lines(conn, query)

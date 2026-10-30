@@ -184,6 +184,17 @@
     all — no `work_order` table, ingest or parser anywhere in `src/`/`scripts/`;
     only CDN NPC work-order turn-ins and `WORKORDER_COIN_REWARD_MOD` exist. Needs
     a new source (glogger / game-log / session parsing).
+- Ingredient-name routing (open, 2026-10-30): v26 recipe docs carry a compact
+  `Item codes (ingredients: …; results: …).` line (`DOCUMENTS_VERSION = 26`,
+  `build_recipe_documents`), but multi-item questions route to family-level
+  corpus hits + `recipes.raw` blobs — no per-recipe doc is ever fetched, so the
+  codes resolve to names in the store yet the answer still quotes raw codes
+  (measured 3 loop runs on the mask/hat/apple pricing question: 5/5 prices,
+  0/3 ingredient-name runs). Prompt guidance was tried and reverted (no
+  measured effect — the run never opened the ingredients table). Candidate:
+  retrieval routing that surfaces per-recipe docs for multi-item recipe
+  questions (seed ranking prefers family rows today). Prove with a loop run on
+  the original wording before committing to the approach.
 
 - Instead of a separate chat window web thing, package this in such a way that I
   can make a custom build of glogger that has this as a tab inside of it

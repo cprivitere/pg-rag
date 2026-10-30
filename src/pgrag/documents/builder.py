@@ -218,11 +218,13 @@ def build_recipe_documents(db):
     for recipe_id, recipe in recipes.items():
         ingredients = []
         ingredient_names = []
+        ingredient_codes = []
 
         for ingredient in recipe.get("Ingredients", []):
             if "ItemCode" in ingredient:
                 name = resolver.item_name(ingredient["ItemCode"])
                 ingredient_names.append(name)
+                ingredient_codes.append(str(ingredient["ItemCode"]))
 
                 ingredients.append(f"- {name} x{ingredient.get('StackSize', 1)}")
 
@@ -246,12 +248,26 @@ def build_recipe_documents(db):
 
         results = []
         result_names = []
+        result_codes = []
 
         for result in recipe.get("ResultItems", []):
             name = resolver.item_name(result["ItemCode"])
             result_names.append(name)
+            result_codes.append(str(result["ItemCode"]))
 
             results.append(f"- {name} x{result['StackSize']}")
+
+        # Pre-joined code line: lets the model map item codes seen in tool
+        # output (result_items "6376x3", raw ingredient blobs) back to the
+        # names above without another SQL round. One compact line, not a
+        # per-row suffix — per-row suffixes lengthened recipe docs enough to
+        # flip the 'Butter recipe' FTS ranking to the summary doc.
+        code_bits = []
+        if ingredient_codes:
+            code_bits.append("ingredients: " + ", ".join(ingredient_codes))
+        if result_codes:
+            code_bits.append("results: " + ", ".join(result_codes))
+        codes_line = f"\nItem codes ({'; '.join(code_bits)})." if code_bits else ""
 
         text = f"""
 Recipe: {recipe.get("Name", recipe_id)}
@@ -269,7 +285,7 @@ Ingredients:
 {chr(10).join(ingredients)}
 
 Produces:
-{chr(10).join(results)}
+{chr(10).join(results)}{codes_line}
 """
 
         reward_skill = recipe.get("RewardSkill", "") or recipe.get("Skill", "")

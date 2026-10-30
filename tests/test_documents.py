@@ -109,6 +109,35 @@ def test_recipe_document_shape():
     assert meta["table"] == "recipes"
 
 
+def test_recipe_document_carries_item_codes_line():
+    """contract: recipe docs pre-join item codes to names — one compact
+    'Item codes (ingredients: …; results: …).' line so the loop can map codes
+    seen in tool output (result_items '6376x3') without another SQL round.
+    Recipes with no coded rows carry no line."""
+    db = _make_db(
+        items={"item_1": {"Name": "Bunny Juice"}},
+        recipes={
+            "recipe_1": {
+                "Name": "Bunny Mix",
+                "Skill": "Alchemy",
+                "SkillLevelReq": 5,
+                "Ingredients": [{"ItemCode": 1, "StackSize": 2}],
+                "ResultItems": [{"ItemCode": 1, "StackSize": 1}],
+            },
+            "recipe_2": {
+                "Name": "Bunny Wish",
+                "Skill": "Alchemy",
+                "SkillLevelReq": 5,
+                "Ingredients": [{"Desc": "Mystery goo"}],
+                "ResultItems": [],
+            },
+        },
+    )
+    docs = {d["id"]: d for d in build_recipe_documents(db)}
+    assert "Item codes (ingredients: 1; results: 1)." in docs["recipe_1"]["text"]
+    assert "Item codes" not in docs["recipe_2"]["text"]
+
+
 def test_build_documents_sets_type_in_metadata():
     items = {"item_1": {"Name": "Bunny Juice"}}
     recipes = {
