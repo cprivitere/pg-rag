@@ -179,7 +179,7 @@ test (prove the source is fine) or recording a deliberate contract change
   tests/test_agentic_loop.py tests/test_agentic_tune.py` (+ the file you
   edited), then `mise lint` plus format-clean (`mise format`). A tool-behavior
   change also wants an end-to-end
-  `mise agentic-chat` smoke (needs LLM :8080 only).
+  `mise chat` smoke (needs LLM :8080 only).
 - **Shared-function facet coverage** (read before editing the function): a
   single function is asserted across files, each testing a *different facet*;
   no file is the sole owner.
@@ -341,8 +341,8 @@ test (prove the source is fine) or recording a deliberate contract change
 ### L10 — Service control (`scripts/services.py`)
 
 - **Tests**: `test_services.py`
-- **Source**: `scripts/services.py`; consumers `mise.toml` (`llm-start`/`llm-stop`/`chat-start`/
-  `chat-stop`/`start`/`stop`/`status`/`debug-llm`), `scripts/agentic_tune.py` (stops/starts via
+- **Source**: `scripts/services.py`; consumers `mise.toml` (`llm-start`/`llm-stop`/`chatui-start`/
+  `chatui-stop`/`start`/`stop`/`status`/`chatui`), `scripts/agentic_tune.py` (stops/starts via
   `mise run llm-stop`/`llm-start`, and builds its `--llm-restart` server argv with
   `services.llm_argv` — the two contender rows carry their own model/flags, while the `ornith` row
   re-reads `[env]`, so no production literal lives in that registry)

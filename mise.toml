@@ -63,10 +63,10 @@ description = "Build data/sqlite_gorgon.db (CDN + wiki + generated corpus + sess
 run = "uv run python scripts/build_sqlstore.py"
 alias = "sq"
 
-[tasks."agentic-chat"]
+[tasks.chat]
 description = "Agentic CLI chat over the SQLite store (tool loop; needs only LLM :8080)"
 run = "uv run python scripts/agentic_chat.py"
-alias = "ac"
+alias = "c"
 
 [tasks."agentic-tune"]
 description = "Agentic loop tuning sweeps (temperature/reasoning/model) -> data/agentic_tune/"
@@ -131,31 +131,31 @@ alias = "xl"
 
 # --- Gradio chat ---
 
-[tasks."debug-chat"]
-description = "Run Gradio chat UI in foreground (debug; same app as chat-start, refreshes the store at startup, opens a browser tab). Port 7860"
+[tasks.chatui]
+description = "Run Gradio chat UI in foreground (debug; same app as chatui-start, refreshes the store at startup, opens a browser tab). Port 7860"
 run = "uv run --with gradio python scripts/rag_chat.py"
-alias = "dsc"
+alias = "cui"
 
-[tasks."chat-start"]
+[tasks."chatui-start"]
 description = "Start Gradio chat on :7860 with logging (primary chat UI; refreshes the store at startup)"
 run = "uv run python scripts/services.py start chat"
-alias = "sc"
+alias = "scui"
 
-[tasks."chat-stop"]
+[tasks."chatui-stop"]
 description = "Stop Gradio chat (kills the process tree on :7860)"
 run = "uv run python scripts/services.py stop chat"
-alias = "xc"
+alias = "xcui"
 
 # --- All services (scripts/services.py; background, logged to logs/) ---
 
 [tasks.start]
-description = "Start all services (llm + chat) with logging"
-depends = ["llm-start", "chat-start"]
+description = "Start all services (llm + chatui) with logging"
+depends = ["llm-start", "chatui-start"]
 alias = ["start-all", "up"]
 
 [tasks.stop]
-description = "Stop all services (llm + chat)"
-depends = ["chat-stop", "llm-stop"]
+description = "Stop all services (llm + chatui)"
+depends = ["chatui-stop", "llm-stop"]
 alias = ["stop-all", "down"]
 
 # --- Status check ---

@@ -154,7 +154,7 @@ def _chat_command() -> list[str]:
 
 
 def _chat_env() -> dict[str, str]:
-    # Serving path must not pop a browser; foreground `mise chat` still opens one.
+    # Serving path must not pop a browser; foreground `mise chatui` still opens one.
     return {"PG_RAG_CHAT_NO_BROWSER": "1"}
 
 
@@ -738,8 +738,8 @@ def status(name: str | None = None) -> int:
     print("  mise stop      - Stop all services")
     print("  mise sl        - Start LLM server only")
     print("  mise xl        - Stop LLM server only")
-    print("  mise sc        - Start Chat (Gradio) only")
-    print("  mise xc        - Stop Chat (Gradio) only")
+    print("  mise scui      - Start Chat (Gradio) only")
+    print("  mise xcui      - Stop Chat (Gradio) only")
     return worst
 
 

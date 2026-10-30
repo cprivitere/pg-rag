@@ -2,8 +2,8 @@
 kwargs (the env merge, `cwd`, and the session/creation flags a background start
 depends on), port-owner parsing, pidfile handling/identity, `_kill_tree`'s kill
 verdict and `stop`'s port verdict, and status mapping are the launch contract the
-mise tasks (`llm-start`/`llm-stop`/`chat-start`/`chat-stop`/`status`/
-`debug-llm`) promise. No service process (llama-server, Gradio) is ever spawned —
+mise tasks (`llm-start`/`llm-stop`/`chatui-start`/`chatui-stop`/`status`/
+`chatui`) promise. No service process (llama-server, Gradio) is ever spawned —
 the only subprocesses are a throwaway `sys.executable -c pass` and the real
 `tasklist`/`ps` identity probes, and every `Popen` is a fake whose kwargs are
 recorded."""

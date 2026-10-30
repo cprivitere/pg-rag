@@ -12,7 +12,7 @@ skips it. The loop is blocking (no token stream), so the handler yields a status
 line immediately, runs the loop, then yields the finished answer with a Sources
 block built from the loop's tool rounds.
 
-Run: mise debug-chat   (uv run --with gradio python scripts/rag_chat.py)
+Run: mise chatui   (uv run --with gradio python scripts/rag_chat.py)
 """
 
 import os
@@ -86,8 +86,8 @@ if __name__ == "__main__":
     demo.launch(
         server_name="0.0.0.0",
         server_port=7860,
-        # `mise chat-start` (scripts/services.py start chat) sets
+        # `mise chatui-start` (scripts/services.py start chat) sets
         # PG_RAG_CHAT_NO_BROWSER=1 so the serving path doesn't pop a tab;
-        # interactive `mise debug-chat` still opens one.
+        # interactive `mise chatui` still opens one.
         inbrowser=not os.environ.get("PG_RAG_CHAT_NO_BROWSER"),
     )
