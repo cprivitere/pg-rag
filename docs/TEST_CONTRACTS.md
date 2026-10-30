@@ -169,8 +169,8 @@ test (prove the source is fine) or recording a deliberate contract change
   trace_rounds}` (plus legacy `query_type`/`rerank_used` in every return arm),
   executes at most `max_rounds` tool rounds (native tool_calls
   OR two text forms: fenced ```` ```tool ```` JSON, and the Qwen template's
-  `<tool_call><function=…><parameter=…>` XML — three counting native), caps every tool-result payload except
-  `get_page` at 12000 chars (row-aware for tables), and forces a final no-tools answer once
+  `<tool_call><function=…><parameter=…>` XML — three counting native), caps every `_execute` round payload except
+  `get_page` at 12000 chars (row-aware for tables; the initial k=8 `corpus_search` seed enters uncapped), and forces a final no-tools answer once
   the budget is exhausted. Tests monkeypatch `loop._post` — never a live LLM.
   `loop._post` reads its transport config at CALL time: `PGRAG_LLM_URL`,
   `PGRAG_LLM_MODEL`, `PGRAG_LLM_NATIVE_TOOLS`. `agentic_tune.py` sweeps (model, temperature,
