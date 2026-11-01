@@ -282,3 +282,84 @@ def test_indexes_skip_missing_tables(tmp_path, manifests):
     assert "idx_gift_npc" in names
     assert "idx_stall_action_item" not in names
     conn.close()
+
+
+def test_stall_reimport_dupes_dropped_distinct_added(tmp_path, manifests):
+    """contract: stall_events dedupes on the natural event signature
+    (event_at, action, item, quantity, price_unit, player, raw_message).
+    glogger re-imports (log_title='Imported', fresh autoincrement id, new
+    entry_index/created_at) replay past game-log lines, so a re-sync replays
+    rows the store already holds under different ids — re-ingesting
+    identical-signature rows adds 0 and keeps the row count, while genuinely
+    distinct rows still add.
+
+    Tradeoff, erred toward dropping: same-buyer/same-minute repeats (e.g.
+    Kitiara 3x Ice Core 09:58) are INDISTINGUISHABLE from import dupes by
+    signature — collapsing them undercounts by the dupe rate. This side wins
+    because the corpus proves the opposite error is real and large (live
+    corpus at the time: 3507 source rows in 453 dupe groups; 1735 rows
+    sharing a signature, 1282 excess rows, 1029 excess in 355
+    Imported-involved groups) while entry_index can NOT rescue the collapsing
+    side even though it discriminates today (09:58 rows carry entry_index
+    1/2/3): glogger renumbers entry_index on every re-import of the same
+    batch, so including it would miss the Imported dupes and double-count
+    every re-imported sale instead."""
+    p = tmp_path / "glogger.db"
+    c = sqlite3.connect(p)
+    c.executescript(
+        """
+        CREATE TABLE stall_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_timestamp TEXT, event_at TEXT, log_timestamp TEXT,
+            log_title TEXT, action TEXT, player TEXT, owner TEXT, item TEXT,
+            quantity INTEGER, price_unit REAL, price_total INTEGER,
+            raw_message TEXT, entry_index INTEGER, ignored INTEGER,
+            created_at TEXT
+        );
+        INSERT INTO stall_events (event_timestamp, event_at, log_timestamp,
+            log_title, action, player, owner, item, quantity, price_unit,
+            price_total, raw_message, entry_index, ignored, created_at)
+        VALUES ("Mon Nov 1 09:58", "2026-11-01 09:58:00", "log", "Today's Shop Logs",
+            "bought", "Kitiara", "Me", "Ice Core", 1, 900.0, 900,
+            "Kitiara bought Ice Core at a cost of 900 per 1 = 900", 3, 0, "c1");
+        """
+    )
+    c.commit()
+    c.close()
+    conn = _store(tmp_path)
+    assert ingest_glogger(conn, p)["stall_events"] == 1
+    assert _rows(conn, "stall_events") == 1
+
+    # Same signature, fresh id, Imported title, renumbered entry_index ->
+    # re-import dupe: 0 added, row count unchanged.
+    c2 = sqlite3.connect(p)
+    c2.execute(
+        "INSERT INTO stall_events (event_timestamp, event_at, log_timestamp,"
+        " log_title, action, player, owner, item, quantity, price_unit,"
+        " price_total, raw_message, entry_index, ignored, created_at)"
+        ' VALUES ("Mon Nov 1 09:58", "2026-11-01 09:58:00", "log", "Imported",'
+        ' "bought", "Kitiara", "Me", "Ice Core", 1, 900.0, 900,'
+        ' "Kitiara bought Ice Core at a cost of 900 per 1 = 900", 7, 0, "c2")'
+    )
+    c2.commit()
+    c2.close()
+    counts = ingest_glogger(conn, p)
+    assert counts["stall_events"] == 0
+    assert _rows(conn, "stall_events") == 1
+
+    # Genuinely distinct event (different minute, different raw line) -> added.
+    c3 = sqlite3.connect(p)
+    c3.execute(
+        "INSERT INTO stall_events (event_timestamp, event_at, log_timestamp,"
+        " log_title, action, player, owner, item, quantity, price_unit,"
+        " price_total, raw_message, entry_index, ignored, created_at)"
+        ' VALUES ("Mon Nov 1 09:59", "2026-11-01 09:59:00", "log", "Imported",'
+        ' "bought", "Kitiara", "Me", "Ice Core", 1, 900.0, 900,'
+        ' "Kitiara bought Ice Core at a cost of 900 per 1 = 900", 8, 0, "c3")'
+    )
+    c3.commit()
+    c3.close()
+    counts = ingest_glogger(conn, p)
+    assert counts["stall_events"] == 1
+    assert _rows(conn, "stall_events") == 2
+    conn.close()

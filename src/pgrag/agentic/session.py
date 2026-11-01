@@ -34,6 +34,14 @@ from pgrag.agentic.store import (
 
 # Reports: files whose Report field says which dump they are.
 _ITEMS_REPORT = "Storage"
+# Corrupt-export placeholder: the client writes Character='???' Race='Error'
+# when the sheet is momentarily unreadable (AreaCasino/AreaEltibule logouts).
+# The filename keeps the real slot (Character_<Name>_<Server>.json); '???'
+# is the only placeholder with evidence, so it is the only one filtered —
+# never stored, since char_reports is keyed by (character, ts) and a '???'
+# row becomes a phantom third character that breaks player_state
+# multi-character defaulting and pollutes the trim keep-set.
+_PLACEHOLDER_CHARACTERS = frozenset({"???"})
 
 # Report history: every export accrues a full duplicate row (PK is
 # (character, ts)) but readers only need the latest data — plus one previous
@@ -222,8 +230,37 @@ def _ingest_reports(conn: sqlite3.Connection, reports_dir: Path) -> tuple[int, i
         except ValueError as exc:
             print(f"Skipping unreadable report {f.name}: {exc}")
             continue
+        raw_character = data.get("Character")
+        character = raw_character.strip() if isinstance(raw_character, str) else raw_character
+        if character in _PLACEHOLDER_CHARACTERS:
+            # Corrupt-export body (game writes Character='???' Race='Error'
+            # when the sheet is momentarily unreadable): skip ENTIRELY. The
+            # filename slot may parse to a real name, but the body is corrupt
+            # and storing it under that name would DELETE the good row at the
+            # same (character, ts) and poison the newest-sheet reads. No
+            # store writes; the manifest still advances so re-syncs neither
+            # re-read nor re-warn on this file.
+            print(f"Skipping corrupt-export report {f.name}: placeholder Character name")
+            _update_manifest("reports", [f])
+            continue
+        if not character:
+            # Genuinely missing/blank Character (not a corrupt body): fall
+            # back to the FILENAME slot (Character_<Name>_<Server>.json).
+            # Names may contain underscores, so the slot is everything between
+            # the first and last underscore. An empty slot (Character__Dreva)
+            # means the slot name is unknown — skip (a server-keyed row would
+            # still read as a phantom to the PK, trim keep-set, and
+            # player_state defaulting). Manifest advances on skip either way.
+            name = ""
+            if f.stem.startswith("Character_"):
+                parts = f.stem.split("_")
+                name = "_".join(parts[1:-1]).strip() if len(parts) > 2 else ""
+            if not name:
+                print(f"Skipping corrupt-export report {f.name}: unusable Character name")
+                _update_manifest("reports", [f])
+                continue
+            character = name
         nfiles += 1
-        character = data.get("Character") or f.stem
         server = data.get("ServerName")
         ts = data.get("Timestamp") or ""
         cur.execute("DELETE FROM char_reports WHERE character = ? AND ts = ?", (character, ts))
@@ -295,6 +332,25 @@ def _trim_report_history(conn: sqlite3.Connection) -> dict[str, int]:
     return trimmed
 
 
+def _drop_placeholder_characters(conn: sqlite3.Connection) -> int:
+    """Delete legacy phantom-character rows (pre-fix ingests stored '???').
+
+    The skip in _ingest_reports only stops NEW phantoms; a store built before
+    the fix still holds the old '???' rows (2 in the live store) and the trim
+    keep-set would retain them forever (they are that character's newest).
+    Runs on every ingest; the placeholder set is tiny and fixed, so the scan
+    is one indexed DELETE per member.
+    """
+    cur = conn.cursor()
+    dropped = 0
+    for name in _PLACEHOLDER_CHARACTERS:
+        cur.execute("DELETE FROM char_reports WHERE character = ?", (name,))
+        dropped += cur.rowcount if cur.rowcount is not None else 0
+        cur.execute("DELETE FROM player_items WHERE character = ?", (name,))
+    conn.commit()
+    return dropped
+
+
 def _ingest_books(conn: sqlite3.Connection, books_dir: Path) -> int:
     cur = conn.cursor()
     added = 0
@@ -325,6 +381,7 @@ def ingest_session(conn: sqlite3.Connection, session_dir: Path) -> dict[str, int
             "char_reports": 0,
             "player_items": 0,
             "session_docs": 0,
+            "placeholder_rows_dropped": 0,
         }
 
     chat_dir = session_dir / "ChatLogs"
@@ -350,6 +407,7 @@ def ingest_session(conn: sqlite3.Connection, session_dir: Path) -> dict[str, int
     else:
         print(f"Reports dir not found at {reports_dir}; skipping reports.")
         counts["char_reports"] = counts["player_items"] = 0
+    counts["placeholder_rows_dropped"] = _drop_placeholder_characters(conn)
 
     books_dir = session_dir / "Books"
     if books_dir.exists():

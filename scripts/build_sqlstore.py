@@ -43,11 +43,15 @@ def main() -> int:
         glogger_db=Path(args.glogger_db) if args.glogger_db else None,
     )
     elapsed = time.time() - start
-    # glogger's watermark/snapshot metadata keys are not row counts.
+    # glogger's watermark/snapshot metadata keys are not row counts (nor is
+    # the legacy-phantom cleanup count).
     row_counts = {
         k: v
         for k, v in counts.items()
-        if k != "entity_names" and k != "glogger_snapshots" and not k.endswith("_wm")
+        if k != "entity_names"
+        and k != "glogger_snapshots"
+        and not k.endswith("_wm")
+        and k != "placeholder_rows_dropped"
     }
     total = sum(row_counts.values())
     print(f"\nBuilt {args.db} in {elapsed:.1f}s ({total:,} rows total):")

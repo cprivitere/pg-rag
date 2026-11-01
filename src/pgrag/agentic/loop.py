@@ -486,19 +486,23 @@ Tools (call to gather more data; up to {max_rounds} rounds):
    returns the parent plus its chunks. Capped like other tool results.
 6. player_state(character=None, section="summary", query=None, skill=None) - live
    session data. section: summary, skills, currencies, quests, favor, items,
-   stall, abilities. abilities REQUIRES skill=<skill name> (e.g. "Animal Handling")
-   and diffs the character sheet's known-ability list against the CDN family —
-   use it for 'which abilities/skills do I know' questions. stall lists your
-   own shop's sales (query=item name filters) — the only realized price history
-   in the store; each sale is listed individually with buyer and per-unit price,
-   plus the item's CDN base value (with an asking-price fallback when the item
-   has no stall rows), plus any chat_events lines where other players quote a
-   price for the item (labeled as mentions, not sales), plus the item's
-   work-order turn-in payout when one exists (fixed councils ÷ required count =
-   the guaranteed per-unit floor), plus the item's `source:` lines (barter /
-   quest / recipe — where it comes from or is spent), plus any OTHER PLAYERS'
-   STALLS observations for that item (dated market intel you saw at another
-   player's stall — labeled as observations, never as your own sale).
+   stall, stall_inventory, abilities. abilities REQUIRES skill=<skill name>
+   (e.g. "Animal Handling") and diffs the character sheet's known-ability list
+   against the CDN family — use it for 'which abilities/skills do I know'
+   questions. stall lists your own shop's sales (query=item name filters) —
+   the only realized price history in the store; each sale is listed
+   individually with buyer and per-unit price, plus the item's CDN base value
+   (with an asking-price fallback when the item has no stall rows), plus any
+   chat_events lines where other players quote a price for the item (labeled
+   as mentions, not sales), plus the item's work-order turn-in payout when one
+   exists (fixed councils ÷ required count = the guaranteed per-unit floor),
+   plus the item's `source:` lines (barter / quest / recipe — where it comes
+   from or is spent), plus any OTHER PLAYERS' STALLS observations for that
+   item (dated market intel you saw at another player's stall — labeled as
+   observations, never as your own sale). stall_inventory answers 'what is in
+   my shop right now': latest visible/configured qty+price per item minus
+   later sales/removals plus later additions (sold-out and removed-to-zero
+   items are OUT; added-never-priced items list as unpriced).
 
 How to call tools:
 - Preferred: emit a native tool call (the API's tools parameter).
@@ -611,7 +615,8 @@ def _tools_api() -> list[dict]:
                 "description": (
                     "Live play-session data: character skills, currencies, "
                     "quests, NPC favor, items, known-ability audit, own-stall "
-                    "sale history (section=stall)."
+                    "sale history (section=stall) and current listings "
+                    "(section=stall_inventory)."
                 ),
                 "parameters": {
                     "type": "object",
@@ -627,6 +632,7 @@ def _tools_api() -> list[dict]:
                                 "favor",
                                 "items",
                                 "stall",
+                                "stall_inventory",
                                 "abilities",
                             ],
                         },
