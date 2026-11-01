@@ -335,6 +335,8 @@ def test_books_stored_verbatim(tmp_path):
 
 
 def test_missing_subdirs_are_skipped_not_fatal(tmp_path):
+    # contract: the missing-session-dir skip path reports zeroes for every
+    # ingest_session counts key including placeholder_rows_dropped.
     base = tmp_path / "session"
     base.mkdir()
     conn = _conn(tmp_path)
@@ -346,7 +348,78 @@ def test_missing_subdirs_are_skipped_not_fatal(tmp_path):
             "char_reports": 0,
             "player_items": 0,
             "session_docs": 0,
+            "placeholder_rows_dropped": 0,
         }
+    finally:
+        conn.close()
+        pass  # manifest isolation handled by _isolate_manifest
+
+
+def test_reports_placeholder_character_skipped_filename_fallback_kept(tmp_path, capsys):
+    """Contract (corrupt-export cover): the game client exports
+    Character='???' Race='Error' with a CORRUPT body when the sheet is
+    momentarily unreadable (AreaCasino/AreaEltibule logouts). The WHOLE ROW is
+    skipped — even when the filename slot parses to a real name, storing the
+    corrupt body under it would DELETE the good row at the same
+    (character, ts) and poison newest-sheet reads. Only a genuinely
+    missing/blank Character falls back to the filename slot (middle section
+    between first/last underscore, so multi-underscore names survive). Skips
+    advance the manifest so re-syncs don't re-read/re-warn."""
+    reports = {
+        "Character__Dreva.json": {
+            "Character": "???",
+            "Race": "Error",
+            "ServerName": "Dreva",
+            "Timestamp": "2026-09-13 01:45:36Z",
+            "Report": "CharacterSheet",
+            "Skills": {},
+        },
+        "Character_Test_Dreva.json": {
+            "ServerName": "Dreva",
+            "Timestamp": "2026-09-13 01:45:36Z",
+            "Report": "CharacterSheet",
+            "Skills": {"FirstAid": {"Level": 5}},
+        },
+        # ??? body with a GOOD filename slot: whole row skipped, good row kept.
+        "Character_Test_Dreva2.json": {
+            "Character": "???",
+            "Race": "Error",
+            "ServerName": "Dreva",
+            "Timestamp": "2026-09-13 01:45:36Z",
+            "Report": "CharacterSheet",
+            "Skills": {},
+        },
+        # Missing Character with multi-underscore filename keeps full name.
+        "Character_Foo_Bar_Dreva.json": {
+            "ServerName": "Dreva",
+            "Timestamp": "2026-09-13 01:45:36Z",
+            "Report": "CharacterSheet",
+            "Skills": {},
+        },
+    }
+    base = _session(tmp_path, reports=reports)
+    conn = _conn(tmp_path)
+    try:
+        counts = ingest_session(conn, base)
+        assert counts["char_reports"] == 2
+        chars = [
+            r[0] for r in conn.execute("SELECT DISTINCT character FROM char_reports").fetchall()
+        ]
+        assert chars == ["Foo_Bar", "Test"]
+        assert (
+            conn.execute("SELECT COUNT(*) FROM char_reports WHERE character = '???'").fetchone()[0]
+            == 0
+        )
+        # The good Test row kept its real body (??? dup did not clobber it).
+        body = conn.execute("SELECT report FROM char_reports WHERE character = 'Test'").fetchone()[
+            0
+        ]
+        assert '"FirstAid"' in body
+        out = capsys.readouterr().out
+        assert "Character_Test_Dreva2.json" in out
+        counts = ingest_session(conn, base)
+        assert counts["char_reports"] == 0
+        assert "Skipping" not in capsys.readouterr().out
     finally:
         conn.close()
         pass  # manifest isolation handled by _isolate_manifest

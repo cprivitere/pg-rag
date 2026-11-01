@@ -692,6 +692,7 @@ def build_store(
             )
             counts["chat_events"] = counts["player_events"] = counts["char_reports"] = 0
             counts["player_items"] = counts["session_docs"] = 0
+            counts["placeholder_rows_dropped"] = 0
 
         counts.update(ingest_glogger(conn, glogger_db))
         glogger_indexes(conn)
@@ -742,7 +743,10 @@ def refresh_store(store_path: str = DEFAULT_DB_PATH, *, skip: bool = False) -> d
             changed = {
                 t: n
                 for t, n in counts.items()
-                if n and t != "glogger_snapshots" and not t.endswith("_wm")
+                if n
+                and t != "glogger_snapshots"
+                and not t.endswith("_wm")
+                and t != "placeholder_rows_dropped"
             }
             if changed:
                 print(f"[sync] refreshed: {changed}")

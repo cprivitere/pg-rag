@@ -177,6 +177,51 @@ def _columns(conn: sqlite3.Connection, table: str) -> list[str]:
     return [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
 
 
+# Natural event signature for stall_events: glogger re-imports (log_title=
+# 'Imported', fresh autoincrement id, new entry_index/created_at) replay past
+# game-log lines, so re-syncing replays a row the store already holds under a
+# different id. The raw_message is the unambiguous game line, and the parsed
+# fields repeat it — (event_at, action, item, quantity, price_unit, player,
+# raw_message) is the dedupe key (entry_index deliberately excluded: within
+# one import batch glogger numbers a multi-entry minute 1/2/3, e.g. Kitiara's
+# 3x Ice Core 09:58 9457/9458/9459 — but the NEXT re-import of the same batch
+# renumbers it, so keying on entry_index would miss the dupe and double-count
+# every re-imported sale instead).
+_STALL_SIG_COLS = ("event_at", "action", "item", "quantity", "price_unit", "player", "raw_message")
+
+_STALL_NULL_SENTINELS = {
+    # NULLs need one value each that the column can never hold in real data:
+    # event_at/action/player are NOT NULL in glogger's schema (corpus: zero
+    # NULLs, zero empty strings); quantity is NOT NULL too (corpus range
+    # 1..1000), so its -1 sentinel needs no NULL-proof, only range-proof.
+    # price_unit is NULL for non-priced actions (added/removed/collected:
+    # 1647/3507 NULL) and >= 4.0 otherwise (corpus min 4.0, no zeroes or
+    # negatives), so -1.0 is unambiguous there. item is NULL for non-item
+    # actions (270/3507, e.g. 'collected' with player-only messages) and never
+    # empty in real data — char(1) keeps even a future '' row distinguishable
+    # from NULL. raw_message is NOT NULL today but is the message half of the
+    # key, so it gets the same future-proofing for free.
+    "quantity": "-1",
+    "price_unit": "-1.0",
+    "item": "char(1)",
+    "raw_message": "char(1)",
+}
+
+
+def _stall_sig_expr(cols: list[str]) -> str | None:
+    """COALESCE-wrapped signature columns, or None when a sig column is absent
+    (pre-drift source schema predates it — fall back to plain-id copy)."""
+    if any(c not in cols for c in _STALL_SIG_COLS):
+        return None
+    parts = []
+    for c in _STALL_SIG_COLS:
+        if c in _STALL_NULL_SENTINELS:
+            parts.append(f'COALESCE("{c}", {_STALL_NULL_SENTINELS[c]})')
+        else:
+            parts.append(f'"{c}"')
+    return ", ".join(parts)
+
+
 def _ensure_table(conn: sqlite3.Connection, table: str, cols: list[str]) -> None:
     """Mirror the source table's columns; `id` (event tables) becomes the PK so
     INSERT OR REPLACE is idempotent across watermark-race replays."""
@@ -184,6 +229,25 @@ def _ensure_table(conn: sqlite3.Connection, table: str, cols: list[str]) -> None
     if "id" in cols:
         col_defs += ', PRIMARY KEY ("id")'
     conn.execute(f'CREATE TABLE IF NOT EXISTS "{table}" ({col_defs})')
+    if table == "stall_events":
+        sig = _stall_sig_expr(cols)
+        if sig is not None:
+            # UNIQUE INDEX (not a table-level UNIQUE constraint): SQLite forbids
+            # ALTER TABLE ADD CONSTRAINT, and CREATE TABLE with the constraint
+            # inline would still need a rebuild path for existing mirrors — the
+            # index form applies to fresh and legacy tables alike. Legacy
+            # mirrors may already hold re-import dupes (the pre-dedupe store
+            # does), which would fail the index build — backfill first: keep
+            # the earliest-inserted row per signature (rowid order, not
+            # MIN("id"): the mirror keeps glogger's values verbatim including
+            # NULL ids, so MIN("id") tie-breaks to NULL — rowid always reflects
+            # insert order).
+            if _table_exists(conn, table):
+                conn.execute(
+                    f'DELETE FROM "{table}" WHERE "rowid" NOT IN'
+                    f' (SELECT MIN("rowid") FROM "{table}" GROUP BY {sig})'
+                )
+            conn.execute(f'CREATE UNIQUE INDEX IF NOT EXISTS "ux_stall_sig" ON "{table}" ({sig})')
 
 
 def _ensure_mirrored(conn: sqlite3.Connection, table: str, cols: list[str]) -> None:
@@ -192,7 +256,9 @@ def _ensure_mirrored(conn: sqlite3.Connection, table: str, cols: list[str]) -> N
     glogger owns the schema and adds columns over time; a CREATE-IF-NOT-EXISTS
     mirror keeps the stale shape forever and the next INSERT fails with "no
     column named". Compare PRAGMA column lists and DROP + recreate on mismatch
-    (callers re-copy the full table contents right after)."""
+    (callers re-copy the full table contents right after). DROP TABLE removes
+    ux_stall_sig with it, but _ensure_table recreates the index on the fresh
+    table, so the rebuilt mirror keeps the signature dedupe."""
     if _table_exists(conn, table):
         have = _columns(conn, table)
         if have != list(cols):
@@ -274,6 +340,18 @@ def _ingest_from_snapshot(conn: sqlite3.Connection, sconn: sqlite3.Connection) -
             return 0
         placeholders = ", ".join("?" for _ in cols)
         col_list = ", ".join(f'"{c}"' for c in cols)
+        if table == "stall_events" and _stall_sig_expr(cols) is not None:
+            # Re-import dupes arrive with fresh ids, so INSERT OR REPLACE can
+            # never match them — IGNORE on the ux_stall_sig natural key drops
+            # them instead. executemany's cursor.rowcount only carries the last
+            # statement's count, so the true inserted count comes from the
+            # connection's total_changes delta instead.
+            before = conn.total_changes
+            conn.executemany(
+                f'INSERT OR IGNORE INTO "{table}" ({col_list}) VALUES ({placeholders})',
+                rows,
+            )
+            return conn.total_changes - before
         conn.executemany(
             f'INSERT OR REPLACE INTO "{table}" ({col_list}) VALUES ({placeholders})',
             rows,
@@ -292,6 +370,29 @@ def _ingest_from_snapshot(conn: sqlite3.Connection, sconn: sqlite3.Connection) -
             continue
         cols = _columns(sconn, table)
         refine = _refine_stall_row if table == "stall_events" else None
+        if (
+            table == "stall_events"
+            and _table_exists(conn, table)
+            and _columns(conn, table) != list(cols)
+        ):
+            # signature dedupe (INSERT OR IGNORE keeps one row per signature)
+            # instead of only the post-watermark tail. No DELETE/_ensure_table
+            # here: copy_rows -> _ensure_mirrored DROPs and recreates the
+            # table on column mismatch (index rebuilt fresh by _ensure_table),
+            # and building ux_stall_sig from new source cols against the old
+            # mirror would fail with no-such-column.
+            rows = sconn.execute(
+                f"SELECT {', '.join(chr(34) + c + chr(34) for c in cols)}"
+                f' FROM "{table}" ORDER BY id'
+            ).fetchall()
+            if refine:
+                rows = [refine(row, cols) for row in rows]
+            added = copy_rows(table, cols, rows)
+            counts[table] = added
+            if rows:
+                per_table[table] = {"wm": int(rows[-1][cols.index("id")])}
+                counts[f"{table}_wm"] = int(rows[-1][cols.index("id")])
+            continue
         wm = int(per_table.get(table, {}).get("wm") or 0)
         rows = sconn.execute(
             f"SELECT {', '.join(chr(34) + c + chr(34) for c in cols)}"

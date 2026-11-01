@@ -936,6 +936,110 @@ def _stall_zero_sale_lines(store_path: str, query: str, base: str) -> str:
     return "\n".join(lines + source_lines)
 
 
+def _stall_inventory_text(conn: sqlite3.Connection, item_likes: list[str]) -> str:
+    """Currently-listed stall stock folded from the own-stall event ledger.
+
+    Single definition of CURRENTLY LISTED per item: the latest
+    visible/configured snapshot sets the baseline (qty + price_unit); every
+    subsequent bought/removed subtracts and every subsequent added adds. A
+    strictly-later hid_item zeroes the item (hidden from shoppers = not for
+    sale right now, regardless of folded qty). Items with remaining > 0 and a
+    known snapshot price list as qty@price; items with remaining > 0 but no
+    snapshot price (added-never-priced) list as unpriced (needs pricing);
+    items at zero (bought-to-zero / removed-to-zero / hidden) are OUT.
+
+    Tiebreak (same timestamp): within one timestamp, log order (rowid) decides
+    — snapshots sort BEFORE deltas sharing their timestamp, so same-minute
+    sales drain the listed stock instead of being hidden by it (buys win
+    ties). Across timestamps the LATEST snapshot (by ts, then rowid) is the
+    baseline; only strictly-later events fold in. Pre-snapshot same-minute
+    deltas belong to the previous listing cycle and are ignored. Input is
+    assumed deduped upstream (distinct ledger events); NULL quantities
+    count as 0.
+    """
+    sql = (
+        "SELECT item, COALESCE(event_at, event_timestamp) AS ts, action,"
+        " quantity, price_unit, rowid FROM stall_events"
+        " WHERE ignored = 0 AND item IS NOT NULL"
+        " AND action IN ('visible', 'configured', 'added', 'removed', 'bought', 'hid_item')"
+    )
+    params: list = []
+    if item_likes:
+        sql += " AND (" + " OR ".join("item LIKE ?" for _ in item_likes) + ")"
+        params.extend(item_likes)
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except sqlite3.Error as exc:
+        return f"player_state error: {exc}"
+    if not rows:
+        if item_likes:
+            return "No stall inventory events matching the query."
+        return "No stall inventory events in store."
+    # Log order within a timestamp, snapshots before same-minute deltas: the
+    # per-item fold keys off the latest snapshot, and this ordering keeps
+    # same-minute deltas after their snapshot in rowid order.
+    rank = {"visible": 0, "configured": 0, "added": 1, "removed": 1, "bought": 1}
+    rows.sort(key=lambda r: (r[1] or "", rank.get(r[2], 2), r[5]))
+    by_item: dict[str, list] = {}
+    for r in rows:
+        by_item.setdefault(r[0], []).append(r)
+    listed: list[tuple[str, int, float]] = []
+    unpriced: list[tuple[str, int, str]] = []
+    for item in sorted(by_item):
+        events = by_item[item]
+        snaps = [e for e in events if e[2] in ("visible", "configured")]
+        if snaps:
+            # Latest snapshot by (ts, rowid); the baseline is what it lists.
+            base = max(snaps, key=lambda e: (e[1] or "", e[5]))
+            qty = base[3] or 0
+            price = base[4]
+            for e in events:
+                if (e[1] or "", e[5]) <= (base[1] or "", base[5]):
+                    continue
+                q = e[3] or 0
+                if e[2] in ("bought", "removed"):
+                    qty -= q
+                elif e[2] == "added":
+                    qty += q
+                elif e[2] == "hid_item":
+                    qty = 0
+        else:
+            qty = 0
+            price = None
+            for e in events:
+                q = e[3] or 0
+                if e[2] in ("bought", "removed"):
+                    qty -= q
+                elif e[2] == "added":
+                    qty += q
+                elif e[2] == "hid_item":
+                    qty = 0
+        if qty > 0 and price is not None:
+            listed.append((item, qty, price))
+        elif qty > 0 and snaps:
+            unpriced.append((item, qty, "snapshot has no price"))
+        elif qty > 0:
+            unpriced.append((item, qty, "added, never priced"))
+        # qty <= 0: sold out / removed-to-zero / hidden — OUT, not listed.
+    lines = [
+        (
+            "YOUR OWN stall inventory right now (latest snapshot minus later sales/removals"
+            " plus later additions — not a market sample):"
+        )
+    ]
+    if listed:
+        unit = "item" if len(listed) == 1 else "items"
+        lines.append(f"CURRENTLY LISTED ({len(listed)} {unit}):")
+        lines.extend(f"  {item} x{qty} @ {price:g} each" for item, qty, price in listed)
+    else:
+        lines.append("nothing currently listed with a known price.")
+    if unpriced:
+        unit = "item" if len(unpriced) == 1 else "items"
+        lines.append(f"UNPRICED — needs pricing ({len(unpriced)} {unit}):")
+        lines.extend(f"  {item} x{qty} ({reason})" for item, qty, reason in unpriced)
+    return "\n".join(lines)
+
+
 def _player_state(store_path: str, args: dict) -> str:
     section = (args.get("section") or "summary").strip().lower()
     query = args.get("query")
@@ -960,7 +1064,7 @@ def _player_state(store_path: str, args: dict) -> str:
         wanted = args.get("character")
         if wanted in chars:
             character = wanted
-        elif section == "stall":
+        elif section in ("stall", "stall_inventory"):
             # The stall ledger is keyed by glogger owner, not by sheet
             # character: default to the stall owner instead of hard-failing.
             # DISTINCT owner is one row-scan over a small table; a store with
@@ -1258,9 +1362,31 @@ def _player_state(store_path: str, args: dict) -> str:
             return _stall_zero_sale_lines(store_path, query, base="no stall pricing")
         return "\n".join(lines)
 
+    if section == "stall_inventory":
+        # CURRENTLY LISTED fold over the own-stall ledger (additive to
+        # section=stall's event history — that contract is unchanged): the
+        # latest visible/configured snapshot per item minus later
+        # bought/removed plus later added. Shares the stall multi-character
+        # owner default above; the sheet report is irrelevant here.
+        item_likes = _item_name_like(query) if query else []
+        try:
+            conn2 = _conn(store_path)
+        except sqlite3.Error as exc:
+            return f"player_state error: {exc}"
+        try:
+            exists = conn2.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stall_events'"
+            ).fetchone()
+            if not exists:
+                return "No stall data in store (glogger play-history not ingested)."
+            out = _stall_inventory_text(conn2, item_likes)
+        finally:
+            conn2.close()
+        return out
+
     return (
         "player_state error: unknown section "
-        f"'{section}'. Use: summary, skills, currencies, quests, favor, items, stall, abilities."
+        f"'{section}'. Use: summary, skills, currencies, quests, favor, items, stall, stall_inventory, abilities."
     )
 
 

@@ -1197,3 +1197,234 @@ def test_corpus_search_stopwords_are_query_side(store):
         tools._fts_query("what does the butter recipe need") == '"butter"* OR "recipe"* OR "need"*'
     )
     assert tools.execute_tool(str(store), "corpus_search", {"query": "what is it"}) != "0 results."
+
+
+def test_player_state_stall_inventory_fold(store):
+    """New contract (stall_inventory): CURRENTLY LISTED is single-defined per
+    item — the latest visible/configured snapshot qty+price, minus subsequent
+    bought/removed, plus subsequent added. Remaining > 0 with a known price
+    lists qty@price; added-never-priced lists as unpriced (needs pricing);
+    bought-to-zero / removed-to-zero items are OUT (sold out, not listed).
+    section=stall keeps its own event-history contract (SOLD/ASKING blocks)
+    unchanged — this section is additive.
+
+    Fixture ledger (deduped input assumed; slice 1 owns dedupe):
+    - Widget: visible x4 @100, then bought x1 -> listed x3 @100.
+    - Gone: visible x2 @50, then bought x2 -> sold out, OUT.
+    - Mystery: added x5, never priced -> unpriced x5.
+    - Pulled: configured x3 @75, then removed x3 -> removed-to-zero, OUT.
+    """
+    conn = sqlite3.connect(store)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS stall_events ("
+        "id TEXT PRIMARY KEY, event_timestamp TEXT, event_at TEXT,"
+        "log_timestamp TEXT, log_title TEXT, action TEXT, player TEXT,"
+        "owner TEXT, item TEXT, quantity INTEGER, price_unit REAL,"
+        "price_total REAL, raw_message TEXT, entry_index TEXT,"
+        "ignored INTEGER, created_at TEXT)"
+    )
+    rows = [
+        # (id, event_at, action, player, item, qty, price_unit, price_total)
+        ("i1", "2026-08-01 10:00:00", "visible", None, "Widget", 4, 100.0, None),
+        ("i2", "2026-08-02 10:00:00", "bought", "Buyer", "Widget", 1, 100.0, 100),
+        ("i3", "2026-08-01 10:00:00", "visible", None, "Gone", 2, 50.0, None),
+        ("i4", "2026-08-02 10:00:00", "bought", "Buyer", "Gone", 2, 50.0, 100),
+        ("i5", "2026-08-01 10:00:00", "added", None, "Mystery", 5, None, None),
+        ("i6", "2026-08-01 10:00:00", "configured", None, "Pulled", 3, 75.0, None),
+        ("i7", "2026-08-02 10:00:00", "removed", None, "Pulled", 3, None, None),
+    ]
+    for rid, ea, action, player, item, qty, pu, pt in rows:
+        conn.execute(
+            "INSERT OR REPLACE INTO stall_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                rid,
+                ea,
+                ea,
+                None,
+                None,
+                action,
+                player,
+                "TwinkleofToes",
+                item,
+                qty,
+                pu,
+                pt,
+                None,
+                None,
+                0,
+                ea,
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+    out = execute_tool(str(store), "player_state", {"section": "stall_inventory"})
+    # Snapshot-minus-buys math: x4 minus x1 -> x3 @100.
+    assert "Widget x3 @ 100 each" in out
+    assert "CURRENTLY LISTED" in out
+    # Sold-out / removed-to-zero items are OUT — no listing line for them.
+    assert "Gone" not in out
+    assert "Pulled" not in out
+    # Added-never-priced lists as unpriced, not dropped.
+    assert "UNPRICED" in out
+    assert "Mystery x5 (added, never priced)" in out
+    # Query filter narrows to the item.
+    out2 = execute_tool(str(store), "player_state", {"section": "stall_inventory", "query": "Widg"})
+    assert "Widget x3 @ 100 each" in out2 and "Mystery" not in out2
+
+
+def test_player_state_stall_inventory_same_timestamp_tiebreak(store):
+    """New contract (stall_inventory tiebreak): a bought/removed sharing the
+    snapshot's timestamp applies AFTER it — snapshots sort before deltas, so
+    same-minute sales drain listed stock (buys win ties) instead of being
+    hidden by the snapshot. Multi-qty snapshot (visible x4) minus a partial
+    buy (x1) at the same minute lists the remainder (x3)."""
+    conn = sqlite3.connect(store)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS stall_events ("
+        "id TEXT PRIMARY KEY, event_timestamp TEXT, event_at TEXT,"
+        "log_timestamp TEXT, log_title TEXT, action TEXT, player TEXT,"
+        "owner TEXT, item TEXT, quantity INTEGER, price_unit REAL,"
+        "price_total REAL, raw_message TEXT, entry_index TEXT,"
+        "ignored INTEGER, created_at TEXT)"
+    )
+    for rid, ea, action, player, item, qty, pu, pt in [
+        ("w1", "2026-09-01 12:00:00", "visible", None, "TieWidget", 4, 200.0, None),
+        ("w2", "2026-09-01 12:00:00", "bought", "Buyer", "TieWidget", 1, 200.0, 200),
+    ]:
+        conn.execute(
+            "INSERT OR REPLACE INTO stall_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                rid,
+                ea,
+                ea,
+                None,
+                None,
+                action,
+                player,
+                "TwinkleofToes",
+                item,
+                qty,
+                pu,
+                pt,
+                None,
+                None,
+                0,
+                ea,
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+    out = execute_tool(
+        str(store), "player_state", {"section": "stall_inventory", "query": "TieWidget"}
+    )
+    assert "TieWidget x3 @ 200 each" in out
+
+
+def test_player_state_stall_inventory_same_minute_pre_snapshot_deltas_ignored(store):
+    """New contract (stall_inventory restock cycle): deltas sharing the
+    latest snapshot's timestamp but logged BEFORE it belong to the previous
+    listing cycle and are ignored — only strictly-later (ts, rowid) events
+    fold into the baseline. Guards the 2026-10-29 Glaring Amulet shape: a
+    same-minute removed x2 + added x4 preceding the visible x4 snapshot must
+    not inflate the listing (visible x4, later bought x4 -> OUT, sold out)."""
+    conn = sqlite3.connect(store)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS stall_events ("
+        "id TEXT PRIMARY KEY, event_timestamp TEXT, event_at TEXT,"
+        "log_timestamp TEXT, log_title TEXT, action TEXT, player TEXT,"
+        "owner TEXT, item TEXT, quantity INTEGER, price_unit REAL,"
+        "price_total REAL, raw_message TEXT, entry_index TEXT,"
+        "ignored INTEGER, created_at TEXT)"
+    )
+    for rid, ea, action, player, item, qty, pu, pt in [
+        ("c1", "2026-10-29 21:07:00", "removed", None, "CycleWidget", 2, None, None),
+        ("c2", "2026-10-29 21:07:00", "added", None, "CycleWidget", 4, None, None),
+        ("c3", "2026-10-29 21:07:00", "visible", None, "CycleWidget", 4, 1200.0, None),
+        ("c4", "2026-10-30 12:03:00", "bought", "Buyer", "CycleWidget", 4, 1200.0, 4800),
+    ]:
+        conn.execute(
+            "INSERT OR REPLACE INTO stall_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                rid,
+                ea,
+                ea,
+                None,
+                None,
+                action,
+                player,
+                "TwinkleofToes",
+                item,
+                qty,
+                pu,
+                pt,
+                None,
+                None,
+                0,
+                ea,
+            ),
+        )
+    conn.commit()
+    conn.close()
+    out = execute_tool(
+        str(store), "player_state", {"section": "stall_inventory", "query": "CycleWidget"}
+    )
+    assert "CycleWidget" not in out
+
+
+def test_player_state_stall_inventory_hidden_item_is_out(store):
+    """New contract (stall_inventory hid_item): a strictly-later hid_item
+    zeroes the item — hidden from shoppers is not for sale right now,
+    regardless of folded qty (visible x2, later hid_item -> OUT)."""
+    conn = sqlite3.connect(store)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS stall_events ("
+        "id TEXT PRIMARY KEY, event_timestamp TEXT, event_at TEXT,"
+        "log_timestamp TEXT, log_title TEXT, action TEXT, player TEXT,"
+        "owner TEXT, item TEXT, quantity INTEGER, price_unit REAL,"
+        "price_total REAL, raw_message TEXT, entry_index TEXT,"
+        "ignored INTEGER, created_at TEXT)"
+    )
+    for rid, ea, action, player, item, qty, pu, pt in [
+        ("h1", "2026-09-01 10:00:00", "visible", None, "HideWidget", 2, 300.0, None),
+        ("h2", "2026-09-02 10:00:00", "hid_item", "", "HideWidget", 1, None, None),
+    ]:
+        conn.execute(
+            "INSERT OR REPLACE INTO stall_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                rid,
+                ea,
+                ea,
+                None,
+                None,
+                action,
+                player,
+                "TwinkleofToes",
+                item,
+                qty,
+                pu,
+                pt,
+                None,
+                None,
+                0,
+                ea,
+            ),
+        )
+    conn.commit()
+    conn.close()
+    out = execute_tool(
+        str(store), "player_state", {"section": "stall_inventory", "query": "HideWidget"}
+    )
+    assert "HideWidget" not in out
+
+
+def test_player_state_stall_inventory_query_miss(store):
+    """New contract (stall_inventory query-miss): a filtered query matching
+    no rows reports the miss, not an empty store."""
+    out = execute_tool(
+        str(store),
+        "player_state",
+        {"section": "stall_inventory", "query": "NoSuchItemZZZ"},
+    )
+    assert "No stall inventory events matching the query." in out
