@@ -36,12 +36,12 @@ Each file:
 - `store: true` marks a case whose facts live in the SQLite store (glogger play
   history). The loop reads the store, so it runs through the same path — there
   is no separate store-only harness anymore.
-- 66 files exist today (22 entity / 31 general / 8 recipe / 5 comparison),
+- 68 files exist today (22 entity / 33 general / 8 recipe / 5 comparison),
   spanning recipes-by-ingredient, level-gated crafting, item acquisition/drops,
   ability lookups, comparisons, quest requirements, wiki lore, wiki how-to
-  assembly, and player-state audits. 11 store-only cases (player facts,
+  assembly, and player-state audits. 12 store-only cases (player facts,
   `"store": true`). Future additions should favor the thin buckets (comparison
-  is 5/66 today).
+  is 5/68 today).
 - **Question-shape rule (learned the hard way, 2026-10-11):** every dimension a
   case's facts check must be asked for by its question. A question that asks
   "where" while its facts also demand loot level and creature type fails a
@@ -93,7 +93,7 @@ stay local by decision and do not run in CI (they need LLM :8080).
   over the full set. Single-sample noise is expected; a FAIL is a triage item
   (`--diagnose` labels it GEN-side vs RET-side), not proof.
 
-- `mise golden` — all 66 files through the loop, exit 1 listing missing facts
+- `mise golden` — all 68 files through the loop, exit 1 listing missing facts
   on failure. `--tier {short,all}`, `--ids`, `--type
   {entity,recipe,comparison,general}`, `--max-facts N`, `--corpus {full,tool}`,
   `--max-rounds`, `--store`, `--report`, `--diagnose`, `--export [PATH]` are the

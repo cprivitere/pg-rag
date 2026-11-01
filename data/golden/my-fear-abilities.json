@@ -1,0 +1,22 @@
+{
+  "id": "my-fear-abilities",
+  "question": "What are TwinkleofToes's current abilities that have fear effects?",
+  "type": "general",
+  "facts": [
+    [
+      "Cause Terror",
+      "Cause Terror 2"
+    ],
+    [
+      "Terrifying Bite"
+    ],
+    [
+      "Squeal"
+    ],
+    [
+      "Horrifying Screech"
+    ]
+  ],
+  "store": true,
+  "notes": "Store-only case (live-session intake, 2026-11-01): fear = exact Fear keyword token in abilities.keywords intersected with TwinkleofToes sheet Skills[*].Abilities (2026-11-01 17:01Z). Oracle correction: Smell Fear (Werewolf) matched LIKE '%Fear%' via the SmellFear substring but carries no Fear token and no flee text, so it is excluded. Confirmed via SpecialInfo flee text: Cause Terror / Terrifying Bite / Squeal force flee for 5s; Horrifying Screech carries the Fear token. Loop baseline (6 rounds): kept only Cause Terrors, dropped the other 3 retrieved facts, invented Fast Talk/Mock/Ridicule/Strike a Nerve/Tell Me About Your Mother/Soothe/Grunt of Abeyance (zero Fear tokens). A run without the named character defaulted to EclipsiavonLuna and hallucinated ability IDs, so the question names TwinkleofToes."
+}

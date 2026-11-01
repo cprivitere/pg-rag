@@ -376,8 +376,8 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
 ## Testing & QA
 
 - **Framework**: pytest via `uv run pytest`; the counts this doc quotes are
-  **536 collected / 82 deselected / 454 default** (asserted by `mise drift`
-  against a real collection) — the 82 being 16 data-heavy tests + the 66
+  **538 collected / 84 deselected / 454 default** (asserted by `mise drift`
+  against a real collection) — the 84 being 16 data-heavy tests + the 68
   parametrized golden cases, so the default offline run leaves **454** (one POSIX-only port-owner case skips on Windows) — all
   offline (temp-dir integration, mocked servers). The golden gate is the only
   suite that needs any server.
@@ -392,7 +392,7 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
   is the harness's defense. For a byte-reproducible comparison, launch the
   server with `--reasoning off`. See `docs/LLM_MODEL_WIRING.md` → "Card flags &
   determinism".
-- **Golden CLI**: `mise golden` (all 66 files through the loop, exit 1 on
+- **Golden CLI**: `mise golden` (all 68 files through the loop, exit 1 on
   missing facts), `mise golden-short` (`--tier short`, 8 cases),
   `mise golden-one <id>` (named cases), `mise golden-type <type...>`. `--tier`,
   `--ids`, `--type`, `--max-facts`, `--diagnose`, `--export`, `--corpus`,
