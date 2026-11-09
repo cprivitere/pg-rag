@@ -5,7 +5,7 @@ description: Regression-triage and test discipline for pg-rag — how to decide 
 
 # testing — regression triage & test discipline
 
-**545 collected / 84 deselected / 461 default** (the
+**549 collected / 84 deselected / 465 default** (the
 default `not slow` marker deselects 84: 16 data-heavy tests + the 68
 parametrized golden cases; one POSIX-only port-owner case skips on Windows) —
 collection. Everything is

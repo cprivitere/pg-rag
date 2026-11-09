@@ -67,6 +67,15 @@ BATCH_SIZE = 50
 BASE_DELAY = 0.5
 CONNECT_TIMEOUT = 15
 READ_TIMEOUT = 60
+# A 403 on a titles= request is a WAF content block on the request string, not
+# rate limiting: the identical query 403s on every retry (measured 5/5), POST
+# 403s the same, and other params (?action=raw, pageids=) for the same title
+# return 200. Underscore retry resolves it: 'Title:_...' normalizes back to
+# 'Title: ...' server-side (correct pageid + touched) but no longer matches the
+# WAF's space/quote signature (measured: the bad 50-batch 403 → 200). Titles
+# still 403 after the underscore retry are quarantined to cached content so one
+# page never aborts a full sync.
+_BLOCKED_MARKER = object()
 
 RESERVED_NAMES = {
     "CON",
@@ -155,6 +164,11 @@ def api_call_with_retry(session: requests.Session, params: dict) -> dict:
             return data
 
         except requests.exceptions.RequestException as e:
+            if _is_waf_block(e):
+                # Deterministic content block, not congestion: the identical query
+                # 403s on every retry (measured 5/5), so fail fast and let the
+                # caller route around it (underscore titles, pageid fallback).
+                raise
             if attempt < MAX_RETRIES - 1:
                 delay = (2**attempt) + random.uniform(0, 1)
                 print(f"[{_ts()}]   Request failed, retrying in {delay:.1f}s... ({e})")
@@ -232,6 +246,59 @@ def enumerate_category_pages_recursive(
     return pages
 
 
+def _is_waf_block(error: Exception) -> bool:
+    return (
+        isinstance(error, requests.exceptions.HTTPError)
+        and error.response is not None
+        and error.response.status_code == 403
+    )
+
+
+def _underscore_params(params: dict, batch: list[str]) -> dict:
+    """Same query with spaces as underscores: MediaWiki normalizes them back
+    (measured: 'Title:_...' → normalized 'Title: ...' + correct pageid), but the
+    request string no longer matches the WAF's space/quote signature."""
+    return {**params, "titles": "|".join(t.replace(" ", "_") for t in batch)}
+
+
+def _request_with_underscore_fallback(
+    session: requests.Session, batch: list[str], params: dict
+) -> dict:
+    """titles= request that retries a 403 batch with underscore titles."""
+    try:
+        return api_call_with_retry(session, params)
+    except Exception as e:
+        if not _is_waf_block(e):
+            raise
+        retry = _underscore_params(params, batch)
+        try:
+            return api_call_with_retry(session, retry)
+        except Exception as retry_error:
+            if _is_waf_block(retry_error):
+                raise retry_error from e
+            raise
+
+
+def _quarantine_blocked_titles(
+    session: requests.Session, batch: list[str], params: dict
+) -> list[str]:
+    """Bisect a still-403 batch (after underscore retry) to blocked titles."""
+    if len(batch) == 1:
+        print(f"[{_ts()}]   Quarantined WAF-blocked title, keeping cached copy: {batch[0]}")
+        return list(batch)
+    mid = len(batch) // 2
+    blocked = []
+    for half in (batch[:mid], batch[mid:]):
+        try:
+            _request_with_underscore_fallback(session, half, {**params})
+        except Exception as e:
+            if _is_waf_block(e):
+                blocked.extend(_quarantine_blocked_titles(session, half, params))
+            else:
+                raise
+    return blocked
+
+
 def fetch_timestamps(session: requests.Session, titles: list[str]) -> dict[str, str]:
     touched = {}
     for i in range(0, len(titles), 50):
@@ -243,7 +310,20 @@ def fetch_timestamps(session: requests.Session, titles: list[str]) -> dict[str, 
             "prop": "info",
             "maxlag": 5,
         }
-        data = api_call_with_retry(session, params)
+        try:
+            data = _request_with_underscore_fallback(session, batch, params)
+        except Exception as e:
+            if not _is_waf_block(e):
+                raise
+            blocked = _quarantine_blocked_titles(session, batch, params)
+            for title in blocked:
+                touched[title] = _BLOCKED_MARKER
+            clean = [t for t in batch if t not in blocked]
+            data = (
+                api_call_with_retry(session, {**params, "titles": "|".join(clean)})
+                if clean
+                else {"query": {"pages": {}}}
+            )
         for page_info in data.get("query", {}).get("pages", {}).values():
             if "missing" in page_info or page_info.get("pageid", 0) <= 0:
                 touched[page_info.get("title", "")] = None
@@ -270,7 +350,23 @@ def fetch_page_content_batch(
             "maxlag": 5,
             "redirects": "",
         }
-        data = api_call_with_retry(session, params)
+        try:
+            data = _request_with_underscore_fallback(session, batch, params)
+        except Exception as e:
+            if not _is_waf_block(e):
+                raise
+            blocked = _quarantine_blocked_titles(session, batch, params)
+            clean = [t for t in batch if t not in blocked]
+            data = (
+                api_call_with_retry(session, {**params, "titles": "|".join(clean)})
+                if clean
+                else {"query": {"pages": {}}}
+            )
+            for title in blocked:
+                # Signal the caller with a sentinel content the missing-branch
+                # below cannot confuse with a real deletion ("" + True deletes
+                # the file). main() maps this back to "keep cached copy".
+                results[title] = (_BLOCKED_MARKER, False)
         pages = data.get("query", {}).get("pages", {})
         for page_info in pages.values():
             pageid = page_info.get("pageid", 0)
@@ -438,7 +534,13 @@ def main() -> int:
     skipped_count = 0
 
     to_download = []
+    blocked_count = 0
     for title in unique_titles:
+        if touched_map.get(title) is _BLOCKED_MARKER:
+            # WAF-blocked request string: keep the cached file + cached touched exactly
+            # as-is (not a deletion, not a tombstone — the page still exists).
+            blocked_count += 1
+            continue
         filename = title_to_filename[title]
         file_path = WIKI_DIR / filename
 
@@ -453,6 +555,9 @@ def main() -> int:
             skipped_count += 1
         else:
             to_download.append(title)
+
+    if blocked_count:
+        print(f"[{_ts()}] Quarantined {blocked_count} WAF-blocked titles, kept cached copies.")
 
     if skipped_count:
         print(f"[{_ts()}] Skipped {skipped_count} unchanged pages.")
@@ -482,6 +587,13 @@ def main() -> int:
             file_exists = file_path.exists() and file_path.stat().st_size > 0
 
             content, is_missing = results.get(title, ("", True))
+
+            if content is _BLOCKED_MARKER:
+                # WAF-blocked mid-sync (timestamp OK earlier, content blocked now):
+                # keep cached file + cached touched, same as the timestamp path.
+                blocked_count += 1
+                print(f"[{_ts()}]   Quarantined WAF-blocked title, keeping cached copy: {title}")
+                continue
 
             if is_missing:
                 if file_exists:
@@ -514,7 +626,7 @@ def main() -> int:
     save_metadata(meta)
 
     print(
-        f"[{_ts()}] Complete. {new_count} new, {updated_count} updated, {skipped_count} skipped. Saved to '{WIKI_DIR}'."
+        f"[{_ts()}] Complete. {new_count} new, {updated_count} updated, {skipped_count} skipped, {blocked_count} WAF-quarantined (cached). Saved to '{WIKI_DIR}'."
     )
     return 0
 
