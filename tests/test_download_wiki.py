@@ -650,3 +650,185 @@ def test_wiki_title_extras_deduped_against_categories(tmp_path):
 
     assert result == 0
     assert len(list(tmp_path.glob("Peaceableness_*.txt"))) == 1, "deduped to one file"
+
+
+# --- WAF evasion: a 403 on titles= retries with underscores, then quarantines ---
+# contract: a 403 from titles= is a content block on the request string (the
+# same batch 403s identically on every retry, POST 403s too, other params for
+# the same title 200). Before bisecting, the batch retries once with spaces as
+# underscores — MediaWiki normalizes them back (measured: 'Title:_...' returns
+# the canonical title + correct touched), but the request string no longer
+# matches the WAF signature. Only titles still 403 after that retry are
+# quarantined to _BLOCKED_MARKER, and main() keeps their cached file + cached
+# touched (never a deletion/tombstone).
+
+
+def test_waf_block_underscore_retry_recovers_title(tmp_path):
+    """Spaced titles 403 → underscore retry 200, no quarantine, real touched kept."""
+    import requests
+
+    from pgrag.loaders.download_wiki import fetch_timestamps
+
+    session = MagicMock()
+
+    def fake_api(s, params):
+        titles = params.get("titles", "").split("|")
+        if any(" " in t for t in titles):
+            resp = MagicMock(status_code=403)
+            raise requests.exceptions.HTTPError("403 Client Error", response=resp)
+        return {
+            "query": {
+                "pages": {
+                    str(i + 1): {
+                        "pageid": i + 1,
+                        "title": t.replace("_", " "),
+                        "touched": "2026-08-14T16:14:24Z",
+                    }
+                    for i, t in enumerate(titles)
+                }
+            }
+        }
+
+    with patch("pgrag.loaders.download_wiki.api_call_with_retry", side_effect=fake_api):
+        touched = fetch_timestamps(session, ["Good Page", "Title: 'Having an Identity Crisis'"])
+
+    assert touched["Title: 'Having an Identity Crisis'"] == "2026-08-14T16:14:24Z"
+    assert touched["Good Page"] == "2026-08-14T16:14:24Z"
+
+
+def test_waf_block_quarantines_title_keeps_cached_copy(tmp_path):
+    """403 on spaced AND underscore titles → quarantine, rest of batch kept."""
+    import requests
+
+    from pgrag.loaders.download_wiki import _BLOCKED_MARKER, fetch_timestamps
+
+    session = MagicMock()
+
+    def fake_api(s, params):
+        titles = params.get("titles", "").split("|")
+        if any(
+            t == "Title: 'Having an Identity Crisis'" or t == "Title:_'Having_an_Identity_Crisis'"
+            for t in titles
+        ):
+            resp = MagicMock(status_code=403)
+            raise requests.exceptions.HTTPError("403 Client Error", response=resp)
+        return {
+            "query": {
+                "pages": {
+                    str(i + 1): {
+                        "pageid": i + 1,
+                        "title": t,
+                        "touched": "2026-08-14T16:14:24Z",
+                    }
+                    for i, t in enumerate(titles)
+                }
+            }
+        }
+
+    with patch("pgrag.loaders.download_wiki.api_call_with_retry", side_effect=fake_api):
+        touched = fetch_timestamps(session, ["Good Page", "Title: 'Having an Identity Crisis'"])
+
+    assert touched["Title: 'Having an Identity Crisis'"] is _BLOCKED_MARKER
+    assert touched["Good Page"] == "2026-08-14T16:14:24Z"
+
+
+def test_waf_block_content_fetch_marks_blocked_not_missing(tmp_path):
+    """403 on spaced AND underscore content batch → marked, good title fetched."""
+    import requests
+
+    from pgrag.loaders.download_wiki import _BLOCKED_MARKER, fetch_page_content_batch
+
+    session = MagicMock()
+
+    def fake_api(s, params):
+        titles = params.get("titles", "").split("|")
+        if any(t == "Blocked Page" or t == "Blocked_Page" for t in titles):
+            resp = MagicMock(status_code=403)
+            raise requests.exceptions.HTTPError("403 Client Error", response=resp)
+        return {
+            "query": {
+                "pages": {
+                    t: {
+                        "pageid": 1,
+                        "title": t,
+                        "revisions": [{"slots": {"main": {"*": f"content of {t}"}}}],
+                    }
+                    for t in titles
+                }
+            }
+        }
+
+    with patch("pgrag.loaders.download_wiki.api_call_with_retry", side_effect=fake_api):
+        results = fetch_page_content_batch(session, ["Good Page", "Blocked Page"])
+
+    assert results["Blocked Page"][0] is _BLOCKED_MARKER
+    assert results["Good Page"] == ("content of Good Page", False)
+
+
+def test_waf_block_main_keeps_cached_file_and_touched(tmp_path):
+    """End to end: blocked title's cached .txt + meta touched survive the sync."""
+    import requests
+
+    from pgrag.loaders.download_wiki import _BLOCKED_MARKER
+
+    blocked_file = tmp_path / "Title_Having_an_Identity_Crisis_54b4152c.txt"
+    blocked_file.write_text("cached content", encoding="utf-8")
+    meta = {
+        "pages": {
+            "Title: 'Having an Identity Crisis'": {
+                "touched": "2026-08-14T16:14:24Z",
+                "filename": blocked_file.name,
+            }
+        }
+    }
+
+    def fake_api(s, params):
+        if params.get("list") == "categorymembers":
+            return {
+                "query": {
+                    "categorymembers": [
+                        {"ns": 0, "title": "Title: 'Having an Identity Crisis'"},
+                        {"ns": 0, "title": "Good Page"},
+                    ]
+                }
+            }
+        titles = params.get("titles", "").split("|")
+        if any(t == "Title: 'Having an Identity Crisis'" for t in titles):
+            resp = MagicMock(status_code=403)
+            raise requests.exceptions.HTTPError("403 Client Error", response=resp)
+        pages = {}
+        for t in titles:
+            if params.get("prop") == "info":
+                pages[t] = {"pageid": 1, "title": t, "touched": "2026-01-01T00:00:00Z"}
+            else:
+                pages[t] = {
+                    "pageid": 1,
+                    "title": t,
+                    "revisions": [{"slots": {"main": {"*": f"content of {t}"}}}],
+                }
+        return {"query": {"pages": pages}}
+
+    with (
+        patch.object(download_wiki, "WIKI_DIR", tmp_path),
+        patch.object(download_wiki, "TARGET_CATEGORIES", ["Fake Category"]),
+        patch.object(download_wiki, "WIKI_TITLE_EXTRAS", []),
+        patch.object(download_wiki, "RECURSIVE_CATEGORIES", {}),
+        patch("pgrag.loaders.download_wiki.api_call_with_retry", side_effect=fake_api),
+        patch("pgrag.loaders.download_wiki.load_metadata", return_value=meta),
+        patch.object(download_wiki, "META_FILE", tmp_path / ".meta.json"),
+        patch(
+            "pgrag.loaders.download_wiki.fetch_timestamps",
+            return_value={
+                "Title: 'Having an Identity Crisis'": _BLOCKED_MARKER,
+                "Good Page": "2026-01-01T00:00:00Z",
+            },
+        ),
+    ):
+        result = download_wiki.main()
+
+    assert result == 0
+    assert blocked_file.read_text(encoding="utf-8") == "cached content"
+    saved = json.loads((tmp_path / ".meta.json").read_text(encoding="utf-8"))
+    assert (
+        saved["pages"]["Title: 'Having an Identity Crisis'"]["touched"] == "2026-08-14T16:14:24Z"
+    ), "quarantine keeps cached touched, not a tombstone"
