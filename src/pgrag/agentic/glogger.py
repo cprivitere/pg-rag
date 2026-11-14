@@ -51,16 +51,18 @@ _EVENT_TABLES = (
     "corpse_extracts",
 )
 
-# Per-snapshot state tables: rows keyed to a character_snapshots id; only the
-# latest snapshot carries current truth, so re-copy its rows every sync.
-_SNAPSHOT_TABLES = (
-    "character_recipe_completions",
-    "character_npc_favor",
-    "character_currencies",
-    "character_skill_levels",
-    "character_stats",
-    "character_active_quests",
-)
+# Sheet mirrors: the readers (player_state summary/skills/currencies/quests/
+# favor/abilities/items) were written against the game client's report JSON
+# (char_reports + player_items keyed by (character, server, ts)). glogger captures the
+# same exports verbatim — CharacterSheet in character_snapshots.raw_json,
+# Storage in character_item_snapshots.raw_json — so the store mirrors the
+# sheets from glogger instead of scanning the Reports dir. The parsed
+# per-snapshot tables below are NOT ingested: they are lossy projections
+# (levels/keys without the Abilities lists, no work-order distinction)
+# while raw_json is the full sheet. Latest usable snapshot per (character,
+# server) only: an unparseable newest falls back to the previous good one,
+# a body whose Character disagrees with the row ('???' corrupt-export) is
+# skipped, and only Report == "Storage" dumps expand Items into player_items.
 
 # Live game-state tables glogger upserts in place (no history): full re-copy.
 # game_state_inventory/equipment/mount are v68 additions in the Release build
@@ -79,6 +81,12 @@ _STATE_TABLES = (
 # purchases; 0 sentinel = price pending). Append-only, no watermark id.
 _FULL_TABLES = ("gourmand_eaten_foods", "stall_price_observations")
 
+# stall_inventory_baseline: manual ground-truth rows (owner, item, qty, price,
+# recorded_at) — the only record of counts the shop-log history no longer
+# covers (scrolled-out added/visible lines, ProcessBook dark periods).
+# Upserted in place per glogger's UNIQUE(owner, item); full re-copy like the
+# state tables, never a watermark (ids mean nothing here).
+_BASELINE_TABLES = ("stall_inventory_baseline",)
 # glogger's CDN mirrors + UI-only tables we must NOT ingest (ours is fresh).
 SKIP_TABLES = (
     "items",
@@ -93,12 +101,10 @@ SKIP_TABLES = (
     "cdn_version",
     "servers",
     "user_characters",
-    "character_snapshots",  # consumed as the snapshot watermark source
 )
 
 # Manifest namespace: MANIFEST_PATH()["glogger"] = {"<table>": {...}}
-# Event tables carry {"wm": <int id watermark>}; per-snapshot tables carry
-# {"max_snapshot": <int>}.
+# Event tables carry {"wm": <int id watermark>}.
 
 # --- stall_events refinement ---------------------------------------------
 # glogger's own stall parser leaves four game-log line kinds as action=
@@ -177,49 +183,42 @@ def _columns(conn: sqlite3.Connection, table: str) -> list[str]:
     return [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
 
 
-# Natural event signature for stall_events: glogger re-imports (log_title=
-# 'Imported', fresh autoincrement id, new entry_index/created_at) replay past
-# game-log lines, so re-syncing replays a row the store already holds under a
-# different id. The raw_message is the unambiguous game line, and the parsed
-# fields repeat it — (event_at, action, item, quantity, price_unit, player,
-# raw_message) is the dedupe key (entry_index deliberately excluded: within
-# one import batch glogger numbers a multi-entry minute 1/2/3, e.g. Kitiara's
-# 3x Ice Core 09:58 9457/9458/9459 — but the NEXT re-import of the same batch
-# renumbers it, so keying on entry_index would miss the dupe and double-count
-# every re-imported sale instead).
-_STALL_SIG_COLS = ("event_at", "action", "item", "quantity", "price_unit", "player", "raw_message")
+def _witness_rows(sconn: sqlite3.Connection) -> list[tuple]:
+    """Fullest-witness stall rows: glogger's insert-path dedupe, replayed read-only.
 
-_STALL_NULL_SENTINELS = {
-    # NULLs need one value each that the column can never hold in real data:
-    # event_at/action/player are NOT NULL in glogger's schema (corpus: zero
-    # NULLs, zero empty strings); quantity is NOT NULL too (corpus range
-    # 1..1000), so its -1 sentinel needs no NULL-proof, only range-proof.
-    # price_unit is NULL for non-priced actions (added/removed/collected:
-    # 1647/3507 NULL) and >= 4.0 otherwise (corpus min 4.0, no zeroes or
-    # negatives), so -1.0 is unambiguous there. item is NULL for non-item
-    # actions (270/3507, e.g. 'collected' with player-only messages) and never
-    # empty in real data — char(1) keeps even a future '' row distinguishable
-    # from NULL. raw_message is NOT NULL today but is the message half of the
-    # key, so it gets the same future-proofing for free.
-    "quantity": "-1",
-    "price_unit": "-1.0",
-    "item": "char(1)",
-    "raw_message": "char(1)",
-}
+    glogger's storage key is (event_timestamp, raw_message, entry_index), but
+    entry_index is per-book position (oldest = 0), so overlapping books hold
+    the same line at different indexes. Its insert path dedupes per logical
+    line (owner, event_timestamp, raw_message): per line, the fullest batch
+    (batch = log_title/log_timestamp, most rows; ties go to the newest batch
+    by MAX(id)) is the witness — only its rows survive. A partial-overlap
+    batch carrying fewer copies inserts nothing (its occurrences are already
+    witnessed). Same-batch repeats (one created_at, N contiguous indexes)
+    are genuine multi-buys and stay.
 
-
-def _stall_sig_expr(cols: list[str]) -> str | None:
-    """COALESCE-wrapped signature columns, or None when a sig column is absent
-    (pre-drift source schema predates it — fall back to plain-id copy)."""
-    if any(c not in cols for c in _STALL_SIG_COLS):
-        return None
-    parts = []
-    for c in _STALL_SIG_COLS:
-        if c in _STALL_NULL_SENTINELS:
-            parts.append(f'COALESCE("{c}", {_STALL_NULL_SENTINELS[c]})')
-        else:
-            parts.append(f'"{c}"')
-    return ", ".join(parts)
+    The store mirrors that: per logical line keep exactly the witness batch's
+    rows. Keyed on (owner, event_timestamp, raw_message) with the batch tiebreak, so
+    genuine same-minute repeats (Deradon's 8x bulk buys, the 6x Dwarven N Core
+    / Orcish Steel drains, Saltpeter 30x) survive while cross-batch re-import
+    replays collapse. Ledger-note lines (hire/visitor/hide/shop-tag, refined
+    from unknown) participate like any other line.
+    """
+    cols = _columns(sconn, "stall_events")
+    ci = {c: i for i, c in enumerate(cols)}
+    order = ", ".join(f'"{c}"' for c in cols)
+    rows = sconn.execute(f"SELECT {order} FROM stall_events ORDER BY id").fetchall()
+    groups: dict[tuple, dict[tuple, list]] = {}
+    for row in rows:
+        key = (row[ci["owner"]] or "", row[ci["event_timestamp"]], row[ci["raw_message"]])
+        batch = (row[ci["log_title"]], row[ci["log_timestamp"]])
+        groups.setdefault(key, {}).setdefault(batch, []).append(row)
+    keep: list[tuple] = []
+    for batches in groups.values():
+        # Fullest batch wins; ties go to the newest (max id).
+        win = max(batches.values(), key=lambda rs: (len(rs), max(r[ci["id"]] for r in rs)))
+        keep.extend(win)
+    keep.sort(key=lambda r: r[ci["id"]] if r[ci["id"]] is not None else 0)
+    return keep
 
 
 def _ensure_table(conn: sqlite3.Connection, table: str, cols: list[str]) -> None:
@@ -230,40 +229,41 @@ def _ensure_table(conn: sqlite3.Connection, table: str, cols: list[str]) -> None
         col_defs += ', PRIMARY KEY ("id")'
     conn.execute(f'CREATE TABLE IF NOT EXISTS "{table}" ({col_defs})')
     if table == "stall_events":
-        sig = _stall_sig_expr(cols)
-        if sig is not None:
-            # UNIQUE INDEX (not a table-level UNIQUE constraint): SQLite forbids
-            # ALTER TABLE ADD CONSTRAINT, and CREATE TABLE with the constraint
-            # inline would still need a rebuild path for existing mirrors — the
-            # index form applies to fresh and legacy tables alike. Legacy
-            # mirrors may already hold re-import dupes (the pre-dedupe store
-            # does), which would fail the index build — backfill first: keep
-            # the earliest-inserted row per signature (rowid order, not
-            # MIN("id"): the mirror keeps glogger's values verbatim including
-            # NULL ids, so MIN("id") tie-breaks to NULL — rowid always reflects
-            # insert order).
-            if _table_exists(conn, table):
-                conn.execute(
-                    f'DELETE FROM "{table}" WHERE "rowid" NOT IN'
-                    f' (SELECT MIN("rowid") FROM "{table}" GROUP BY {sig})'
-                )
-            conn.execute(f'CREATE UNIQUE INDEX IF NOT EXISTS "ux_stall_sig" ON "{table}" ({sig})')
+        # The pre-witness mirror kept a signature UNIQUE index (ux_stall_sig)
+        # that collapsed genuine same-minute repeats (Deradon's 8x bulk buys).
+        # The witness mirror converges by DELETE + re-INSERT every sync, so
+        # drop the legacy index when present — keeping it would re-collapse
+        # the witness rows on insert.
+        conn.execute('DROP INDEX IF EXISTS "ux_stall_sig"')
 
 
-def _ensure_mirrored(conn: sqlite3.Connection, table: str, cols: list[str]) -> None:
+def _ensure_mirrored(
+    conn: sqlite3.Connection, table: str, cols: list[str], pk: tuple[str, ...] | None = None
+) -> None:
     """Ensure the store table matches the source columns, rebuilding on drift.
 
     glogger owns the schema and adds columns over time; a CREATE-IF-NOT-EXISTS
     mirror keeps the stale shape forever and the next INSERT fails with "no
     column named". Compare PRAGMA column lists and DROP + recreate on mismatch
-    (callers re-copy the full table contents right after). DROP TABLE removes
-    ux_stall_sig with it, but _ensure_table recreates the index on the fresh
-    table, so the rebuilt mirror keeps the signature dedupe."""
+    (callers re-copy the full table contents right after). Pass pk for tables
+    whose PRIMARY KEY is not the default ("id" column): the PK is compared
+    too, so a PK-only change (same columns, new key) also rebuilds instead
+    of silently keeping the stale key shape."""
     if _table_exists(conn, table):
         have = _columns(conn, table)
         if have != list(cols):
             conn.execute(f'DROP TABLE "{table}"')
-    _ensure_table(conn, table, cols)
+        elif pk is not None:
+            info = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+            have_pk = [r[1] for r in sorted(info, key=lambda r: r[5]) if r[5]]
+            if have_pk != list(pk):
+                conn.execute(f'DROP TABLE "{table}"')
+    if pk is None:
+        _ensure_table(conn, table, cols)
+    else:
+        col_defs = ", ".join(f'"{c}"' for c in cols)
+        col_defs += f", PRIMARY KEY ({', '.join(f'"{c}"' for c in pk)})"
+        conn.execute(f'CREATE TABLE IF NOT EXISTS "{table}" ({col_defs})')
 
 
 def _manifest() -> dict:
@@ -289,18 +289,18 @@ def ingest_glogger(
     conn: sqlite3.Connection,
     glogger_db: Path | None = None,
 ) -> dict[str, int]:
-    """Ingest glogger's behavioral tables into the store (incremental).
+    """Ingest glogger's behavioral tables into the store.
 
-    Returns {"<table>": rows_added} for every ingested table, plus metadata
-    keys: "glogger_snapshots" (the source's latest character_snapshots.id)
-    and "<event_table>_wm" (the persisted id watermark, present only when new
-    rows were copied — metadata keys, not row counts; callers printing
+    Returns {"<table>": rows_present} for every ingested table, plus metadata
+    keys: "glogger_snapshots" (the source's latest character_snapshots.id).
+    stall_events reports the witness-set size (re-copied every sync, not a
+    watermark delta); other event tables report {"<table>": rows_added} plus
+    "<table>_wm" watermarks (metadata keys, not row counts; callers printing
     summaries should filter them).
 
     Missing source DB is a no-op (returns {}); the store build never fails
-    for an absent glogger install. Source rows deleted since the last sync
-    are NOT detected for event tables (watermarks are append-only); per-
-    snapshot and state tables propagate deletions on their next re-copy.
+    for an absent glogger install. Witness/baseline/state re-copies propagate
+    source deletions on the next sync; id-watermarked event tables do not.
     """
     src = Path(glogger_db or DEFAULT_GLOGGER_DB)
     if not src.exists() and glogger_db is None and PERSONAL_GLOGGER_DB.exists():
@@ -325,11 +325,55 @@ def ingest_glogger(
     return counts
 
 
+def _latest_sheets(sconn: sqlite3.Connection, table: str) -> list[tuple[str, str, str, dict, str]]:
+    """Newest usable sheet per (character, server), newest first in glogger.
+
+    Skips unparseable rows (client mid-write) so a corrupt newest falls back
+    to the previous good one, and skips rows whose body Character disagrees
+    with the row's character_name — the client writes Character='???'
+    Race='Error' when the sheet is momentarily unreadable (AreaCasino /
+    AreaEltibule logouts), and storing that body would mirror a phantom
+    third character (the retired Reports scan filtered the same bodies).
+    Returns (character, server, ts, data, raw) per surviving key.
+    """
+    rows = sconn.execute(
+        "SELECT character_name, server_name, snapshot_timestamp, raw_json"
+        f' FROM "{table}" WHERE raw_json IS NOT NULL AND raw_json <> ' + "''"
+        " ORDER BY snapshot_timestamp DESC"
+    ).fetchall()
+    seen: set[tuple[str, str]] = set()
+    out: list[tuple[str, str, str, dict, str]] = []
+    for character, server, ts, raw in rows:
+        if (character, server) in seen:
+            continue
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        body = data.get("Character")
+        # Strip like the retired Reports scan: a padded body is still this
+        # character's sheet. Empty raw_json cannot reach it (the query filters
+        # NULL/empty raw_json), but a well-formed body can still be blank
+        # ('{"Character":""}') — skip it, never mirror a phantom '' key.
+        if not isinstance(body, str) or not body.strip() or body.strip() != character:
+            # Corrupt-export body ('???', '' or a mismatched slot): the row's
+            # key is real but the body is not this character's sheet — skip it
+            # and keep looking for this key's previous good snapshot.
+            continue
+        seen.add((character, server))
+        out.append((character, server, ts, data, raw))
+    return out
+
+
 def _ingest_from_snapshot(conn: sqlite3.Connection, sconn: sqlite3.Connection) -> dict[str, int]:
-    """One sync pass. First run copies everything; later runs copy only NEW
-    event rows (id > watermark) and re-copy snapshot/state tables only when
-    the source advanced. A no-op rerun returns 0 for every table — idempotent
-    per build_store's rerun-counts contract."""
+    """One sync pass. stall_events re-copies the witness set every sync
+    (DELETE + INSERT, converging to glogger's fullest-batch-per-line state);
+    other event tables copy only NEW rows (id > watermark); snapshot/state/
+    baseline tables re-copy when their freshness signal advances (baselines
+    unconditionally). A no-op rerun returns 0 new rows for watermarked
+    tables — idempotent per build_store's rerun-counts contract."""
     counts: dict[str, int] = {}
     per_table = _manifest()
     src_tables = {r[0] for r in sconn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -340,18 +384,6 @@ def _ingest_from_snapshot(conn: sqlite3.Connection, sconn: sqlite3.Connection) -
             return 0
         placeholders = ", ".join("?" for _ in cols)
         col_list = ", ".join(f'"{c}"' for c in cols)
-        if table == "stall_events" and _stall_sig_expr(cols) is not None:
-            # Re-import dupes arrive with fresh ids, so INSERT OR REPLACE can
-            # never match them — IGNORE on the ux_stall_sig natural key drops
-            # them instead. executemany's cursor.rowcount only carries the last
-            # statement's count, so the true inserted count comes from the
-            # connection's total_changes delta instead.
-            before = conn.total_changes
-            conn.executemany(
-                f'INSERT OR IGNORE INTO "{table}" ({col_list}) VALUES ({placeholders})',
-                rows,
-            )
-            return conn.total_changes - before
         conn.executemany(
             f'INSERT OR REPLACE INTO "{table}" ({col_list}) VALUES ({placeholders})',
             rows,
@@ -370,28 +402,19 @@ def _ingest_from_snapshot(conn: sqlite3.Connection, sconn: sqlite3.Connection) -
             continue
         cols = _columns(sconn, table)
         refine = _refine_stall_row if table == "stall_events" else None
-        if (
-            table == "stall_events"
-            and _table_exists(conn, table)
-            and _columns(conn, table) != list(cols)
-        ):
-            # signature dedupe (INSERT OR IGNORE keeps one row per signature)
-            # instead of only the post-watermark tail. No DELETE/_ensure_table
-            # here: copy_rows -> _ensure_mirrored DROPs and recreates the
-            # table on column mismatch (index rebuilt fresh by _ensure_table),
-            # and building ux_stall_sig from new source cols against the old
-            # mirror would fail with no-such-column.
-            rows = sconn.execute(
-                f"SELECT {', '.join(chr(34) + c + chr(34) for c in cols)}"
-                f' FROM "{table}" ORDER BY id'
-            ).fetchall()
+        if table == "stall_events":
+            # Witness-converged mirror: glogger's insert path keeps exactly
+            # the fullest batch per logical line, so the store re-copies the
+            # witness set every sync (DELETE + INSERT) instead of an
+            # ever-growing id tail. No watermark: batch membership (the
+            # witness) can shift without any new max id.
+            witness = _witness_rows(sconn)
             if refine:
-                rows = [refine(row, cols) for row in rows]
-            added = copy_rows(table, cols, rows)
+                witness = [refine(row, cols) for row in witness]
+            _ensure_mirrored(conn, table, cols)
+            conn.execute(f'DELETE FROM "{table}"')
+            added = copy_rows(table, cols, witness)
             counts[table] = added
-            if rows:
-                per_table[table] = {"wm": int(rows[-1][cols.index("id")])}
-                counts[f"{table}_wm"] = int(rows[-1][cols.index("id")])
             continue
         wm = int(per_table.get(table, {}).get("wm") or 0)
         rows = sconn.execute(
@@ -399,44 +422,94 @@ def _ingest_from_snapshot(conn: sqlite3.Connection, sconn: sqlite3.Connection) -
             f' FROM "{table}" WHERE id > ? ORDER BY id',
             (wm,),
         ).fetchall()
-        if refine:
-            rows = [refine(row, cols) for row in rows]
         added = copy_rows(table, cols, rows)
         counts[table] = added
         if rows:
             per_table[table] = {"wm": int(rows[-1][cols.index("id")])}
             counts[f"{table}_wm"] = int(rows[-1][cols.index("id")])
 
-    # --- per-snapshot state tables: re-copy latest snapshot's rows -----
-    # The manifest watermark (max_snapshot) is the sole freshness signal; the
-    # store table may legitimately not exist yet (fresh store with a manifest
-    # already in sync) — in that case ensure an empty mirrored table rather
-    # than re-copying, so repeated builds report stable counts.
-    for table in _SNAPSHOT_TABLES:
-        if table not in src_tables or max_snapshot <= 0:
-            continue
-        cols = _columns(sconn, table)
-        prev_snap = int(per_table.get(table, {}).get("max_snapshot") or 0)
-        if prev_snap == max_snapshot:
-            _ensure_mirrored(conn, table, cols)
-            counts[table] = 0
-            continue
-        if _table_exists(conn, table):
-            _ensure_mirrored(conn, table, cols)
-            conn.execute(f'DELETE FROM "{table}"')
-        rows = sconn.execute(
-            f"SELECT {', '.join(chr(34) + c + chr(34) for c in cols)}"
-            f' FROM "{table}" WHERE snapshot_id = ?',
-            (max_snapshot,),
-        ).fetchall()
-        added = copy_rows(table, cols, rows)
-        counts[table] = added
-        per_table[table] = {"max_snapshot": max_snapshot}
+    # --- sheet mirrors: latest CharacterSheet + Storage raw_json --------
+    # player_state readers were written against the game client's report JSON
+    # (char_reports + player_items keyed by (character, server, ts)); glogger
+    # captures the same exports verbatim, so mirror the sheets from raw_json instead
+    # of scanning the Reports dir. Every sync converges the store to the
+    # latest snapshot per (character, server) (DELETE + re-INSERT); no manifest
+    # watermark — snapshot ids advance on every glogger poll, so a watermark
+    # would re-copy every sync anyway.
 
+    if "character_snapshots" in src_tables:
+        _ensure_mirrored(
+            conn,
+            "char_reports",
+            ["character", "server", "ts", "report"],
+            pk=("character", "server", "ts"),
+        )
+        conn.execute('DELETE FROM "char_reports"')
+        char_rows = 0
+        for character, server, ts, data, raw in _latest_sheets(sconn, "character_snapshots"):
+            conn.execute(
+                "INSERT OR REPLACE INTO char_reports VALUES (?,?,?,?)",
+                (character, server, data.get("Timestamp") or ts, raw),
+            )
+            char_rows += 1
+        counts["char_reports"] = char_rows
+    if "character_item_snapshots" in src_tables:
+        _ensure_mirrored(
+            conn,
+            "player_items",
+            [
+                "character",
+                "server",
+                "ts",
+                "type_id",
+                "name",
+                "rarity",
+                "storage",
+                "stack",
+                "value",
+                "imbue_power",
+                "imbue_tier",
+                "seq",
+                "report",
+            ],
+            pk=("character", "server", "ts", "type_id", "name", "storage", "seq"),
+        )
+        conn.execute('DELETE FROM "player_items"')
+        item_rows = 0
+        # Storage dumps only: a CharacterSheet row carries no Items list, and
+        # (like the retired Reports scan) only Report == "Storage" expands.
+        for character, server, ts, data, _raw in _latest_sheets(sconn, "character_item_snapshots"):
+            if data.get("Report") != "Storage":
+                continue
+            its = data.get("Timestamp") or ts
+            for seq, item in enumerate(data.get("Items") or []):
+                if not isinstance(item, dict):
+                    continue
+                conn.execute(
+                    "INSERT OR REPLACE INTO player_items"
+                    " (character, server, ts, type_id, name, rarity, storage, stack, value,"
+                    " imbue_power, imbue_tier, seq, report) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        character,
+                        server,
+                        its,
+                        item.get("TypeID"),
+                        item.get("Name"),
+                        item.get("Rarity"),
+                        item.get("StorageVault"),
+                        item.get("StackSize"),
+                        item.get("Value"),
+                        item.get("TSysImbuePower"),
+                        item.get("TSysImbuePowerTier", item.get("TSysImbueTier")),
+                        seq,
+                        json.dumps(item, ensure_ascii=False),
+                    ),
+                )
+                item_rows += 1
+        counts["player_items"] = item_rows
     # --- live state tables: full re-copy keyed to the source snapshot --
     # (they upsert in place with no reliable per-row ordering; the manifest
-    # snapshot id is the sole freshness signal — same reasoning as the
-    # snapshot tables above.)
+    # snapshot id is the sole freshness signal.)
     prev_state_snap = int(per_table.get("__state_snapshot__", {}).get("snap") or -1)
     for table in _STATE_TABLES + _FULL_TABLES:
         if table not in src_tables:
@@ -446,6 +519,22 @@ def _ingest_from_snapshot(conn: sqlite3.Connection, sconn: sqlite3.Connection) -
             _ensure_mirrored(conn, table, cols)
             counts[table] = 0
             continue
+        if _table_exists(conn, table):
+            _ensure_mirrored(conn, table, cols)
+            conn.execute(f'DELETE FROM "{table}"')
+        rows = sconn.execute(
+            f'SELECT {", ".join(chr(34) + c + chr(34) for c in cols)} FROM "{table}"'
+        ).fetchall()
+        added = copy_rows(table, cols, rows)
+        counts[table] = added
+    # --- stall baselines: unconditional full re-copy ---------------------
+    # Baselines are user edits (recounts, manual counts) that advance with no
+    # new character_snapshots row, so the snapshot watermark above cannot gate
+    # them — re-copy every sync, same DELETE + re-INSERT as the state tables.
+    for table in _BASELINE_TABLES:
+        if table not in src_tables:
+            continue
+        cols = _columns(sconn, table)
         if _table_exists(conn, table):
             _ensure_mirrored(conn, table, cols)
             conn.execute(f'DELETE FROM "{table}"')
@@ -476,6 +565,10 @@ def glogger_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_deaths_area ON character_deaths(area)",
         "CREATE INDEX IF NOT EXISTS idx_tx_item ON item_transactions(item_name)",
         "CREATE INDEX IF NOT EXISTS idx_tx_context ON item_transactions(context)",
+        (
+            "CREATE INDEX IF NOT EXISTS idx_stall_baseline_owner_item ON"
+            " stall_inventory_baseline(owner, item)"
+        ),
     )
     for stmt in stmts:
         table = stmt.split(" ON ")[1].split("(")[0].strip()

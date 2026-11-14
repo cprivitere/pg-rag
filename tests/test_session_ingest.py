@@ -1,6 +1,8 @@
-"""Contracts pgrag.agentic.session ingestion: chat/player/report/book
-parsing into their tables from tmp fixtures, tolerant unmatched lines,
-and idempotent re-ingest of changed files."""
+"""Contracts pgrag.agentic.session ingestion: chat parsing into chat_events
+from tmp fixtures, tolerant unmatched lines, and idempotent re-ingest of
+changed files. Retired: Player.log parsing (client no longer emits LocalPlayer
+lines — files ignored), Books ingest (duplicated in glogger), and the Reports
+scan (sheets mirror from glogger raw_json). Chat is the only session ingest."""
 
 import json
 import os
@@ -30,6 +32,8 @@ def _conn(tmp_path):
 
 
 def _session(tmp_path, chat=None, player=None, reports=None, books=None):
+    # books=/player= branches exist only for the retirement tests (files land
+    # on disk but ingest ignores them); all other tests pass chat=/reports=.
     base = tmp_path / "session"
     base.mkdir()
     if chat is not None:
@@ -95,23 +99,28 @@ def test_chat_parsing_channels_speakers_system(tmp_path):
         pass  # manifest isolation handled by _isolate_manifest
 
 
-def test_chat_continuation_lines_bare_facts_and_wrap(tmp_path, capsys):
+def test_chat_continuation_lines_join_social_wrap_and_facts(tmp_path, capsys):
     """Continuation-line contract: (1) a non-timestamped line made only of
-    [Item: X]/[Recipe: X] facts (single or multiple, nested brackets allowed)
-    is stored with channel=item, ts='', facts joined with '; '; (2) a bare
-    bracketed game announcement ([Tonight's ...]) is stored as channel=system;
-    (3) any other non-timestamped line is a wrap continuation of the previous
-    chat row in the same file — appended to that row's text; if the file starts
-    with one it is skipped silently (not stored, not unmatched); (4) blank
-    lines are skipped silently. Real format drift (a timestamped line that
-    matches no known shape) still counts as unmatched."""
+    [Item: X]/[Recipe: X] facts that FOLLOWS a speaker row in a social
+    channel (Trade/Global/Nearby/Help/Tell/Guild/Party) is JOINED onto that
+    row's text (the link completes the message: "Give Lemons a" +
+    "[Item: Lemon]"); (2) a bare fact line after a non-social row (system,
+    combat, item, file head) is stored standalone with channel=item, ts='';
+    (3) a bare bracketed game announcement ([Tonight's ...]) is stored as
+    channel=system; (4) any other non-timestamped line is a wrap continuation
+    of the previous chat row in the same file — appended to that row's text;
+    if the file starts with one it is skipped silently (not stored, not
+    unmatched); (5) blank lines are skipped silently. Real format drift (a
+    timestamped line that matches no known shape) still counts as unmatched."""
     chat = {
         "Chat-26-10-04.log": (
             "26-10-04 10:54:35\t[Trade] Bobjoelol: Buying Toolcrafting kits\n"
             "Toolcrafting: Weapon Whetstone (Elven Method)\n"
             "[Recipe: Oscar Fillet]\n"
-            "[Recipe: Bluegill Fillet] [Recipe: Pinfish Fillet]\n"
             "26-10-04 10:55:00\t[Help] Kari: carp is from roshun\n"
+            "[Item: Lemon]\n"
+            "26-10-04 10:56:00\t******************** Entering Area: Serbule\n"
+            "[Item: Lydia's Soul]\n"
         ),
         "Chat-26-10-05.log": (
             "leads the file with no previous row\n"
@@ -127,40 +136,46 @@ def test_chat_continuation_lines_bare_facts_and_wrap(tmp_path, capsys):
         rows = conn.execute(
             "SELECT channel, speaker, text, source_file FROM chat_events ORDER BY id"
         ).fetchall()
-        # file 1: Trade row absorbs its wrap; two bare fact rows follow
+        # file 1: Trade row absorbs its wrap AND the recipe link; the Help
+        # row absorbs its item link; the system row does NOT absorb — the
+        # loot line goes standalone
         assert rows[0] == (
             "Trade",
             "Bobjoelol",
-            "Buying Toolcrafting kits Toolcrafting: Weapon Whetstone (Elven Method)",
+            (
+                "Buying Toolcrafting kits Toolcrafting: Weapon Whetstone (Elven Method)"
+                " [Recipe: Oscar Fillet]"
+            ),
             "Chat-26-10-04.log",
         )
-        assert rows[1] == ("item", None, "Oscar Fillet", "Chat-26-10-04.log")
-        assert rows[2] == (
-            "item",
-            None,
-            "Bluegill Fillet; Pinfish Fillet",
+        assert rows[1] == (
+            "Help",
+            "Kari",
+            "carp is from roshun [Item: Lemon]",
             "Chat-26-10-04.log",
         )
-        assert rows[3] == ("Help", "Kari", "carp is from roshun", "Chat-26-10-04.log")
-        # file 2: leading continuation skipped silently; bare item stored; the
-        # [CU-3] trade ad is a bracketed wrap of the preceding item row
-        assert rows[4] == ("Nearby", "Dusque", "no", "Chat-26-10-05.log")
-        assert rows[5] == (
-            "item",
-            None,
-            "Natural Fae Claw [CU-3] Covers your Metal needs!",
+        assert rows[2][0] == "system"
+        assert rows[3] == ("item", None, "Lydia's Soul", "Chat-26-10-04.log")
+        # file 2: leading continuation skipped silently; the Nearby row
+        # absorbs its item link AND the [CU-3] bracketed wrap (one row, text
+        # joined twice) — 5 rows total across both files
+        assert rows[4] == (
+            "Nearby",
+            "Dusque",
+            "no [Item: Natural Fae Claw] [CU-3] Covers your Metal needs!",
             "Chat-26-10-05.log",
         )
-        assert counts["chat_events"] == 6
+        # added counts line-events (joins included): 5 stored rows from 8
+        assert counts["chat_events"] == 8
         # nothing left unmatched: every shape is captured or skipped
         out = capsys.readouterr().out
         assert "unmatched lines skipped" not in out
         # re-ingest after mtime bump: DELETE by source_file re-parses, no dupes,
-        # wrap already merged stays merged
+        # joins already merged stay merged
         p = base / "ChatLogs" / "Chat-26-10-04.log"
         os.utime(p, (p.stat().st_atime, p.stat().st_mtime + 5))
         ingest_session(conn, base)
-        assert conn.execute("SELECT count(*) FROM chat_events").fetchone()[0] == 6
+        assert conn.execute("SELECT count(*) FROM chat_events").fetchone()[0] == 5
         assert (
             conn.execute(
                 "SELECT text FROM chat_events"
@@ -195,40 +210,33 @@ def test_chat_reingest_replaces_changed_file(tmp_path):
         pass  # manifest isolation handled by _isolate_manifest
 
 
-def test_player_log_events(tmp_path, capsys):
-    # contract: non-matching lines count as drift ONLY when they still carry
-    # the "[HH:MM:SS] LocalPlayer" prefix family; Unity engine noise is never
-    # counted (a full Unity log is normal, not format drift).
+def test_player_log_files_are_ignored(tmp_path, capsys):
+    # contract (Player.log retirement): the client no longer emits
+    # LocalPlayer Process* lines, so Player.log / Player-prev.log files are
+    # not read at all — no player_events key in counts, no table rows, no
+    # drift note. The files sit untouched in the session dir.
     player = {
-        "Player.log": (
-            "Initialize engine version: 6000.3.11f1\n"
-            '[01:59:36] LocalPlayer: ProcessAddItem(5011, 3, "Bottle of Fertilizer")\n'
-            '[01:59:37] LocalPlayer: ProcessUpdateSkill(724207, "FirstAid", 99)\n'
-            "unrelated unity noise\n"
-            "[01:59:38] LocalPlayer: ProcessSomethingWeird(\n"
-        ),
-        "Player-prev.log": '[23:00:00] LocalPlayer: ProcessAddQuest(45455, "A Quest")\n',
+        "Player.log": '[01:59:36] LocalPlayer: ProcessAddItem(5011, 3, "x")\n',
+        "Player-prev.log": '[23:00:00] LocalPlayer: ProcessAddQuest(1, "y")\n',
     }
     base = _session(tmp_path, player=player)
     conn = _conn(tmp_path)
     try:
         counts = ingest_session(conn, base)
-        assert counts["player_events"] == 3
-        rows = conn.execute(
-            "SELECT event, args, source_file FROM player_events ORDER BY source_file DESC, id"
-        ).fetchall()
-        assert rows[0][0] == "ProcessAddItem" and "5011" in rows[0][1]
-        assert rows[1][0] == "ProcessUpdateSkill" and "FirstAid" in rows[1][1]
-        assert rows[2][0] == "ProcessAddQuest" and rows[2][2] == "Player-prev.log"
-        # exactly the one malformed LocalPlayer line is drift; engine noise isn't
-        out = capsys.readouterr().out
-        assert "player: 1 LocalPlayer lines unmatched" in out
+        assert "player_events" not in counts
+        assert "player_events" not in {
+            r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        assert "player:" not in capsys.readouterr().out
     finally:
         conn.close()
         pass  # manifest isolation handled by _isolate_manifest
 
 
-def test_reports_routing_char_and_items(tmp_path):
+def test_reports_files_are_not_ingested(tmp_path):
+    # contract (Reports retirement): sheets now mirror from glogger raw_json
+    # (ingest_glogger → char_reports/player_items), so the Reports dir is
+    # not scanned — no char/player counts keys, no report tables written.
     reports = {
         "Character_Test_Dreva.json": {
             "Character": "Test",
@@ -236,135 +244,76 @@ def test_reports_routing_char_and_items(tmp_path):
             "Timestamp": "2026-09-13 01:45:36Z",
             "Report": "CharacterSheet",
             "Skills": {"FirstAid": {"Level": 104, "BonusLevels": 5}},
-            "Currencies": {"GOLD": 30711},
-            "ActiveQuests": ["quest_1"],
-            "CompletedQuests": [],
-            "NPCs": {"NPC_Joe": {"FavorLevel": "Friends"}},
-        },
-        "Test_items_2026-09-13.json": {
-            "Character": "Test",
-            "ServerName": "Dreva",
-            "Timestamp": "2026-09-13 01:45:36Z",
-            "Report": "Storage",
-            "Items": [
-                {
-                    "TypeID": 14141,
-                    "Name": "Letter of Authority",
-                    "StorageVault": "CouncilVault",
-                    "StackSize": 200,
-                    "Value": 100,
-                },
-                {
-                    "TypeID": 28051,
-                    "Name": "Augment",
-                    "Rarity": "Uncommon",
-                    "StorageVault": "Saddlebag",
-                    "StackSize": 1,
-                    "Value": 290,
-                },
-            ],
         },
     }
     base = _session(tmp_path, reports=reports)
     conn = _conn(tmp_path)
     try:
         counts = ingest_session(conn, base)
-        assert counts["char_reports"] == 2
-        assert counts["player_items"] == 2
-        rows = conn.execute(
-            "SELECT type_id, name, storage, stack, value FROM player_items ORDER BY seq"
-        ).fetchall()
-        assert rows[0] == (14141, "Letter of Authority", "CouncilVault", 200, 100)
+        assert "char_reports" not in counts
+        assert "player_items" not in counts
+        assert "placeholder_rows_dropped" not in counts
+        assert conn.execute("SELECT COUNT(*) FROM char_reports").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM player_items").fetchone()[0] == 0
     finally:
         conn.close()
         pass  # manifest isolation handled by _isolate_manifest
 
 
-def test_report_history_keeps_two_sheets_one_storage(tmp_path):
-    """Contract: readers need only latest data + one previous sheet
-    (change-vs-yesterday, corrupt-export cover); older exports are pruned
-    from char_reports and player_items (shared (character, ts) key)."""
-    from pgrag.agentic.session import _KEEP_SHEETS, _KEEP_STORAGES
+def test_reports_trim_constants_retired(tmp_path):
+    # contract: the trim keep-set retired with the Reports scan (the store
+    # converges to glogger's latest snapshot per character — no history to
+    # prune, no keep constants). The names must stay gone, not drift back.
+    import pgrag.agentic.session as session_mod
 
-    assert (_KEEP_SHEETS, _KEEP_STORAGES) == (2, 1)
-    reports = {}
-    for i, ts in enumerate(
-        ["2026-09-01 01:00:00Z", "2026-09-02 01:00:00Z", "2026-09-03 01:00:00Z"]
-    ):
-        reports[f"sheet_{i}.json"] = {
-            "Character": "Test",
-            "ServerName": "Dreva",
-            "Timestamp": ts,
-            "Report": "CharacterSheet",
-            "Skills": {},
-        }
-    for i, ts in enumerate(["2026-09-02 02:00:00Z", "2026-09-03 02:00:00Z"]):
-        reports[f"stor_{i}.json"] = {
-            "Character": "Test",
-            "ServerName": "Dreva",
-            "Timestamp": ts,
-            "Report": "Storage",
-            "Items": [{"TypeID": i, "Name": f"Item{i}"}],
-        }
-    base = _session(tmp_path, reports=reports)
-    conn = _conn(tmp_path)
-    try:
-        ingest_session(conn, base)
-        kept = [r[0] for r in conn.execute("SELECT ts FROM char_reports ORDER BY ts").fetchall()]
-        assert kept == ["2026-09-02 01:00:00Z", "2026-09-03 01:00:00Z", "2026-09-03 02:00:00Z"]
-        items = conn.execute("SELECT DISTINCT ts FROM player_items").fetchall()
-        assert [r[0] for r in items] == ["2026-09-03 02:00:00Z"]
-    finally:
-        conn.close()
-        pass  # manifest isolation handled by _isolate_manifest
+    assert not hasattr(session_mod, "_KEEP_SHEETS")
+    assert not hasattr(session_mod, "_KEEP_STORAGES")
+    assert not hasattr(session_mod, "_ITEMS_REPORT")
+    assert not hasattr(session_mod, "_PLACEHOLDER_CHARACTERS")
+    assert not hasattr(session_mod, "_ingest_reports")
+    assert not hasattr(session_mod, "_trim_report_history")
+    assert not hasattr(session_mod, "_drop_placeholder_characters")
 
 
-def test_books_stored_verbatim(tmp_path):
+def test_books_files_are_not_ingested(tmp_path):
+    # contract (Books retirement): every book is duplicated in glogger
+    # (non-shop books in game_state_books, PlayerShopLog events in
+    # stall_events), so the Books dir is not read — no session_docs key in
+    # counts, no session_docs table.
     base = _session(
         tmp_path, books={"SkillReport_260810_221927.txt": "Foods Consumed:\n  Apple Juice: 9\n"}
     )
     conn = _conn(tmp_path)
     try:
         counts = ingest_session(conn, base)
-        assert counts["session_docs"] == 1
-        text = conn.execute("SELECT text FROM session_docs").fetchone()[0]
-        assert text.startswith("Foods Consumed:")
-    finally:
-        conn.close()
-        pass  # manifest isolation handled by _isolate_manifest
-
-
-def test_missing_subdirs_are_skipped_not_fatal(tmp_path):
-    # contract: the missing-session-dir skip path reports zeroes for every
-    # ingest_session counts key including placeholder_rows_dropped.
-    base = tmp_path / "session"
-    base.mkdir()
-    conn = _conn(tmp_path)
-    try:
-        counts = ingest_session(conn, base)
-        assert counts == {
-            "chat_events": 0,
-            "player_events": 0,
-            "char_reports": 0,
-            "player_items": 0,
-            "session_docs": 0,
-            "placeholder_rows_dropped": 0,
+        assert "session_docs" not in counts
+        assert "session_docs" not in {
+            r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
     finally:
         conn.close()
         pass  # manifest isolation handled by _isolate_manifest
 
 
-def test_reports_placeholder_character_skipped_filename_fallback_kept(tmp_path, capsys):
-    """Contract (corrupt-export cover): the game client exports
-    Character='???' Race='Error' with a CORRUPT body when the sheet is
-    momentarily unreadable (AreaCasino/AreaEltibule logouts). The WHOLE ROW is
-    skipped — even when the filename slot parses to a real name, storing the
-    corrupt body under it would DELETE the good row at the same
-    (character, ts) and poison newest-sheet reads. Only a genuinely
-    missing/blank Character falls back to the filename slot (middle section
-    between first/last underscore, so multi-underscore names survive). Skips
-    advance the manifest so re-syncs don't re-read/re-warn."""
+def test_missing_subdirs_are_skipped_not_fatal(tmp_path):
+    # contract: the missing-session-dir skip path reports the chat-only
+    # counts shape (reports/books/player keys retired with their parsers).
+    base = tmp_path / "session"
+    base.mkdir()
+    conn = _conn(tmp_path)
+    try:
+        counts = ingest_session(conn, base)
+        assert counts == {"chat_events": 0}
+    finally:
+        conn.close()
+        pass  # manifest isolation handled by _isolate_manifest
+
+
+def test_reports_placeholder_cover_retired_with_reports_scan(tmp_path):
+    # contract: the '???' corrupt-export cover retired with the Reports scan
+    # (glogger never promotes a '???' sheet to latest snapshot, so the mirror
+    # can't carry one). A '???'-named file on disk is ignored like any other
+    # Reports file — no rows, no skip notes.
     reports = {
         "Character__Dreva.json": {
             "Character": "???",
@@ -374,52 +323,13 @@ def test_reports_placeholder_character_skipped_filename_fallback_kept(tmp_path, 
             "Report": "CharacterSheet",
             "Skills": {},
         },
-        "Character_Test_Dreva.json": {
-            "ServerName": "Dreva",
-            "Timestamp": "2026-09-13 01:45:36Z",
-            "Report": "CharacterSheet",
-            "Skills": {"FirstAid": {"Level": 5}},
-        },
-        # ??? body with a GOOD filename slot: whole row skipped, good row kept.
-        "Character_Test_Dreva2.json": {
-            "Character": "???",
-            "Race": "Error",
-            "ServerName": "Dreva",
-            "Timestamp": "2026-09-13 01:45:36Z",
-            "Report": "CharacterSheet",
-            "Skills": {},
-        },
-        # Missing Character with multi-underscore filename keeps full name.
-        "Character_Foo_Bar_Dreva.json": {
-            "ServerName": "Dreva",
-            "Timestamp": "2026-09-13 01:45:36Z",
-            "Report": "CharacterSheet",
-            "Skills": {},
-        },
     }
     base = _session(tmp_path, reports=reports)
     conn = _conn(tmp_path)
     try:
         counts = ingest_session(conn, base)
-        assert counts["char_reports"] == 2
-        chars = [
-            r[0] for r in conn.execute("SELECT DISTINCT character FROM char_reports").fetchall()
-        ]
-        assert chars == ["Foo_Bar", "Test"]
-        assert (
-            conn.execute("SELECT COUNT(*) FROM char_reports WHERE character = '???'").fetchone()[0]
-            == 0
-        )
-        # The good Test row kept its real body (??? dup did not clobber it).
-        body = conn.execute("SELECT report FROM char_reports WHERE character = 'Test'").fetchone()[
-            0
-        ]
-        assert '"FirstAid"' in body
-        out = capsys.readouterr().out
-        assert "Character_Test_Dreva2.json" in out
-        counts = ingest_session(conn, base)
-        assert counts["char_reports"] == 0
-        assert "Skipping" not in capsys.readouterr().out
+        assert counts == {"chat_events": 0}
+        assert conn.execute("SELECT COUNT(*) FROM char_reports").fetchone()[0] == 0
     finally:
         conn.close()
         pass  # manifest isolation handled by _isolate_manifest

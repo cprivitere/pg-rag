@@ -165,6 +165,16 @@ test (prove the source is fine) or recording a deliberate contract change
   `rewards` containing `WorkOrderCurrency`): fixed councils ÷ required count =
   the guaranteed per-unit floor, plus the Industry gate from the
   `Work Order for X` scroll; items with no work order print no block.
+  `player_state section=stall_inventory` replays the baseline-seeded tier
+  fold: baselines seed one priced tier per (owner, item), at-or-before events
+  drop, later added / visible|configured / bought / removed / hid_item replay
+  in (event_at, id) order — bought always replays, hid_item evicts, a
+  visible/configured with no tiers seeds stock (priced → the ask, unpriced →
+  UNPRICED "snapshot has no price"; an unpriced snapshot never moves the ask),
+  and post-baseline events replay even outside the 100-day history window.
+  Owner scope narrows by the query first, so one owner's item resolves.
+  Remaining > 0 lists as CURRENTLY LISTED qty@price tiers, priced-less
+  remainder as UNPRICED.
   `run_loop` returns the 5-key shape `{answer, documents, sources, rounds,
   trace_rounds}` (plus legacy `query_type`/`rerank_used` in every return arm),
   executes at most `max_rounds` tool rounds (native tool_calls
@@ -194,31 +204,49 @@ test (prove the source is fine) or recording a deliberate contract change
 ### L4 — SQLite store + source ingestion
 
 - **Tests**: `test_sqlstore_build.py`, `test_session_ingest.py`,
-  `test_glogger_ingest.py`, `test_preflight_sync.py`
+  `test_glogger_ingest.py`, `test_preflight_sync.py`, `test_sync_glogger.py`
 - **Source**: `src/pgrag/agentic/` (`store.py`, `session.py`, `glogger.py`),
-  `scripts/build_sqlstore.py`, `scripts/agentic_chat.py`
+  `scripts/build_sqlstore.py`, `scripts/sync_glogger.py`, `scripts/agentic_chat.py`
 - **Contracts**: `build_store` is idempotent (INSERT OR REPLACE + per-file
   manifest mtimes in `data/sqlite_state.json`) and builds from tmp fixture
   sources in tests (never real `data/`); ingredients without `ItemCode` keep
   `ItemKeys`/`Desc` (NULL item_code is valid); wiki titles come only from
   `.meta.json` (never hashed filenames); Lint_* keyword markers stay in `raw`,
-  filtered out of the joined keyword columns; session parsers are tolerant
+  filtered out of the joined keyword columns; the chat parser is tolerant
   (unmatched lines are counted and skipped, never fatal) and re-ingest of a
-  changed file replaces its rows exactly (no dupes); missing session dir skips
-  those tables and the build still succeeds.
-  `ingest_glogger` WAL-safe copies the glogger DB (never opens the live file),
-  mirrors event tables incrementally by AUTOINCREMENT id watermark, re-copies
-  per-snapshot tables when the latest `character_snapshots.id` advances, skips
-  glogger's own CDN mirrors, and is a no-op (not an error) when the source is
-  absent. `agentic_chat._preflight_sync` refreshes session + glogger data before
-  any chat (`--no-sync` skips), prints only tables with nonzero row counts, and
-  degrades to a printed note instead of raising when a source is unreadable.
-  (`scripts/publish_store.py` + `tests/test_publish_store.py` and the
-  `mise upload-store` / `upload-docs` tasks were retired with the molab
-  notebook — no publish path ships.)
+  changed file replaces its rows exactly (no dupes). Retired: Player.log
+  parsing (no LocalPlayer lines — no parser, no player_events table), Books
+  ingest (duplicated in glogger — no session_docs table), and the Reports
+  scan (sheets mirror from glogger raw_json — no trim keep-set, no
+  placeholder guard, no per-file reports manifest). Missing session dir
+  skips chat tables and the build still succeeds.
+  `ingest_glogger` WAL-safe copies the glogger DB (never opens the live file);
+  stall_events re-copies glogger's fullest-witness set every sync (DELETE +
+  INSERT — per logical line (owner, event_timestamp, raw_message) only the
+  fullest batch survives, so genuine same-minute repeats like Deradon's 8x
+  bulk buys stay while cross-batch re-import replays collapse);
+  char_reports/player_items mirror the latest usable sheet per (character,
+  server) via `_latest_sheets` — newest wins; unparseable newest falls back
+  to the previous good one; a body whose Character disagrees with the row's
+  character_name ('???' corrupt-export, blank '' phantom — including a
+  well-formed empty-Character body) is skipped, never mirrored; a padded
+  body (" T ") still mirrors via the strip comparison; same-Timestamp sheets
+  on two servers coexist via the (character, server, ts) PK; only
+  Report == "Storage" dumps expand Items; other event tables mirror
+  incrementally by AUTOINCREMENT id watermark; live state tables re-copy
+  when the latest `character_snapshots.id` advances; stall_inventory_baseline
+  re-copies unconditionally every sync (recounts advance with no new
+  snapshot); glogger's own CDN mirrors and parsed per-snapshot tables are
+  skipped; the ingest is a no-op (not an error) when the source is absent.
+  `scripts/sync_glogger.py` (`mise sync-glogger`) opens the existing store
+  and runs only `ingest_glogger` + `glogger_indexes` + commit — no session
+  parse, no corpus rebuild. `agentic_chat._preflight_sync` refreshes session
+  + glogger data before any chat (`--no-sync` skips), prints only tables with
+  nonzero row counts, and degrades to a printed note instead of raising when
+  a source is unreadable.
 - **Change ⇒** `uv run pytest tests/test_sqlstore_build.py
   tests/test_session_ingest.py tests/test_glogger_ingest.py
-  tests/test_preflight_sync.py` (+ the file you
+  tests/test_preflight_sync.py tests/test_sync_glogger.py` (+ the file you
   edited), then `mise sql-store` and `mise lint` plus format-clean.
 - **Fixture hazard**: the `build_store` defaults are LIVE sources (real game
   dir, real glogger DB) — a fixture that omits `session_dir=`/`glogger_db=`
