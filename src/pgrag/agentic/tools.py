@@ -9,6 +9,7 @@ FTS5 `bm25()`.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import sqlite3
@@ -936,101 +937,273 @@ def _stall_zero_sale_lines(store_path: str, query: str, base: str) -> str:
     return "\n".join(lines + source_lines)
 
 
+@dataclasses.dataclass
+class _StallTierState:
+    """Per-item replay state for the baseline-seeded tier-stack fold."""
+
+    tiers: list = dataclasses.field(default_factory=list)  # [qty, price|None], oldest first
+    last_known_price: float | None = None
+    first_action: str | None = None
+
+
+def _stall_apply_added(state: _StallTierState, qty: int) -> None:
+    # Negative carry means the log starts mid-history (sales before any
+    # baseline); the next restock clears it so a fresh tier can take hold.
+    if sum(q for q, _ in state.tiers) < 0:
+        state.tiers.clear()
+    state.tiers.append([qty, None])
+
+
+def _stall_apply_pricing(state: _StallTierState, qty: int, price: float | None) -> None:
+    # visible/configured is a listing-position snapshot. With no positive
+    # tiers at all it seeds stock: priced → [qty, price] (the ask), unpriced
+    # → [qty, None] (lists as UNPRICED, "snapshot has no price") instead of
+    # vanishing. With existing stock, a priced snapshot prices up to qty
+    # UNPRICED units front-to-back (splitting a partial tier); negative tiers
+    # (unmatched sales) carry no stock, so they are skipped — pricing them
+    # would invert the remainder (remaining -= negative grows it). With no
+    # unpriced tier but existing priced stock, the last tier is re-priced as
+    # a fallback (a visible with no fresh added still moves the ask). An
+    # unpriced snapshot never moves the ask and never clobbers priced tiers.
+    if price is None:
+        if qty > 0 and not any(t[0] > 0 for t in state.tiers):
+            state.tiers.append([qty, None])
+        return
+    remaining = qty
+    matched = False
+    i = 0
+    while i < len(state.tiers) and remaining > 0:
+        if state.tiers[i][1] is None and state.tiers[i][0] > 0:
+            tier_qty = state.tiers[i][0]
+            if tier_qty <= remaining:
+                state.tiers[i][1] = price
+                remaining -= tier_qty
+                matched = True
+                i += 1
+            else:
+                state.tiers[i][0] = tier_qty - remaining
+                state.tiers.insert(i, [remaining, price])
+                remaining = 0
+                matched = True
+        else:
+            i += 1
+    if not matched:
+        if not any(t[0] > 0 for t in state.tiers):
+            if qty > 0:
+                state.tiers.append([qty, price])
+        else:
+            state.tiers[-1][1] = price
+
+
+def _stall_apply_bought(state: _StallTierState, qty: int, price: float | None) -> None:
+    # Deplete exact-price tiers first (deterministic for multi-price stock),
+    # then front-to-back. Unmatched sales push a negative tier — a sale
+    # without a known baseline, cleared by the next added.
+    remaining = qty
+    if price is not None:
+        for tier in state.tiers:
+            if remaining == 0:
+                break
+            if tier[1] is not None and abs(tier[1] - price) < 0.001 and tier[0] > 0:
+                take = min(remaining, tier[0])
+                tier[0] -= take
+                remaining -= take
+    for tier in state.tiers:
+        if remaining == 0:
+            break
+        if tier[0] > 0:
+            take = min(remaining, tier[0])
+            tier[0] -= take
+            remaining -= take
+    if remaining > 0:
+        state.tiers.append([-remaining, price])
+
+
+def _stall_apply_removed(state: _StallTierState, qty: int) -> None:
+    # LIFO depletion, back-to-front.
+    remaining = qty
+    for tier in reversed(state.tiers):
+        if remaining == 0:
+            break
+        if tier[0] > 0:
+            take = min(remaining, tier[0])
+            tier[0] -= take
+            remaining -= take
+
+
+def _stall_finalize_tiers(state: _StallTierState) -> list:
+    """Collapse same-price tiers (ascending, None last); fallback-price
+    unpriced qty ONLY when no priced tier survived (added-but-never-priced
+    stock whose only signal is a later sale)."""
+    tiers = [t for t in state.tiers if t[0] > 0]
+    by_price: dict[int, int] = {}
+    unpriced = 0
+    for qty, price in tiers:
+        if price is None:
+            unpriced += qty
+        else:
+            by_price[round(price * 1000)] = by_price.get(round(price * 1000), 0) + qty
+    final = [[qty, scaled / 1000.0] for scaled, qty in sorted(by_price.items())]
+    if unpriced > 0:
+        if not final and state.last_known_price is not None:
+            final.append([unpriced, state.last_known_price])
+        else:
+            final.append([unpriced, None])
+    return final
+
+
 def _stall_inventory_text(conn: sqlite3.Connection, item_likes: list[str]) -> str:
-    """Currently-listed stall stock folded from the own-stall event ledger.
+    """Currently-listed stall stock, glogger Inventory-tab semantics.
 
-    Single definition of CURRENTLY LISTED per item: the latest
-    visible/configured snapshot sets the baseline (qty + price_unit); every
-    subsequent bought/removed subtracts and every subsequent added adds. A
-    strictly-later hid_item zeroes the item (hidden from shoppers = not for
-    sale right now, regardless of folded qty). Items with remaining > 0 and a
-    known snapshot price list as qty@price; items with remaining > 0 but no
-    snapshot price (added-never-priced) list as unpriced (needs pricing);
-    items at zero (bought-to-zero / removed-to-zero / hidden) are OUT.
-
-    Tiebreak (same timestamp): within one timestamp, log order (rowid) decides
-    — snapshots sort BEFORE deltas sharing their timestamp, so same-minute
-    sales drain the listed stock instead of being hidden by it (buys win
-    ties). Across timestamps the LATEST snapshot (by ts, then rowid) is the
-    baseline; only strictly-later events fold in. Pre-snapshot same-minute
-    deltas belong to the previous listing cycle and are ignored. Input is
-    assumed deduped upstream (distinct ledger events); NULL quantities
-    count as 0.
+    Port of glogger's get_stall_inventory + aggregate_inventory_with_baselines
+    (src-tauri/src/db/stall_tracker_commands.rs, src-tauri/src/stall_aggregations.rs):
+    baselines from stall_inventory_baseline seed one priced tier per
+    (owner, item) dated at recorded_at; ledger events at-or-before the
+    baseline drop (the recount supersedes scrolled-out history); later events
+    replay in (event_at ASC, id ASC) order with added / visible|configured /
+    bought / removed / hid_item tier logic. Events scope to one owner (scoped
+    by item_likes first, so a query naming one owner's item resolves); the
+    ledger window is 100 days for history but post-baseline events and bought
+    rows always ride along — SQL fetches those regardless of age and applies
+    the window to unneeded history only, so an old post-baseline restock is
+    never dropped. hid_item evicts the item's remaining tiers (the owner hid
+    it from shoppers). Items with remaining > 0 list as qty@price tiers;
+    remaining > 0 with no priced tier lists as unpriced (needs pricing);
+    zero/negative remainders are OUT.
     """
-    sql = (
-        "SELECT item, COALESCE(event_at, event_timestamp) AS ts, action,"
-        " quantity, price_unit, rowid FROM stall_events"
-        " WHERE ignored = 0 AND item IS NOT NULL"
-        " AND action IN ('visible', 'configured', 'added', 'removed', 'bought', 'hid_item')"
-    )
-    params: list = []
-    if item_likes:
-        sql += " AND (" + " OR ".join("item LIKE ?" for _ in item_likes) + ")"
-        params.extend(item_likes)
     try:
-        rows = conn.execute(sql, params).fetchall()
+        base_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stall_inventory_baseline'"
+        ).fetchone()
+        event_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stall_events'"
+        ).fetchone()
     except sqlite3.Error as exc:
         return f"player_state error: {exc}"
-    if not rows:
+    if not event_exists:
+        return "No stall data in store (glogger play-history not ingested)."
+    like_sql = ""
+    params: list = []
+    if item_likes:
+        like_sql = " AND (" + " OR ".join("item LIKE ?" for _ in item_likes) + ")"
+        params.extend(item_likes)
+    try:
+        owner_row = conn.execute(
+            "SELECT DISTINCT owner FROM stall_events WHERE owner IS NOT NULL" + like_sql,
+            params,
+        ).fetchall()
+        owners = sorted(r[0] for r in owner_row if r[0])
+        owner = owners[0] if len(owners) == 1 else None
+        if owner is None:
+            if not owners:
+                return (
+                    "No stall inventory events matching the query."
+                    if item_likes
+                    else "No stall inventory events in store."
+                )
+            return "Multiple stall owners in store; narrow with query=<item>."
+        baselines: dict[str, tuple] = {}
+        if base_exists:
+            bsql = (
+                "SELECT item, quantity, price_unit, recorded_at FROM stall_inventory_baseline"
+                " WHERE owner = ?1"
+            )
+            bparams: list = [owner]
+            if item_likes:
+                bsql += " AND (" + " OR ".join("item LIKE ?" for _ in item_likes) + ")"
+                bparams.extend(params)
+            for item, qty, price, rec in conn.execute(bsql, bparams).fetchall():
+                if qty is None or qty < 0 or not rec or len(rec) < 10 or not item:
+                    continue
+                if item in baselines and not (rec > baselines[item][2]):
+                    continue
+                baselines[item] = (qty, price, rec)
+        base_items = ", ".join("?" for _ in baselines) if baselines else "NULL"
+        events = conn.execute(
+            "SELECT item, event_at, action, quantity, price_unit, price_total, id FROM stall_events"
+            " WHERE owner = ? AND ignored = 0 AND item IS NOT NULL AND event_at IS NOT NULL"
+            " AND action != 'unknown' AND action != 'collected'"
+            " AND (action = 'bought' OR action = 'hid_item'"
+            " OR event_at >= date('now', 'localtime', '-100 days')"
+            " OR (item IN (" + base_items + ") AND event_at > ("
+            "SELECT recorded_at FROM stall_inventory_baseline"
+            " WHERE owner = stall_events.owner AND item = stall_events.item"
+            " ORDER BY recorded_at DESC LIMIT 1)))" + like_sql + " ORDER BY event_at ASC, id ASC",
+            [owner, *baselines.keys(), *params],
+        ).fetchall()
+    except sqlite3.Error as exc:
+        return f"player_state error: {exc}"
+    if not events and not baselines:
         if item_likes:
             return "No stall inventory events matching the query."
         return "No stall inventory events in store."
-    # Log order within a timestamp, snapshots before same-minute deltas: the
-    # per-item fold keys off the latest snapshot, and this ordering keeps
-    # same-minute deltas after their snapshot in rowid order.
-    rank = {"visible": 0, "configured": 0, "added": 1, "removed": 1, "bought": 1}
-    rows.sort(key=lambda r: (r[1] or "", rank.get(r[2], 2), r[5]))
-    by_item: dict[str, list] = {}
-    for r in rows:
-        by_item.setdefault(r[0], []).append(r)
-    listed: list[tuple[str, int, float]] = []
+    by_item: dict[str, _StallTierState] = {}
+    for item, (qty, price, _rec) in baselines.items():
+        state = by_item.setdefault(item, _StallTierState())
+        state.tiers.clear()
+        if qty > 0:
+            state.tiers.append([qty, price])
+            if price is not None:
+                state.last_known_price = price
+        state.first_action = "baseline"
+    for item, at, action, qty, price_unit, _price_total, _eid in events:
+        if item in baselines and at <= baselines[item][2]:
+            continue
+        state = by_item.setdefault(item, _StallTierState())
+        if state.first_action is None:
+            state.first_action = action
+        qty = qty or 0
+        if action == "added":
+            _stall_apply_added(state, qty)
+        elif action in ("visible", "configured"):
+            _stall_apply_pricing(state, qty, price_unit)
+            if price_unit is not None:
+                state.last_known_price = price_unit
+        elif action == "bought":
+            _stall_apply_bought(state, qty, price_unit)
+            if price_unit is not None:
+                state.last_known_price = price_unit
+        elif action == "removed":
+            _stall_apply_removed(state, qty)
+        elif action == "hid_item":
+            # The owner hid the item from shoppers: evict the remaining tiers
+            # (a later added/visible restock re-lists it).
+            state.tiers.clear()
+        # unknown/collected/shop_tag/hire_stall/visitor_note carry no stock
+        # delta (already filtered above except the ledger-note kinds, which
+        # are ignored here).
+        state.tiers = [t for t in state.tiers if t[0] != 0]
+    listed: list[tuple[str, int, list]] = []
     unpriced: list[tuple[str, int, str]] = []
     for item in sorted(by_item):
-        events = by_item[item]
-        snaps = [e for e in events if e[2] in ("visible", "configured")]
-        if snaps:
-            # Latest snapshot by (ts, rowid); the baseline is what it lists.
-            base = max(snaps, key=lambda e: (e[1] or "", e[5]))
-            qty = base[3] or 0
-            price = base[4]
-            for e in events:
-                if (e[1] or "", e[5]) <= (base[1] or "", base[5]):
-                    continue
-                q = e[3] or 0
-                if e[2] in ("bought", "removed"):
-                    qty -= q
-                elif e[2] == "added":
-                    qty += q
-                elif e[2] == "hid_item":
-                    qty = 0
-        else:
-            qty = 0
-            price = None
-            for e in events:
-                q = e[3] or 0
-                if e[2] in ("bought", "removed"):
-                    qty -= q
-                elif e[2] == "added":
-                    qty += q
-                elif e[2] == "hid_item":
-                    qty = 0
-        if qty > 0 and price is not None:
-            listed.append((item, qty, price))
-        elif qty > 0 and snaps:
+        state = by_item[item]
+        final = _stall_finalize_tiers(state)
+        qty = sum(q for q, _ in final)
+        if qty <= 0:
+            continue
+        priced = [(q, p) for q, p in final if p is not None]
+        if priced:
+            listed.append((item, qty, final))
+        elif state.first_action in ("visible", "configured", "baseline"):
             unpriced.append((item, qty, "snapshot has no price"))
-        elif qty > 0:
+        else:
             unpriced.append((item, qty, "added, never priced"))
-        # qty <= 0: sold out / removed-to-zero / hidden — OUT, not listed.
     lines = [
         (
-            "YOUR OWN stall inventory right now (latest snapshot minus later sales/removals"
-            " plus later additions — not a market sample):"
+            "YOUR OWN stall inventory right now (baseline-seeded tier replay, 100-day ledger window"
+            " — not a market sample):"
         )
     ]
     if listed:
         unit = "item" if len(listed) == 1 else "items"
         lines.append(f"CURRENTLY LISTED ({len(listed)} {unit}):")
-        lines.extend(f"  {item} x{qty} @ {price:g} each" for item, qty, price in listed)
+        for item, _qty, tiers in listed:
+            bits = ", ".join(
+                f"{q}@{(p if p is None else f'{p:g}')}" for q, p in tiers if p is not None
+            )
+            mixed = next((q for q, p in tiers if p is None), None)
+            suffix = f" (+{mixed} unpriced)" if mixed else ""
+            lines.append(f"  {item} x{sum(q for q, _ in tiers)} @ {bits} each{suffix}")
     else:
         lines.append("nothing currently listed with a known price.")
     if unpriced:

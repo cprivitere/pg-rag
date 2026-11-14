@@ -172,13 +172,12 @@ already handles adds no signal; every golden is a permanent acceptance gate.
 ### Traps learned the hard way (each cost a debug session)
 
 - **`abilities.level_req` is not a known-gate.** Shrine/riddle unlocks
-  (TameBear/TameCat) carry `level_req=1` yet may be unknown. The known list lives
-  ONLY in `char_reports` sheet `Skills[<skill>].Abilities`; non-skill abilities
-  (CharmRat) are bucketed under the pseudo-skill `"Unknown"` — audit both.
-  `player_state section=abilities` does this diff.
-- **`game_state_skills` is fresher than the sheet dump for LEVELS** (log-sourced
-  vs export-time); the sheet is the only source for ability LISTS. Cross-check
-  both; state which timestamp each claim comes from.
+  (TameBear/TameCat) carry `level_req=1` yet may be unknown. The known list
+  lives in the mirrored sheet (`char_reports` report
+  `Skills[<skill>].Abilities`; glogger's own `snapshot_skill_abilities`
+  table — not mirrored into this store — holds the same keys); non-skill
+  abilities (CharmRat) are bucketed under the pseudo-skill `"Unknown"` —
+  audit both. `player_state section=abilities` does this diff.
 - **A store-only fact can never appear in the corpus.** Diagnosing a store-only
   case via `corpus_search` alone gives a guaranteed RET-side false signal —
   route first, diagnose second.

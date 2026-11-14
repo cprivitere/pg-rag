@@ -38,7 +38,7 @@ def store(tmp_path, monkeypatch):
     g = sqlite3.connect(gsrc)
     g.executescript(
         """
-        CREATE TABLE character_snapshots (id INTEGER PRIMARY KEY, character_name TEXT, snapshot_timestamp TEXT);
+        CREATE TABLE character_snapshots (id INTEGER PRIMARY KEY, character_name TEXT, server_name TEXT, snapshot_timestamp TEXT, raw_json TEXT);
         CREATE TABLE stall_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             event_timestamp TEXT, event_at TEXT, log_timestamp TEXT,
@@ -47,7 +47,7 @@ def store(tmp_path, monkeypatch):
             raw_message TEXT, entry_index INTEGER, ignored INTEGER,
             created_at TEXT
         );
-        INSERT INTO character_snapshots VALUES (1, 'T', 'ts');
+        INSERT INTO character_snapshots VALUES (1, 'T', 'D', 'ts', '{"Character":"T"}');
         INSERT INTO stall_events (event_timestamp, action, player, item,
             quantity, price_unit, price_total, raw_message, entry_index,
             ignored, created_at, event_at, log_timestamp, log_title, owner)
@@ -76,9 +76,12 @@ def test_preflight_sync_refreshes_and_prints_changes(store, monkeypatch, capsys)
     assert conn.execute("SELECT count(*) FROM stall_events").fetchone()[0] == 1
     conn.close()
 
-    # Second run: no changes -> no print at all
+    # Second run: session has no changes -> silent for session tables; the
+    # glogger witness re-copy reports its converged present count again
+    # (contract: stall_events is a re-copied set size, not a watermark delta).
     refresh_store(str(db), skip=False)
-    assert "[sync]" not in capsys.readouterr().out
+    out2 = capsys.readouterr().out
+    assert "chat_events" not in out2
 
 
 def test_preflight_sync_skip_flag_is_noop(store, capsys):

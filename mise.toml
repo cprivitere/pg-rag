@@ -63,6 +63,11 @@ description = "Build data/sqlite_gorgon.db (CDN + wiki + generated corpus + sess
 run = "uv run python scripts/build_sqlstore.py"
 alias = "sq"
 
+[tasks."sync-glogger"]
+description = "Sync only the glogger play-history tables into the existing store (no session parse, no corpus rebuild; seconds)"
+run = "uv run python scripts/sync_glogger.py"
+alias = "sgl"
+
 [tasks.chat]
 description = "Agentic CLI chat over the SQLite store (tool loop; needs only LLM :8080)"
 run = "uv run python scripts/agentic_chat.py"

@@ -90,17 +90,18 @@ corpus_search, corpus_get_doc, player_state`.
 
 - **Agentic SQLite store + tool loop**: `src/pgrag/agentic/` builds the SQLite
   store (`data/sqlite_gorgon.db`, `mise sql-store`) holding every source —
-  hand-mapped CDN tables, raw wiki pages, the generated corpus, live play-session data
-  (`~/AppData/LocalLow/Elder Game/Project Gorgon`: ChatLogs, Player.log,
-  Reports, Books), and glogger play-history (`src/pgrag/agentic/glogger.py`
+  hand-mapped CDN tables, raw wiki pages, the generated corpus, chat logs
+  (`~/AppData/LocalLow/Elder Game/Project Gorgon/ChatLogs`), and glogger
+  play-history (`src/pgrag/agentic/glogger.py`
   reads `%APPDATA%/glogger.Release/glogger.db` (the daily driver;
   legacy `glogger.Personal` is the fallback) via a WAL-safe snapshot copy:
-  stall sales, gift/favor deltas, kills/deaths, loot transactions, recipe
-  completions, Words of Power, vendor gold — watermark-incremental in
-  `data/sqlite_state.json` under `"glogger"`; glogger's own CDN mirrors are
-  deliberately skipped, ours is fresher). `src/pgrag/agentic/loop.py` runs the
+  stall sales + baselines + sheets (CharacterSheet/Storage raw_json mirrored
+  to char_reports/player_items — the Reports scan is retired), gift/favor
+  deltas, kills/deaths, loot transactions, Words of Power, vendor gold —
+  watermark-incremental in `data/sqlite_state.json` under `"glogger"`;
+  glogger's own CDN mirrors are deliberately skipped, ours is fresher).
+  `src/pgrag/agentic/loop.py` runs the
   LLM in a bounded tool loop (`DEFAULT_MAX_ROUNDS` rounds; every tool result
-  except `get_page` capped at 12000 chars; a final no-tools answer is forced once the
   budget is exhausted). `run_loop` returns the same 5-key shape as the deleted
   `pipeline.ask` — `{answer, documents, sources, rounds, trace_rounds}` (plus legacy
   `query_type: "agentic"` / `rerank_used: False` in both return arms) — where
@@ -165,7 +166,7 @@ corpus_search, corpus_get_doc, player_state`.
 
 Python ≥3.15, managed with `uv`. `mise tasks` lists everything. The
 `mise.toml` `[tasks]` set is exactly: `test`, `sync-fast`, `sync-full`,
-`sync-wiki`, `sql-store`, `chat`, `agentic-tune`, `golden`,
+`sync-wiki`, `sql-store`, `sync-glogger`, `chat`, `agentic-tune`, `golden`,
 `golden-short`, `golden-one`, `golden-type`, `golden-flaky`,
 `golden-flaky-list`, `debug-llm`, `chatui`, `llm-start`, `llm-stop`,
 `chatui-start`, `chatui-stop`, `start`, `stop`, `status`, `drift`,
@@ -179,7 +180,8 @@ uv run pgrag download-cdn           # fetch CDN json
 mise sync-fast / sync-full          # CDN (+wiki) → rebuild the store incl. generated corpus (aliases sy/syf)
 mise sync-wiki                      # converge wiki to current source, then rebuild the store (alias syw)
 mise sql-store (alias sq)           # build data/sqlite_gorgon.db: CDN + wiki + generated corpus + session + glogger
-mise chat (alias c)                  # agentic CLI chat over the store (tool loop; needs only LLM :8080; pre-chat session+glogger refresh runs automatically, --no-sync skips)
+mise sync-glogger (alias sgl)       # sync only glogger play-history (incl. baselines) into the existing store — no corpus rebuild, seconds
+mise chat (alias c)                  # agentic CLI chat over the SQLite store (tool loop; needs only LLM :8080)
 mise golden                         # full golden eval through the loop (LLM only; LONG — batch it in the background)
 mise golden-short                   # the 8-case fast tier (alias gds)
 mise golden-one fireball-ability    # rerun named golden case(s) fast (alias go; comma-separate ids)
@@ -376,9 +378,9 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
 ## Testing & QA
 
 - **Framework**: pytest via `uv run pytest`; the counts this doc quotes are
-  **549 collected / 84 deselected / 465 default** (asserted by `mise drift`
+  **565 collected / 84 deselected / 481 default** (asserted by `mise drift`
   against a real collection) — the 84 being 16 data-heavy tests + the 68
-  parametrized golden cases, so the default offline run leaves **465** (one POSIX-only port-owner case skips on Windows) — all
+  parametrized golden cases, so the default offline run leaves **481** (one POSIX-only port-owner case skips on Windows) — all
   offline (temp-dir integration, mocked servers). The golden gate is the only
   suite that needs any server.
 - **Golden eval** (`tests/test_golden_check.py`): parametrized over

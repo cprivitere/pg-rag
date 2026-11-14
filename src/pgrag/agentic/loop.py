@@ -176,11 +176,10 @@ Store schema (main tables):
 - records(id PK, tbl, raw)  -- every other CDN table, JSON per row
 - wiki_pages(title PK, filename, text)  -- raw wiki page text
 - chat_events(ts, channel, speaker, text, source_file, line_no)
-- player_events(ts, event, args, raw, source_file, line_no)
 - char_reports(character, server, ts, report)  -- report: full JSON
-- player_items(character, ts, type_id, name, rarity, storage, stack, value,
+- player_items(character, server, ts, type_id, name, rarity, storage, stack, value,
   imbue_power, imbue_tier, seq, report)
-- session_docs(name PK, text)
+
 - entity_names(name, type, snippet_source)  -- FTS5 over entities
 
 Notes:
@@ -255,16 +254,17 @@ Notes:
   are already filtered out of keyword columns (still in raw).
 - recipes.result_items format: "ItemCode xStackSize" (e.g. '5011 x3').
 - quests favor_npc is 'Area/NPC_Name'; npcs.key is 'NPC_Name'.
-- report JSON in char_reports: Skills {name: {Level, BonusLevels, ...}},
-  Currencies {GOLD: n, ...}, NPCs {npc: {FavorLevel}}, ActiveQuests list.
-  Skills[<skill>].Abilities is the ONLY known-ability list (CharacterSheet
-  exports); non-skill abilities (e.g. CharmRat) are bucketed under the
-  pseudo-skill "Unknown". player_state section=abilities diffs a skill's
-  CDN family against that list — use it for 'which abilities do I know'
-  questions. NEVER trust abilities.level_req as a known-gate: shrine/
-  riddle unlocks (TameBear/TameCat carry level_req=1) need their unlock
-  event, not a level. game_state_skills has fresher LEVELS (log-sourced)
-  than the sheet dump — cross-check both.
+- report JSON in char_reports (the glogger-mirrored CharacterSheet): Skills
+  {name: {Level, BonusLevels, Abilities}}, Currencies {GOLD: n, ...}, NPCs
+  {npc: {FavorLevel}}, ActiveQuests/CompletedQuests/ActiveWorkOrders lists.
+  Skills[<skill>].Abilities is the known-ability list the sheet export
+  carries (glogger's own snapshot_skill_abilities table — NOT in this store —
+  holds the same keys);
+  non-skill abilities (e.g. CharmRat) are bucketed under the pseudo-skill
+  "Unknown". player_state section=abilities diffs a skill's CDN family
+  against that list — use it for 'which abilities do I know' questions.
+  NEVER trust abilities.level_req as a known-gate: shrine/riddle unlocks
+  (TameBear/TameCat carry level_req=1) need their unlock event, not a level.
 - player_items storage: vault/bag/NPC names; value is per-item gold value.
 - chat_events has indexes on speaker and channel: 'SELECT channel, COUNT(*)
   FROM chat_events WHERE speaker = <name>' and channel-only counts are
@@ -431,20 +431,15 @@ Notes:
     item_type_id, quantity, context, source) — item gain/loss ledger; context:
     loot/vendor_sell/storage_deposit/storage_withdraw/unknown/summoned. NO
     price columns — price questions belong in stall_events.
-  - character_recipe_completions(snapshot_id, recipe_key, completions) —
-    latest snapshot only; JOIN recipes ON recipes.internal_name = recipe_key
-    for names. Zero completions rows exist too (recipes you've unlocked).
-  - character_npc_favor(snapshot_id, npc_key, favor_level) — favor tier per
-    NPC at the latest snapshot.
-  - character_skill_levels(snapshot_id, skill_name, level, bonus_levels,
-    xp_toward_next, xp_needed_for_next) — skills at the latest snapshot.
-  - character_currencies(snapshot_id, currency_key, amount) — wallet at the
-    latest snapshot.
-  - gourmand_eaten_foods(food_name, times_eaten) — gourmand diet history.
-  - character_stats(snapshot_id, stat_key, value) — stats at the latest
-    snapshot.
-  - character_active_quests(snapshot_id, quest_key, category) — active
-    quests at the latest snapshot.
+  - char_reports(character, server, ts, report) — the latest CharacterSheet
+    per character, mirrored from glogger's sheet raw_json (NOT scanned from
+    the Reports dir); report is the full sheet JSON: Skills (Level,
+    BonusLevels, Abilities), Currencies, ActiveQuests/CompletedQuests,
+    ActiveWorkOrders, NPCs. player_state summary/skills/currencies/quests/
+    favor/abilities all read this row.
+  - player_items(character, server, ts, ...) — the latest Storage dump per
+    (character, server), same mirror; vault/bag/NPC names in storage, per-item gold
+    value in value.
   - game_state_storage(character_name, vault_key, item_name, ...) — current
     storage-vault contents.
   - words_of_power(character_name, word, power_name, description,

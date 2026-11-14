@@ -1,12 +1,11 @@
-"""Live play-session ingestion for the SQLite store.
+"""Chat-log ingestion for the SQLite store.
 
-Reads the Project Gorgon client's local data dumps:
-- ``ChatLogs/Chat-*.log`` — tab-separated `YY-MM-DD HH:MM:SS\t[Chan] text`
-- ``Player.log`` / ``Player-prev.log`` — Unity log, ``LocalPlayer: Process*``
-- ``Reports/*.json`` — character sheet + storage/items dumps
-- ``Books/*.txt`` — in-game book/export files (SkillReport, PlayerShopLog, …)
+Reads the Project Gorgon client's ``ChatLogs/Chat-*.log`` (tab-separated
+`YY-MM-DD HH:MM:SS\t[Chan] text`). Retired: Player.log parsing (no
+LocalPlayer lines), Books ingest (duplicated in glogger), and the Reports
+scan (sheets now mirror from glogger raw_json via ingest_glogger).
 
-Parsers are tolerant per pg-data ("missing field ≠ invalid record"):
+The parser is tolerant per pg-data ("missing field ≠ invalid record"):
 unmatched lines are skipped (counted, never fatal). Re-ingest is per file:
 a file whose mtime differs from the manifest is DELETEd by ``source_file``
 then reinserted — idempotent, no duplicate rows.
@@ -25,32 +24,10 @@ from pgrag.agentic.store import (
     _CHAT_LINE_RE,
     _FACT_RE,
     _ITEM_LINE_RE,
-    _LOCALPLAYER_RE,
-    _PLAYER_EVENT_RE,
     _SPEAKER_CHANNELS,
     _SYSTEM_RE,
     MANIFEST_PATH,
 )
-
-# Reports: files whose Report field says which dump they are.
-_ITEMS_REPORT = "Storage"
-# Corrupt-export placeholder: the client writes Character='???' Race='Error'
-# when the sheet is momentarily unreadable (AreaCasino/AreaEltibule logouts).
-# The filename keeps the real slot (Character_<Name>_<Server>.json); '???'
-# is the only placeholder with evidence, so it is the only one filtered —
-# never stored, since char_reports is keyed by (character, ts) and a '???'
-# row becomes a phantom third character that breaks player_state
-# multi-character defaulting and pollutes the trim keep-set.
-_PLACEHOLDER_CHARACTERS = frozenset({"???"})
-
-# Report history: every export accrues a full duplicate row (PK is
-# (character, ts)) but readers only need the latest data — plus one previous
-# CharacterSheet for change-vs-yesterday questions and corrupt-export cover.
-# Enforced at the end of _ingest_reports: per character, keep the 2 newest
-# CharacterSheets and the 1 newest Storage dump, delete the rest
-# (player_items shares (character, ts), so the same ts list prunes both).
-_KEEP_SHEETS = 2
-_KEEP_STORAGES = 1
 
 
 def _load_manifest() -> dict:
@@ -102,21 +79,41 @@ def _ingest_chat_logs(conn: sqlite3.Connection, chat_dir: Path) -> tuple[int, in
                     if not line.strip():
                         continue  # blank separators carry no facts and are not drift
                     if _BARE_FACTS_RE.match(line):
-                        # bare item/recipe fact line (no timestamp): ts unknown
-                        cur.execute(
-                            "INSERT OR REPLACE INTO chat_events"
-                            " (ts, channel, speaker, text, source_file, line_no)"
-                            " VALUES (?,?,?,?,?,?)",
-                            (
-                                "",
-                                "item",
-                                None,
-                                "; ".join(_FACT_RE.findall(line)),
-                                f.name,
-                                line_no,
-                            ),
+                        # bare item/recipe fact line (no timestamp): link row
+                        # for the PREVIOUS social row, whose message it
+                        # completes ("Give Lemons a" + "[Item: Lemon]"). Join
+                        # when the previous row is a speaker line in a social
+                        # channel (Trade/Global/Nearby/Help/Tell/Guild/Party);
+                        # otherwise (loot line after system/combat, file head)
+                        # store standalone with channel=item, ts=''.
+                        prev = (
+                            conn.execute(
+                                "SELECT rowid, channel, speaker FROM chat_events WHERE rowid = ?",
+                                (last_row,),
+                            ).fetchone()
+                            if last_row
+                            else None
                         )
-                        last_row = cur.lastrowid
+                        if prev and prev[1] in _SPEAKER_CHANNELS and prev[2]:
+                            conn.execute(
+                                "UPDATE chat_events SET text = text || ' ' || ? WHERE rowid = ?",
+                                (line.strip(), last_row),
+                            )
+                        else:
+                            cur.execute(
+                                "INSERT OR REPLACE INTO chat_events"
+                                " (ts, channel, speaker, text, source_file, line_no)"
+                                " VALUES (?,?,?,?,?,?)",
+                                (
+                                    "",
+                                    "item",
+                                    None,
+                                    "; ".join(_FACT_RE.findall(line)),
+                                    f.name,
+                                    line_no,
+                                ),
+                            )
+                            last_row = cur.lastrowid
                         added += 1
                     elif _ANNOUNCE_RE.match(line):
                         # bare game announcement (no timestamp): system channel
@@ -186,203 +183,18 @@ def _ingest_chat_logs(conn: sqlite3.Connection, chat_dir: Path) -> tuple[int, in
     return added, unmatched
 
 
-def _ingest_player_logs(conn: sqlite3.Connection, base: Path) -> tuple[int, int]:
-    """LocalPlayer Process* events from Player.log + Player-prev.log.
-
-    Returns (rows_added, drifted_lines). Non-matching lines are only drift
-    when they still look like the targeted prefix family
-    (``[HH:MM:SS] LocalPlayer …``); Unity engine noise (the bulk of a Unity
-    log) is not counted — a file full of it is normal, not format drift."""
-    cur = conn.cursor()
-    added = 0
-    unmatched = 0
-    files = [p for p in (base / "Player.log", base / "Player-prev.log") if p.exists()]
-    for f in _changed_files(conn, "player", files):
-        cur.execute("DELETE FROM player_events WHERE source_file = ?", (f.name,))
-        with f.open(encoding="utf-8", errors="replace") as fh:
-            for line_no, line in enumerate(fh, 1):
-                line = line.rstrip("\n")
-                m = _PLAYER_EVENT_RE.match(line)
-                if not m:
-                    if _LOCALPLAYER_RE.match(line):
-                        unmatched += 1
-                    continue
-                ts, name, args = m.group(1), f"Process{m.group(2)}", m.group(3)
-                cur.execute(
-                    "INSERT OR REPLACE INTO player_events"
-                    " (ts, event, args, raw, source_file, line_no) VALUES (?,?,?,?,?,?)",
-                    (ts, name, args, line, f.name, line_no),
-                )
-                added += 1
-        _update_manifest("player", [f])
-    conn.commit()
-    return added, unmatched
-
-
-def _ingest_reports(conn: sqlite3.Connection, reports_dir: Path) -> tuple[int, int, int]:
-    """Character-sheet and items reports. Returns (char_rows, item_rows, files)."""
-    cur = conn.cursor()
-    char_rows = item_rows = nfiles = 0
-    files = sorted(reports_dir.glob("*.json"))
-    for f in _changed_files(conn, "reports", files):
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-        except ValueError as exc:
-            print(f"Skipping unreadable report {f.name}: {exc}")
-            continue
-        raw_character = data.get("Character")
-        character = raw_character.strip() if isinstance(raw_character, str) else raw_character
-        if character in _PLACEHOLDER_CHARACTERS:
-            # Corrupt-export body (game writes Character='???' Race='Error'
-            # when the sheet is momentarily unreadable): skip ENTIRELY. The
-            # filename slot may parse to a real name, but the body is corrupt
-            # and storing it under that name would DELETE the good row at the
-            # same (character, ts) and poison the newest-sheet reads. No
-            # store writes; the manifest still advances so re-syncs neither
-            # re-read nor re-warn on this file.
-            print(f"Skipping corrupt-export report {f.name}: placeholder Character name")
-            _update_manifest("reports", [f])
-            continue
-        if not character:
-            # Genuinely missing/blank Character (not a corrupt body): fall
-            # back to the FILENAME slot (Character_<Name>_<Server>.json).
-            # Names may contain underscores, so the slot is everything between
-            # the first and last underscore. An empty slot (Character__Dreva)
-            # means the slot name is unknown — skip (a server-keyed row would
-            # still read as a phantom to the PK, trim keep-set, and
-            # player_state defaulting). Manifest advances on skip either way.
-            name = ""
-            if f.stem.startswith("Character_"):
-                parts = f.stem.split("_")
-                name = "_".join(parts[1:-1]).strip() if len(parts) > 2 else ""
-            if not name:
-                print(f"Skipping corrupt-export report {f.name}: unusable Character name")
-                _update_manifest("reports", [f])
-                continue
-            character = name
-        nfiles += 1
-        server = data.get("ServerName")
-        ts = data.get("Timestamp") or ""
-        cur.execute("DELETE FROM char_reports WHERE character = ? AND ts = ?", (character, ts))
-        cur.execute("DELETE FROM player_items WHERE character = ? AND ts = ?", (character, ts))
-        cur.execute(
-            "INSERT OR REPLACE INTO char_reports VALUES (?,?,?,?)",
-            (character, server, ts, json.dumps(data, ensure_ascii=False)),
-        )
-        char_rows += 1
-        if data.get("Report") == _ITEMS_REPORT and isinstance(data.get("Items"), list):
-            for seq, item in enumerate(data["Items"]):
-                if not isinstance(item, dict):
-                    continue
-                cur.execute(
-                    "INSERT OR REPLACE INTO player_items"
-                    " (character, ts, type_id, name, rarity, storage, stack, value,"
-                    " imbue_power, imbue_tier, seq, report) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (
-                        character,
-                        ts,
-                        item.get("TypeID"),
-                        item.get("Name"),
-                        item.get("Rarity"),
-                        item.get("StorageVault"),
-                        item.get("StackSize"),
-                        item.get("Value"),
-                        item.get("TSysImbuePower"),
-                        item.get("TSysImbueTier"),
-                        seq,
-                        json.dumps(item, ensure_ascii=False),
-                    ),
-                )
-                item_rows += 1
-        _update_manifest("reports", [f])
-    _trim_report_history(conn)
-    conn.commit()
-    return char_rows, item_rows, nfiles
-
-
-def _trim_report_history(conn: sqlite3.Connection) -> dict[str, int]:
-    """Keep per character the newest _KEEP_SHEETS CharacterSheets and newest
-    _KEEP_STORAGES Storage dumps; delete older rows from char_reports and
-    player_items (shared (character, ts) key prunes both). Returns counts."""
-    cur = conn.cursor()
-    trimmed = {"char_reports": 0, "player_items": 0}
-    chars = [r[0] for r in cur.execute("SELECT DISTINCT character FROM char_reports").fetchall()]
-    for character in chars:
-        keep: set = set()
-        for report_type, limit in (
-            ("CharacterSheet", _KEEP_SHEETS),
-            (_ITEMS_REPORT, _KEEP_STORAGES),
-        ):
-            rows = cur.execute(
-                "SELECT ts FROM char_reports WHERE character = ?"
-                " AND json_extract(report, ?) = ? ORDER BY ts DESC LIMIT ?",
-                (character, "$.Report", report_type, limit),
-            ).fetchall()
-            keep.update(r[0] for r in rows)
-        if not keep:
-            continue
-        placeholders = ",".join("?" * len(keep))
-        for table in ("char_reports", "player_items"):
-            cur.execute(
-                f"DELETE FROM {table} WHERE character = ? AND ts NOT IN ({placeholders})",
-                (character, *keep),
-            )
-            trimmed[table] += cur.rowcount if cur.rowcount is not None else 0
-    conn.commit()
-    return trimmed
-
-
-def _drop_placeholder_characters(conn: sqlite3.Connection) -> int:
-    """Delete legacy phantom-character rows (pre-fix ingests stored '???').
-
-    The skip in _ingest_reports only stops NEW phantoms; a store built before
-    the fix still holds the old '???' rows (2 in the live store) and the trim
-    keep-set would retain them forever (they are that character's newest).
-    Runs on every ingest; the placeholder set is tiny and fixed, so the scan
-    is one indexed DELETE per member.
-    """
-    cur = conn.cursor()
-    dropped = 0
-    for name in _PLACEHOLDER_CHARACTERS:
-        cur.execute("DELETE FROM char_reports WHERE character = ?", (name,))
-        dropped += cur.rowcount if cur.rowcount is not None else 0
-        cur.execute("DELETE FROM player_items WHERE character = ?", (name,))
-    conn.commit()
-    return dropped
-
-
-def _ingest_books(conn: sqlite3.Connection, books_dir: Path) -> int:
-    cur = conn.cursor()
-    added = 0
-    files = sorted(books_dir.glob("*.txt"))
-    for f in _changed_files(conn, "books", files):
-        cur.execute("DELETE FROM session_docs WHERE name = ?", (f.name,))
-        try:
-            text = f.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
-            print(f"Skipping unreadable book {f.name}: {exc}")
-            continue
-        cur.execute("INSERT OR REPLACE INTO session_docs VALUES (?,?)", (f.name, text))
-        added += 1
-        _update_manifest("books", [f])
-    conn.commit()
-    return added
-
-
 def ingest_session(conn: sqlite3.Connection, session_dir: Path) -> dict[str, int]:
-    """Ingest all four session sources into the store. Missing subdirs are
-    skipped with a note; the build never fails on absent session data."""
+    """Ingest chat logs into the store. Missing dir is skipped with a note;
+    the build never fails on absent session data. Retired: Player.log parsing
+    (no LocalPlayer lines), Books ingest (duplicated in glogger), and the
+    Reports scan (sheets now mirror from glogger raw_json via ingest_glogger;
+    the trim keep-set, placeholder guard, and per-file manifest retired with
+    it). Char/player counts keys are gone — readers use the glogger-mirrored
+    char_reports/player_items rows."""
     counts: dict[str, int] = {}
     if not session_dir.exists():
         print(f"Session dir not found at {session_dir}; skipping session tables.")
-        return {
-            "chat_events": 0,
-            "player_events": 0,
-            "char_reports": 0,
-            "player_items": 0,
-            "session_docs": 0,
-            "placeholder_rows_dropped": 0,
-        }
+        return {"chat_events": 0}
 
     chat_dir = session_dir / "ChatLogs"
     if chat_dir.exists():
@@ -393,26 +205,4 @@ def ingest_session(conn: sqlite3.Connection, session_dir: Path) -> dict[str, int
     else:
         print(f"ChatLogs dir not found at {chat_dir}; skipping chat_events.")
         counts["chat_events"] = 0
-
-    n, unmatched = _ingest_player_logs(conn, session_dir)
-    counts["player_events"] = n
-    if unmatched:
-        print(f"  player: {unmatched} LocalPlayer lines unmatched (format drift?)")
-
-    reports_dir = session_dir / "Reports"
-    if reports_dir.exists():
-        c, i, _nf = _ingest_reports(conn, reports_dir)
-        counts["char_reports"] = c
-        counts["player_items"] = i
-    else:
-        print(f"Reports dir not found at {reports_dir}; skipping reports.")
-        counts["char_reports"] = counts["player_items"] = 0
-    counts["placeholder_rows_dropped"] = _drop_placeholder_characters(conn)
-
-    books_dir = session_dir / "Books"
-    if books_dir.exists():
-        counts["session_docs"] = _ingest_books(conn, books_dir)
-    else:
-        print(f"Books dir not found at {books_dir}; skipping session_docs.")
-        counts["session_docs"] = 0
     return counts

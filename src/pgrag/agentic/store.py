@@ -90,27 +90,22 @@ CREATE TABLE IF NOT EXISTS documents (
     name TEXT, keywords TEXT, documents_version INTEGER, parent_id TEXT);
 CREATE TABLE IF NOT EXISTS wiki_pages (
     title TEXT PRIMARY KEY, filename TEXT, text TEXT);
-CREATE TABLE IF NOT EXISTS session_docs (
-    name TEXT PRIMARY KEY, text TEXT);
+
 CREATE TABLE IF NOT EXISTS chat_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, channel TEXT,
     speaker TEXT, text TEXT, source_file TEXT, line_no INTEGER,
     UNIQUE (source_file, line_no));
 CREATE INDEX IF NOT EXISTS idx_chat_speaker ON chat_events(speaker);
 CREATE INDEX IF NOT EXISTS idx_chat_channel ON chat_events(channel);
-CREATE TABLE IF NOT EXISTS player_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, event TEXT, args TEXT,
-    raw TEXT, source_file TEXT, line_no INTEGER,
-    UNIQUE (source_file, line_no));
-CREATE INDEX IF NOT EXISTS idx_player_event ON player_events(event);
+
 CREATE TABLE IF NOT EXISTS char_reports (
     character TEXT, server TEXT, ts TEXT, report TEXT,
-    PRIMARY KEY (character, ts));
+    PRIMARY KEY (character, server, ts));
 CREATE TABLE IF NOT EXISTS player_items (
-    character TEXT, ts TEXT, type_id INTEGER, name TEXT, rarity TEXT,
+    character TEXT, server TEXT, ts TEXT, type_id INTEGER, name TEXT, rarity TEXT,
     storage TEXT, stack INTEGER, value REAL, imbue_power TEXT,
     imbue_tier INTEGER, seq INTEGER, report TEXT,
-    PRIMARY KEY (character, ts, type_id, name, storage, seq));
+    PRIMARY KEY (character, server, ts, type_id, name, storage, seq));
 """
 
 # FTS5 table over searchable entity names/descriptions/keywords.
@@ -157,13 +152,7 @@ MAPPED_TABLES = (
 _JOIN = " | "
 
 _LINT_RE = re.compile(r"Lint_\w+")
-# Player.log LocalPlayer Process events (per plan parser contract).
-_PLAYER_EVENT_RE = re.compile(r"\[(\d{2}:\d{2}:\d{2})\] LocalPlayer: Process(\w+)\((.*)\)$")
-# LocalPlayer-ish lines: same prefix family the Process parser targets. Unity
-# engine noise never starts "[HH:MM:SS] LocalPlayer", so a non-match that
-# still has this prefix is real format drift; everything else is noise the
-# parser was never meant to read.
-_LOCALPLAYER_RE = re.compile(r"^\[\d{2}:\d{2}:\d{2}\] LocalPlayer")
+
 # Chat line: `26-06-11 08:05:44\t<body>` (per plan parser contract). A physical
 # line with no timestamp that is plain text (not starting with '[') is a wrap
 # continuation of the PREVIOUS chat row in the same file: it is appended to that
@@ -686,13 +675,8 @@ def build_store(
         if session_dir.exists():
             counts.update(ingest_session(conn, session_dir))
         else:
-            print(
-                f"Session dir not found at {session_dir}; "
-                "skipping session tables (chat/player/report)."
-            )
-            counts["chat_events"] = counts["player_events"] = counts["char_reports"] = 0
-            counts["player_items"] = counts["session_docs"] = 0
-            counts["placeholder_rows_dropped"] = 0
+            print(f"Session dir not found at {session_dir}; skipping chat tables.")
+            counts["chat_events"] = 0
 
         counts.update(ingest_glogger(conn, glogger_db))
         glogger_indexes(conn)
@@ -707,13 +691,14 @@ def build_store(
 
 
 def refresh_store(store_path: str = DEFAULT_DB_PATH, *, skip: bool = False) -> dict[str, int]:
-    """Incrementally refresh the live play-history sources in an existing store.
+    """Refresh the live play-history sources in an existing store.
 
-    Session (chat logs, player log, reports, books) and glogger ingestion are
-    watermark-incremental, so unchanged sources re-copy 0 rows. Prints a note
-    only for tables that actually changed, and never raises: a broken source
-    degrades to a note so the caller (chat) still answers from the store as-is.
-    Returns the ingestion counts (empty when ``skip``).
+    Chat re-ingests changed log files; glogger's event tables are watermark-
+    incremental while stall_events/baselines/sheet mirrors re-copy their
+    converged sets every sync, so a rerun reports their present sizes again.
+    Prints a note only for tables that actually changed, and never raises: a
+    broken source degrades to a note so the caller (chat) still answers from
+    the store as-is. Returns the ingestion counts (empty when ``skip``).
 
     Callers: `scripts/agentic_chat.py` (per process) and `scripts/rag_chat.py`
     (at startup) — the Gradio UI would otherwise answer play-history questions
@@ -743,10 +728,7 @@ def refresh_store(store_path: str = DEFAULT_DB_PATH, *, skip: bool = False) -> d
             changed = {
                 t: n
                 for t, n in counts.items()
-                if n
-                and t != "glogger_snapshots"
-                and not t.endswith("_wm")
-                and t != "placeholder_rows_dropped"
+                if n and t != "glogger_snapshots" and not t.endswith("_wm")
             }
             if changed:
                 print(f"[sync] refreshed: {changed}")
