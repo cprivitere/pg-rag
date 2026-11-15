@@ -216,6 +216,8 @@ Notes:
   AnimalHandling); if the query returns nothing, retry with
   json_extract(s.value,'$.Skills') LIKE '%<key-part>%' (Knife Fighting →
   Knife).
+- Garden-plot lookup ('where can I garden/grow <crop> in <zone>'): the crop's wiki/table rows name the seedling and level, but the PLOT lives only in the Gardening page's per-zone Gardening Locations section — get_page('Gardening') and read that section (e.g. Kur → 'Just south of the pond east of Wolf Cave'). Quest objectives that say 'grow carrots in Kur Mountains' name no plot: never answer a where-grow question from a quest line alone.
+
 - Access gates are QUESTS: for 'how do I get into X / what does the guard
   want / how do I reach Y' search corpus_search with the gate's own nouns
   (e.g. 'rat guarding a door museum cheese' → quest 'Tethertooth's Museum',

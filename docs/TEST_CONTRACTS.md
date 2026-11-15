@@ -241,7 +241,7 @@ test (prove the source is fine) or recording a deliberate contract change
   `scripts/sync_glogger.py` (`mise sync-glogger`) opens the existing store
   and runs only `ingest_glogger` + `glogger_indexes` + commit — no session
   parse, no corpus rebuild. `agentic_chat._preflight_sync` refreshes session
-  + glogger data before any chat (`--no-sync` skips), prints only tables with
+  - glogger data before any chat (`--no-sync` skips), prints only tables with
   nonzero row counts, and degrades to a printed note instead of raising when
   a source is unreadable.
 - **Change ⇒** `uv run pytest tests/test_sqlstore_build.py
