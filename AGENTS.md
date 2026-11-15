@@ -401,7 +401,7 @@ discovered at startup, so a freshly written skill answers `Unknown skill` until 
   `--max-rounds`, `--store`, `--report` are the `golden_check.py` flags.
   Per-case cost is dominated by the reasoning model's rounds — a store-only
   case with 1-2 rounds answers in tens of seconds, but a 5-6 round wiki case
-  takes minutes, so a full 66-case run is a long background job, not a
+  takes minutes, so a full 69-case run is a long background job, not a
   foreground watch. `--diagnose` labels a miss GEN-side (fact was in the fed
   context, the model dropped it) vs RET-side (never retrieved) from the
   `documents`/`trace_rounds` the loop returns.
