@@ -40,7 +40,7 @@ then read the store.
      when present — dated observations/asks, never own sales.
 4. **Suggest.** Per item: HOLD, RAISE, or CUT with the comp behind it.
    Pricing layers, in order: own realized sale > own ask history > base value
-   + work-order floor. Name seasonal/low-confidence calls (masks, remnants)
+   - work-order floor. Name seasonal/low-confidence calls (masks, remnants)
    as volatile.
 
 ## Traps
