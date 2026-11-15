@@ -120,8 +120,8 @@ test (prove the source is fine) or recording a deliberate contract change
   `src/pgrag/agentic/tools.py` (`_corpus_search`, `_fts_query`,
   `_QUERY_STOPWORDS`, `_TOOL_FILTER_TABLES`)
 - **Contracts**: the store build runs `build_documents(db)` in-process and
-  inserts every doc (`id, type, text, source, tbl, name, keywords`) stamped
-  with `DOCUMENTS_VERSION` — no intermediate artifact, no staleness refusal.
+  inserts every doc (`id, type, text, source, tbl, name, keywords, parent_id`)
+  stamped with `DOCUMENTS_VERSION` (`documents_version`) — no intermediate artifact, no staleness refusal.
   `corpus_search` is one FTS5 query (`bm25()`-ranked, OR-terms with prefix
   matching); the hit line keeps its shape (`id | name (table) | snippet`,
   capped at `_SEARCH_SNIPPET`); `corpus='tool'` filters the SQL-table
@@ -287,7 +287,7 @@ test (prove the source is fine) or recording a deliberate contract change
   never delete one, when the corpus wording legitimately differs. The pytest
   gate parametrizes over every file at collection time and skips unless the LLM
   (:8080) is up (**LLM only**) — `-m short` selects the 8-case
-  `SHORT_TIER_IDS`; the default `not slow` marker deselects all 66 golden cases (both tiers are `slow`).
+  `SHORT_TIER_IDS`; the default `not slow` marker deselects all 69 golden cases (both tiers are `slow`).
   retry-once for reasoning-ON noise; both attempts failing = regression.
   `SHORT_TIER_IDS`/`GOLDEN_DIR` are single-sourced in
   `pgrag.agentic.eval` (asserted by `scripts/check_docs.py`).
@@ -299,7 +299,7 @@ test (prove the source is fine) or recording a deliberate contract change
   actual facts.
   **Per-case cost is dominated by the reasoning model's rounds** — a
   store-only case answers in tens of seconds; a 5-6 round wiki case takes
-  minutes; the full 66-case set is a long background run, not a foreground
+  minutes; the full 69-case set is a long background run, not a foreground
   watch. Use `mise golden-one <id>` while iterating.
 - **Golden-rerun tooling** (`scripts/golden_rerun.py`, `mise golden-one`/
   `golden-flaky`/`golden-flaky-list`): rerun named case(s); every run appends
@@ -329,7 +329,8 @@ test (prove the source is fine) or recording a deliberate contract change
   (ruff pinned there, not in runtime deps). CI runner: `.github/workflows/ci.yml`
   (`checks` job enforces this layer: `ruff check`, `ruff format --check`, drift,
   compliance, yamllint, shellcheck, markdownlint; workflow scanning in CI is
-  poutine only), plus local-only validator
+  poutine only), plus local-only validators (`jactionlint`, `zizmor`, `pinact` —
+  run before workflow edits).
 - **Contracts**: `uv run ruff check src scripts tests` returns 0 — any new
   finding in the linted trees fails `mise test`. `ruff.toml` `extend-exclude`
   (`data/`, caches) plus the per-file-ignores it carries (`scripts/**`:

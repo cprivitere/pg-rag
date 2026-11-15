@@ -119,7 +119,7 @@ def _doc_sources() -> list[Path]:
 # deliberate: a tree-only list silently drops a skill that was deleted outright
 # (globbing cannot report what is gone), while a canonical-only list silently
 # drops a new skill (nothing names it until someone remembers this tuple).
-CANONICAL_SKILLS = ("pg-data", "pg-rag", "retrieval", "evaluation", "testing")
+CANONICAL_SKILLS = ("pg-data", "pg-rag", "retrieval", "evaluation", "testing", "stall-pricing")
 
 
 def _expected_skills() -> list[str]:

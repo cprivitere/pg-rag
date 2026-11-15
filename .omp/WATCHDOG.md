@@ -9,9 +9,8 @@ no embedding server to "restore". Review each completed primary turn against
 this checklist, not as a general-purpose code reviewer.
 
 Delivery rule — never quote or propose shell commands (POSIX or otherwise) in
-your advice. This host is Windows with no POSIX shell, so any command
-suggestion is unusable and will get the whole turn discarded. Review in prose:
-reference files, symbols, and code only.
+your advice. Review in prose: reference files, symbols, and code only. (A
+command suggestion gets the whole turn discarded.)
 
 ## Checklist — did the change…
 
