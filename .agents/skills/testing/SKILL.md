@@ -5,8 +5,8 @@ description: Regression-triage and test discipline for pg-rag — how to decide 
 
 # testing — regression triage & test discipline
 
-**565 collected / 84 deselected / 481 default** (the
-default `not slow` marker deselects 84: 16 data-heavy tests + the 68
+**566 collected / 85 deselected / 481 default** (the
+default `not slow` marker deselects 85: 16 data-heavy tests + the 69
 parametrized golden cases; one POSIX-only port-owner case skips on Windows) —
 collection. Everything is
 offline — the golden gate is the only suite that needs a server, and only the
