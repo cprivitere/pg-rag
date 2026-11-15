@@ -71,7 +71,7 @@ hyphenated corpus vocabulary tokenizes to them (Off-Hand, Off-Guard,
 multiple stages at once.**
 
 `run_loop` returns `documents` (exactly what the model was fed) and
-`source`/`trace_rounds` (per tool round). `scripts/golden_check.py --diagnose`
+`sources`/`trace_rounds` (per tool round). `scripts/golden_check.py --diagnose`
 uses these to label a miss:
 
 - **GEN-side** — the needed fact is in the fed context (a tool returned it) but

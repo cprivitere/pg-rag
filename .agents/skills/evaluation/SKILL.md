@@ -114,7 +114,7 @@ stay local by decision and do not run in CI (they need LLM :8080).
 
 Per-case cost is dominated by the reasoning model's rounds (reasoning-ON,
 budget 4096): a store-only case with 1–2 rounds answers in tens of seconds, but
-a 5–6 round wiki case can take minutes per case. **A full 66-case run is a long
+a 5–6 round wiki case can take minutes per case. **A full 69-case run is a long
 background job — batch it, don't watch it in a foreground terminal.** Use
 `mise golden-one` while iterating and `--tier short` for a smoke check.
 
@@ -127,7 +127,7 @@ background job — batch it, don't watch it in a foreground terminal.** Use
 - `tests/test_golden_check.py` parametrizes over `data/golden/*.json` at
   collection time → new goldens are AUTO-collected as offline-skipped tests
   (skip unless the LLM is up); `-m short` selects the tier, the default
-  `not slow` deselects all 66 golden cases (both tiers are `slow`). No test code per golden.
+  `not slow` deselects all 69 golden cases (both tiers are `slow`). No test code per golden.
 
 ### Diagnosis: GEN-side vs RET-side
 

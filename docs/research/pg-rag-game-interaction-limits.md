@@ -132,7 +132,7 @@ wire-protocol names. `notebooks/`, `.omp/`, `.github/`, and any `*.ps1` file
 are outside the globs by construction.
 
 Verified 2026-10-13, re-verified 2026-10-17 after the task/script audit
-deleted files: `compliance check: OK (99 files
+deleted files, re-verified 2026-11-15: `compliance check: OK (92 files
 scanned, 4 categories clean)`; with a probe file containing `ReadProcessMemory`
 under `scripts/`, it exits 1 naming the file. Skippable
 only with `PG_SKIP_CONSTRAINTS=1` (prints a warning — never silent). The

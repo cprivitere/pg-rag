@@ -146,7 +146,7 @@ def _clean_tree(tmp_path: Path, **overrides: str | None) -> Path:
         ),
         ".agents/skills/pg-rag/SKILL.md": skill.format(n="pg-rag") + "DOCUMENTS_VERSION\n",
     }
-    for name in ("pg-data", "retrieval", "testing"):
+    for name in ("pg-data", "retrieval", "testing", "stall-pricing"):
         files[f".agents/skills/{name}/SKILL.md"] = skill.format(n=name)
     files[".agents/skills/testing/SKILL.md"] = skill.format(n="testing") + counts
     for gid in goldens:

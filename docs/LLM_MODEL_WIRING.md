@@ -19,7 +19,7 @@ to actually free :8080).
 `run_loop`), not the deleted one-shot dense pipeline. Generation is pinned to
 `EVAL_GENERATION = {"temperature": 0, "seed": 0}` in `pgrag.agentic.eval`. All
 "facts missing" numbers below are historical single-draw measurements on the
-older pipeline harness at set sizes that have since grown to 66; they are kept
+older pipeline harness at set sizes that have since grown to 69; they are kept
 as comparative evidence for model/flag choices, not as current golden verdicts.
 
 ## Common flags (all models)
@@ -227,7 +227,12 @@ set: gemma recovers `recipes_using_animal_feces` **5/5**; qwen **0/5** even with
 reasoning. `gardening/spade assault` is **GEN-side** (the model omits a fact
 that is in the fed context), not a retrieval gap.
 
-## Final leaderboard (facts missing, lower = better; historical sets)
+## Historical leaderboard (noisy single-draw, pre-Ornith — not the gate)
+
+Single-draw reasoning-ON measurements on older sets (38–61 cases as noted per
+row). The deterministic reasoning-OFF re-baseline above supersedes the top-two
+numbers (gemma 8, qwen 12 — not 7 vs 8). Ornith is not ranked here: its 0-missing
+record is a 38-case single sample, not the current 69-case gate.
 
 | rank | model | missing | FAIL | VRAM |
 |---|---|---|---|---|
@@ -239,12 +244,9 @@ that is in the fed context), not a retrieval gap.
 | 6 | granite-4.1-8b | 20 | 9 | 8.4 |
 | 7 | granite-4.1-3b | 34 | 17 | — |
 
-The deterministic reasoning-OFF re-baseline re-measured the top two (gemma 8,
-qwen 12) — same ordering.
-
 Winner: **Ornith-1.5-9B** — current production selection (`LLM_MODEL`/
 `LLM_FLAGS` in `mise.toml [env]`; flags in its section above). Its record run
 reported 0 missing (~6.6 GiB, lightest). The prior winner,
 **gemma-4-12B-it-qat**, stays the documented dense+QAT benchmark (7 facts
-missing on the older set). The swap lives in `mise.toml [env]` — treat that file
-as the source of truth for what ships.
+missing on the older noisy set; 8 deterministic). The swap lives in
+`mise.toml [env]` — treat that file as the source of truth for what ships.
